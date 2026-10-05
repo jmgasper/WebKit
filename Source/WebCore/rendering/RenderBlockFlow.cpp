@@ -71,6 +71,7 @@
 #include "RenderMarquee.h"
 #include "RenderMultiColumnFlow.h"
 #include "RenderMultiColumnSet.h"
+#include "RenderReplaced.h"
 #include "RenderObjectInlines.h"
 #include "RenderTableCellInlines.h"
 #include "RenderText.h"
@@ -83,9 +84,15 @@
 #include "TextBoxTrimmer.h"
 #include "TextUtil.h"
 #include "VisiblePosition.h"
+#include <cstdlib>
+#include <cstring>
 #include <ranges>
+#include <wtf/MonotonicTime.h>
+#include <wtf/NeverDestroyed.h>
 #include <wtf/Scope.h>
 #include <wtf/TZoneMallocInlines.h>
+#include <wtf/text/MakeString.h>
+#include <wtf/text/StringBuilder.h>
 #include <wtf/unicode/CharacterNames.h>
 
 #if PLATFORM(COCOA)
@@ -796,8 +803,184 @@ static bool formattingContextRootIntrinsicLogicalWidthsDependOnOwnHeight(const R
     return false;
 }
 
+#if PLATFORM(HAIKU)
+unsigned summitPercentHeightChainsDirtied;
+unsigned summitPercentHeightChainsLeft;
+
+// A picture with a percentage height is noted with every block above it whose
+// height is automatic or a percentage (RenderReplaced), because the height it
+// resolves against is found by going up through such blocks. Every one of
+// those blocks then marks the whole chain down to the picture for layout each
+// time it is laid out itself, changed or not. A feed of pictures (Reddit's
+// r/pics: 85 of them under main) was laid out in full for each of the five
+// times its grid lays out main in one layout, 35 ms a time, and the page
+// forces forty such layouts in a row.
+//
+// Going up from the picture stops at the first box whose height is settled
+// without looking further: a flex item whose container gave it a height to
+// resolve percentages against, a box with an aspect ratio, a box with a
+// fixed height (RenderBox::availableLogicalHeightUsing(), in that order).
+// What this block's height becomes cannot reach a picture below such a box,
+// so its chain is left alone; the box itself is laid out again by its own
+// container when its height changes, and passes that on. Standards mode
+// only.
+// SUMMIT_PERCENT_HEIGHT_CHAINS=all marks every chain, as before; =verify
+// marks them too and reports, after the layout, each picture whose size came
+// out different although the box that settles it kept its height.
+enum class SummitPercentHeightChains : uint8_t { All, Settled, Verify };
+
+static SummitPercentHeightChains summitPercentHeightChainsMode()
+{
+    static const SummitPercentHeightChains mode = [] {
+        const char* value = getenv("SUMMIT_PERCENT_HEIGHT_CHAINS");
+        if (value && !strcmp(value, "all"))
+            return SummitPercentHeightChains::All;
+        if (value && !strcmp(value, "verify"))
+            return SummitPercentHeightChains::Verify;
+        return SummitPercentHeightChains::Settled;
+    }();
+    return mode;
+}
+
+// The box between the picture and the block that settles the height the
+// picture resolves against, if there is one.
+static RenderBlock* summitBoxSettlingPercentHeight(const RenderBox& descendant, const RenderBlockFlow& block)
+{
+    if (summitPercentHeightChainsMode() == SummitPercentHeightChains::All || !is<RenderReplaced>(descendant) || descendant.isOutOfFlowPositioned())
+        return nullptr;
+    // In quirks mode a percentage height skips every block with an automatic
+    // height on its way up, a box with an aspect ratio among them, and the
+    // marks made for a picture are what gets the boxes in between laid out
+    // again (tools/bench/pages/percent-height-chains.html without its
+    // doctype shows it).
+    if (block.document().inQuirksMode())
+        return nullptr;
+    for (auto* ancestor = descendant.containingBlock(); ancestor && ancestor != &block; ancestor = ancestor->containingBlock()) {
+        if (ancestor->isRenderTableCell() || ancestor->isOutOfFlowPositioned() || ancestor->isRenderFragmentedFlow())
+            return nullptr;
+        if (ancestor->shouldSkipForPercentageResolution())
+            continue;
+        if (ancestor->isHorizontalWritingMode() != descendant.isHorizontalWritingMode())
+            return nullptr;
+        if (ancestor->isFlexItem() && downcast<RenderFlexibleBox>(*ancestor->parent()).usedFlexItemOverridingLogicalHeightForPercentageResolution(*ancestor))
+            return ancestor;
+        if (ancestor->shouldComputeLogicalHeightFromAspectRatio())
+            return ancestor;
+        if (ancestor->style().logicalHeight().isFixed())
+            return ancestor;
+    }
+    return nullptr;
+}
+
+struct SummitPercentHeightChainToVerify {
+    SingleThreadWeakPtr<RenderBox> descendant;
+    SingleThreadWeakPtr<RenderBlock> settledBy;
+    LayoutSize descendantSize;
+    LayoutSize settledBySize;
+    std::optional<LayoutUnit> imposedLogicalHeight;
+};
+
+static Vector<SummitPercentHeightChainToVerify>& summitPercentHeightChainsToVerify()
+{
+    static NeverDestroyed<Vector<SummitPercentHeightChainToVerify>> chains;
+    return chains;
+}
+
+static void summitNotePercentHeightChainToVerify(RenderBox& descendant, RenderBlock& settledBy, const RenderBlockFlow& block)
+{
+    // A chain that something else has marked is laid out for that reason.
+    for (CheckedPtr<RenderElement> renderer = &descendant; renderer && renderer != &block; renderer = renderer->container()) {
+        if (renderer->needsLayout())
+            return;
+    }
+    summitPercentHeightChainsToVerify().append({ descendant, settledBy, LayoutSize { descendant.logicalWidth(), descendant.logicalHeight() }, LayoutSize { settledBy.logicalWidth(), settledBy.logicalHeight() }, settledBy.overridingBorderBoxLogicalHeight() });
+}
+
+// Called when a layout of the document is finished (LocalFrameViewLayoutContext).
+void summitVerifyPercentHeightChains()
+{
+    auto chains = std::exchange(summitPercentHeightChainsToVerify(), { });
+    if (chains.isEmpty())
+        return;
+    unsigned compared = 0;
+    unsigned mismatches = 0;
+    for (auto& chain : chains) {
+        if (!chain.descendant || !chain.settledBy)
+            continue;
+        if (LayoutSize { chain.settledBy->logicalWidth(), chain.settledBy->logicalHeight() } != chain.settledBySize || chain.settledBy->overridingBorderBoxLogicalHeight() != chain.imposedLogicalHeight)
+            continue;
+        ++compared;
+        if (LayoutSize { chain.descendant->logicalWidth(), chain.descendant->logicalHeight() } == chain.descendantSize)
+            continue;
+        if (++mismatches <= 10) {
+            WTFLogAlways("Summit percent height MISMATCH: %s %.2fx%.2f -> %.2fx%.2f under %s %.2fx%.2f\n", static_cast<const RenderObject&>(*chain.descendant).renderName().characters(),
+                chain.descendantSize.width().toFloat(), chain.descendantSize.height().toFloat(), chain.descendant->logicalWidth().toFloat(), chain.descendant->logicalHeight().toFloat(),
+                static_cast<const RenderObject&>(*chain.settledBy).renderName().characters(), chain.settledBySize.width().toFloat(), chain.settledBySize.height().toFloat());
+        }
+    }
+    static unsigned totalCompared;
+    static unsigned totalMismatches;
+    totalCompared += compared;
+    totalMismatches += mismatches;
+    static unsigned reports;
+    if (mismatches || !(++reports % 50))
+        WTFLogAlways("Summit percent height verify: %u chains compared, %u mismatches (in all %u, %u)\n", compared, mismatches, totalCompared, totalMismatches);
+}
+
+static void summitTracePercentHeightChain(const RenderBox& descendant, const RenderBlockFlow& block, bool left)
+{
+    static const bool enabled = [] {
+        const char* value = getenv("SUMMIT_PERCENT_HEIGHT_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    if (!enabled)
+        return;
+    static unsigned reported;
+    if (reported >= 400)
+        return;
+    ++reported;
+    auto describe = [](const RenderObject& renderer) {
+        StringBuilder builder;
+        builder.append(renderer.renderName());
+        if (RefPtr element = dynamicDowncast<Element>(renderer.node())) {
+            builder.append('<', element->localName());
+            auto& classNames = element->getAttribute(HTMLNames::classAttr);
+            if (!classNames.isEmpty())
+                builder.append('.', StringView(classNames.string()).left(24));
+            builder.append('>');
+        }
+        return builder.toString();
+    };
+    StringBuilder chain;
+    unsigned levels = 0;
+    for (auto* ancestor = descendant.containingBlock(); ancestor && ancestor != &block; ancestor = ancestor->containingBlock()) {
+        if (++levels > 14) {
+            chain.append(" ..."_s);
+            break;
+        }
+        chain.append(" < "_s, describe(*ancestor), ancestor->isFlexItem() ? (ancestor->overridingBorderBoxLogicalHeight() ? " [flex item, height imposed]"_s : " [flex item]"_s) : ""_s,
+            ancestor->isGridItem() ? (ancestor->overridingBorderBoxLogicalHeight() ? " [grid item, height imposed]"_s : " [grid item]"_s) : ""_s,
+            ancestor->style().logicalHeight().isAuto() ? ""_s : (ancestor->style().logicalHeight().isFixed() ? " [fixed height]"_s : " [percent height]"_s));
+    }
+    WTFLogAlways("Summit percent height: %s chain of %s under %s:%s\n", left ? "left" : "marked", describe(descendant).utf8().legacyCStringPointer(),
+        describe(block).utf8().legacyCStringPointer(), chain.toString().utf8().legacyCStringPointer());
+}
+#endif
+
 void RenderBlockFlow::dirtyForLayoutFromPercentageHeightDescendant(RenderBox& descendant)
 {
+#if PLATFORM(HAIKU)
+    if (auto* settledBy = summitBoxSettlingPercentHeight(descendant, *this)) {
+        ++summitPercentHeightChainsLeft;
+        summitTracePercentHeightChain(descendant, *this, true);
+        if (summitPercentHeightChainsMode() != SummitPercentHeightChains::Verify)
+            return;
+        summitNotePercentHeightChainToVerify(descendant, *settledBy, *this);
+    } else {
+        ++summitPercentHeightChainsDirtied;
+        summitTracePercentHeightChain(descendant, *this, false);
+    }
+#endif
     // Let's not dirty the height percentage descendant when it has an absolutely positioned containing block ancestor. We should be able to dirty such boxes through the regular invalidation logic.
     for (auto* ancestor = descendant.containingBlock(); ancestor && ancestor != this; ancestor = ancestor->containingBlock()) {
         if (ancestor->isOutOfFlowPositioned())
@@ -4295,6 +4478,58 @@ std::pair<float, float> RenderBlockFlow::inlineContentTopAndBottomIncludingInkOv
 
 RenderBlockFlow::InlineContentStatus RenderBlockFlow::markInlineContentDirtyForLayout(RelayoutChildren relayoutChildren)
 {
+#if PLATFORM(HAIKU)
+    static bool fixedInlineLayoutReuseEnabled = [] {
+        const char* value = std::getenv("SUMMIT_FIXED_INLINE_LAYOUT_REUSE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    static bool fixedInlineLayoutTraceEnabled = [] {
+        const char* value = std::getenv("SUMMIT_FIXED_INLINE_LAYOUT_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    struct FixedInlineLayoutTrace {
+        MonotonicTime intervalStart { MonotonicTime::now() };
+        uint64_t calls { 0 };
+        uint64_t relayoutCalls { 0 };
+        uint64_t renderers { 0 };
+        uint64_t eligible { 0 };
+        uint64_t reused { 0 };
+        uint64_t excludedFromNormalLayout { 0 };
+        uint64_t notBox { 0 };
+        uint64_t alreadyDirty { 0 };
+        uint64_t dirtySelf { 0 };
+        uint64_t dirtyNormalChild { 0 };
+        uint64_t dirtyOutOfFlowChild { 0 };
+        uint64_t dirtySimplified { 0 };
+        uint64_t dirtyOutOfFlowMovement { 0 };
+        uint64_t blockLevel { 0 };
+        uint64_t replaced { 0 };
+        uint64_t relativeDimensions { 0 };
+        uint64_t nonFixedWidth { 0 };
+        uint64_t percentagePadding { 0 };
+
+        void reportIfNeeded()
+        {
+            auto now = MonotonicTime::now();
+            if (now - intervalStart < 1_s)
+                return;
+            WTFLogAlways("Summit fixed inline layout: calls=%llu relayout=%llu renderers=%llu eligible=%llu reused=%llu excluded=%llu notBox=%llu dirty=%llu dirtySelf=%llu dirtyNormalChild=%llu dirtyOutOfFlowChild=%llu dirtySimplified=%llu dirtyOutOfFlowMovement=%llu block=%llu replaced=%llu relative=%llu nonFixed=%llu percentPadding=%llu\n",
+                static_cast<unsigned long long>(calls), static_cast<unsigned long long>(relayoutCalls), static_cast<unsigned long long>(renderers),
+                static_cast<unsigned long long>(eligible), static_cast<unsigned long long>(reused), static_cast<unsigned long long>(excludedFromNormalLayout),
+                static_cast<unsigned long long>(notBox), static_cast<unsigned long long>(alreadyDirty), static_cast<unsigned long long>(dirtySelf),
+                static_cast<unsigned long long>(dirtyNormalChild), static_cast<unsigned long long>(dirtyOutOfFlowChild), static_cast<unsigned long long>(dirtySimplified),
+                static_cast<unsigned long long>(dirtyOutOfFlowMovement), static_cast<unsigned long long>(blockLevel),
+                static_cast<unsigned long long>(replaced), static_cast<unsigned long long>(relativeDimensions), static_cast<unsigned long long>(nonFixedWidth),
+                static_cast<unsigned long long>(percentagePadding));
+            *this = FixedInlineLayoutTrace { now };
+        }
+    };
+    static FixedInlineLayoutTrace fixedInlineLayoutTrace;
+    if (fixedInlineLayoutTraceEnabled) {
+        ++fixedInlineLayoutTrace.calls;
+        fixedInlineLayoutTrace.relayoutCalls += relayoutChildren == RelayoutChildren::Yes;
+    }
+#endif
     auto contentNeedsNormalChildLayoutOnly = std::optional<bool> { };
     auto hasInFlowBlockLevelElement = false;
     auto hasDirtyInFlowBlockLevelElement = false;
@@ -4307,7 +4542,78 @@ RenderBlockFlow::InlineContentStatus RenderBlockFlow::markInlineContentDirtyForL
         auto isInFlowBlockLevelElement = box && box->isBlockLevelBox() && box->isInFlow();
         hasInFlowBlockLevelElement |= isInFlowBlockLevelElement;
         hasDirtyInFlowBlockLevelElement |= (isInFlowBlockLevelElement && box->needsLayout());
-        auto childNeedsLayout = !renderer.isExcludedFromNormalLayout() && (relayoutChildren == RelayoutChildren::Yes || (box && box->hasRelativeDimensions() && !box->isBlockLevelBox()));
+        auto canReuseFixedInlineBoxLayout = [&] {
+#if PLATFORM(HAIKU)
+            if (!fixedInlineLayoutReuseEnabled && !fixedInlineLayoutTraceEnabled)
+                return false;
+            if (relayoutChildren != RelayoutChildren::Yes)
+                return false;
+            if (fixedInlineLayoutTraceEnabled)
+                ++fixedInlineLayoutTrace.renderers;
+            if (renderer.isExcludedFromNormalLayout()) {
+                if (fixedInlineLayoutTraceEnabled)
+                    ++fixedInlineLayoutTrace.excludedFromNormalLayout;
+                return false;
+            }
+            if (!box) {
+                if (fixedInlineLayoutTraceEnabled)
+                    ++fixedInlineLayoutTrace.notBox;
+                return false;
+            }
+            if (box->needsLayout()) {
+                if (fixedInlineLayoutTraceEnabled) {
+                    ++fixedInlineLayoutTrace.alreadyDirty;
+                    fixedInlineLayoutTrace.dirtySelf += box->selfNeedsLayout();
+                    fixedInlineLayoutTrace.dirtyNormalChild += box->normalChildNeedsLayout();
+                    fixedInlineLayoutTrace.dirtyOutOfFlowChild += box->outOfFlowChildNeedsLayout();
+                    fixedInlineLayoutTrace.dirtySimplified += box->needsSimplifiedNormalFlowLayout();
+                    fixedInlineLayoutTrace.dirtyOutOfFlowMovement += box->needsOutOfFlowMovementLayout();
+                }
+                return false;
+            }
+            if (box->isBlockLevelBox()) {
+                if (fixedInlineLayoutTraceEnabled)
+                    ++fixedInlineLayoutTrace.blockLevel;
+                return false;
+            }
+            if (box->isRenderReplaced()) {
+                if (fixedInlineLayoutTraceEnabled)
+                    ++fixedInlineLayoutTrace.replaced;
+                return false;
+            }
+            if (box->hasRelativeDimensions()) {
+                if (fixedInlineLayoutTraceEnabled)
+                    ++fixedInlineLayoutTrace.relativeDimensions;
+                return false;
+            }
+            if (!box->style().logicalWidth().isFixed()) {
+                if (fixedInlineLayoutTraceEnabled)
+                    ++fixedInlineLayoutTrace.nonFixedWidth;
+                return false;
+            }
+            auto& style = box->style();
+            auto hasPercentagePadding = style.paddingStart().isPercentOrCalculated()
+                || style.paddingEnd().isPercentOrCalculated()
+                || style.paddingBefore().isPercentOrCalculated()
+                || style.paddingAfter().isPercentOrCalculated();
+            if (hasPercentagePadding) {
+                if (fixedInlineLayoutTraceEnabled)
+                    ++fixedInlineLayoutTrace.percentagePadding;
+                return false;
+            }
+            if (fixedInlineLayoutTraceEnabled)
+                ++fixedInlineLayoutTrace.eligible;
+            if (!fixedInlineLayoutReuseEnabled)
+                return false;
+            if (fixedInlineLayoutTraceEnabled)
+                ++fixedInlineLayoutTrace.reused;
+            return true;
+#else
+            return false;
+#endif
+        }();
+        auto childNeedsLayout = !renderer.isExcludedFromNormalLayout() && !canReuseFixedInlineBoxLayout
+            && (relayoutChildren == RelayoutChildren::Yes || (box && box->hasRelativeDimensions() && !box->isBlockLevelBox()));
         auto childNeedsIntrinsicWidthComputation = !renderer.isExcludedFromNormalLayout() && relayoutChildren == RelayoutChildren::Yes && box && box->shouldInvalidateContentWidths();
 
         if (childNeedsLayout)
@@ -4367,6 +4673,10 @@ RenderBlockFlow::InlineContentStatus RenderBlockFlow::markInlineContentDirtyForL
             continue;
         }
     }
+#if PLATFORM(HAIKU)
+    if (fixedInlineLayoutTraceEnabled)
+        fixedInlineLayoutTrace.reportIfNeeded();
+#endif
     return { hasSimpleOutOfFlowContentOnly, hasDirtyInFlowBlockLevelElement, hasInFlowBlockLevelElement ? contentNeedsNormalChildLayoutOnly : std::nullopt };
 }
 

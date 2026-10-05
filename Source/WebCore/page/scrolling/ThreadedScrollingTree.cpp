@@ -37,6 +37,7 @@
 #include "ScrollingTreeNode.h"
 #include "ScrollingTreeOverflowScrollProxyNode.h"
 #include "ScrollingTreeScrollingNode.h"
+#include <wtf/NeverDestroyed.h>
 #include <wtf/RunLoop.h>
 #include <wtf/SetForScope.h>
 #include <wtf/SystemTracing.h>
@@ -114,6 +115,9 @@ void ThreadedScrollingTree::willSendEventToMainThread(const PlatformWheelEvent&)
 void ThreadedScrollingTree::waitForEventToBeProcessedByMainThread(const PlatformWheelEvent& wheelEvent)
 {
     ASSERT(ScrollingThread::isCurrentThread());
+#if PLATFORM(HAIKU)
+    ScrollingTraceScopeHaiku traceScope("waiting for the main thread to take a wheel event");
+#endif
 
     if (!wheelEvent.isGestureStart())
         return;
@@ -271,6 +275,9 @@ void ThreadedScrollingTree::scrollingTreeNodeDidScroll(ScrollingTreeScrollingNod
     }
 
     LOG_WITH_STREAM(Scrolling, stream << "ThreadedScrollingTree::scrollingTreeNodeDidScroll " << node.scrollingNodeID() << " to " << scrollPosition << " triggering main thread rendering update");
+#if PLATFORM(HAIKU)
+    m_scrolledSincePositionsAppliedHaiku = true;
+#endif
     addPendingScrollUpdateWithDeferReason(WTF::move(scrollUpdate), WheelEventTestMonitor::DeferReason::ScrollingThreadSyncNeeded);
 }
 
@@ -421,12 +428,32 @@ void ThreadedScrollingTree::setActiveScrollSnapIndices(ScrollingNodeID nodeID, s
 void ThreadedScrollingTree::lockLayersForHitTesting()
 {
     m_layerHitTestMutex.lock();
+#if PLATFORM(HAIKU)
+    m_layersLockedForHitTestingAtHaiku = ScrollingTraceScopeHaiku::enabled() ? MonotonicTime::now() : MonotonicTime();
+#endif
 }
 
 void ThreadedScrollingTree::unlockLayersForHitTesting()
 {
+#if PLATFORM(HAIKU)
+    auto lockedAt = m_layersLockedForHitTestingAtHaiku;
+#endif
     m_layerHitTestMutex.unlock();
+#if PLATFORM(HAIKU)
+    if (lockedAt)
+        ScrollingTraceScopeHaiku::report("the main thread kept the layers from hit tests", MonotonicTime::now() - lockedAt);
+#endif
 }
+
+#if PLATFORM(HAIKU)
+bool ThreadedScrollingTree::canHitTestWithoutWaitingHaiku()
+{
+    if (!m_layerHitTestMutex.tryLock())
+        return false;
+    m_layerHitTestMutex.unlock();
+    return true;
+}
+#endif
 
 void ThreadedScrollingTree::didScheduleRenderingUpdate()
 {
@@ -443,6 +470,9 @@ void ThreadedScrollingTree::willStartRenderingUpdate()
         return;
 
     tracePoint(ScrollingThreadRenderUpdateSyncStart);
+#if PLATFORM(HAIKU)
+    ScrollingTraceScopeHaiku traceScope("the main thread waited for the scrolling thread");
+#endif
 
     // Wait for the scrolling thread to acquire m_treeLock. This ensures that any pending wheel events are processed.
     BinarySemaphore semaphore;
@@ -457,8 +487,30 @@ void ThreadedScrollingTree::willStartRenderingUpdate()
     m_state = SynchronizationState::InRenderingUpdate;
 }
 
+#if PLATFORM(HAIKU)
+static Lock scrollAnimationStartedCallbackLock;
+static Function<void()>& scrollAnimationStartedCallback() WTF_REQUIRES_LOCK(scrollAnimationStartedCallbackLock)
+{
+    static NeverDestroyed<Function<void()>> callback;
+    return callback;
+}
+
+void ThreadedScrollingTree::setScrollAnimationStartedCallback(Function<void()>&& callback)
+{
+    Locker locker { scrollAnimationStartedCallbackLock };
+    scrollAnimationStartedCallback() = WTF::move(callback);
+}
+#endif
+
 void ThreadedScrollingTree::hasNodeWithAnimatedScrollChanged(bool hasNodeWithAnimatedScroll)
 {
+#if PLATFORM(HAIKU)
+    if (hasNodeWithAnimatedScroll) {
+        Locker locker { scrollAnimationStartedCallbackLock };
+        if (auto& callback = scrollAnimationStartedCallback())
+            callback();
+    }
+#endif
     auto scrollingCoordinator = m_scrollingCoordinator;
     if (!scrollingCoordinator)
         return;
@@ -476,6 +528,9 @@ void ThreadedScrollingTree::hasNodeWithAnimatedScrollChanged(bool hasNodeWithAni
 // commit layer positions.
 void ThreadedScrollingTree::waitForRenderingUpdateCompletionOrTimeout()
 {
+#if PLATFORM(HAIKU)
+    ScrollingTraceScopeHaiku traceScope("waiting for the rendering update");
+#endif
     ASSERT(ScrollingThread::isCurrentThread());
     ASSERT(m_treeLock.isLocked());
 
@@ -523,6 +578,9 @@ void ThreadedScrollingTree::renderingUpdateComplete()
         m_stateCondition.notifyOne();
 
     m_state = SynchronizationState::Idle;
+#if PLATFORM(HAIKU)
+    m_scrolledSincePositionsAppliedHaiku = false;
+#endif
 }
 
 void ThreadedScrollingTree::scheduleDelayedRenderingUpdateDetectionTimer(Seconds delay)
@@ -543,6 +601,9 @@ void ThreadedScrollingTree::delayedRenderingUpdateDetectionTimerFired()
     Locker locker { m_treeLock };
     if (canUpdateLayersOnScrollingThread())
         applyLayerPositionsInternal();
+#if PLATFORM(HAIKU)
+    m_scrolledSincePositionsAppliedHaiku = false;
+#endif
     m_state = SynchronizationState::Desynchronized;
 }
 
@@ -550,19 +611,56 @@ void ThreadedScrollingTree::displayDidRefreshOnScrollingThread()
 {
     TraceScope tracingScope(ScrollingThreadDisplayDidRefreshStart, ScrollingThreadDisplayDidRefreshEnd, displayID());
     ASSERT(ScrollingThread::isCurrentThread());
+#if PLATFORM(HAIKU)
+    std::optional<ScrollingTraceScopeHaiku> waitsForLock;
+    waitsForLock.emplace("a display refresh waited for the lock");
+#endif
 
     Locker locker { m_treeLock };
     
     auto now = MonotonicTime::now();
     m_lastDisplayDidRefreshTime = now;
+#if PLATFORM(HAIKU)
+    waitsForLock.reset();
+    ScrollingTraceScopeHaiku traceScope("a display refresh");
+#endif
     serviceScrollAnimations(now);
 
-    if (m_state != SynchronizationState::Idle && canUpdateLayersOnScrollingThread())
+#if PLATFORM(HAIKU)
+    // SUMMIT_SCROLL_SYNC_TRACE=1 prints what each refresh found.
+    static const bool traceSync = [] {
+        const char* value = getenv("SUMMIT_SCROLL_SYNC_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    if (traceSync) {
+        fprintf(stderr, "Summit scroll sync: state=%d scheduled=%d scrolled=%d canUpdate=%d\n", static_cast<int>(m_state),
+            m_renderingUpdateWasScheduled.load(), m_scrolledSincePositionsAppliedHaiku.load(), canUpdateLayersOnScrollingThread());
+    }
+    // The main thread schedules the rendering update a scroll asks for. While
+    // it is busy, which it is for a tenth of a second at a time in a page that
+    // is loading, nothing is scheduled, the tree stays idle, and the scroll
+    // would not show before the main thread is free. Such a scroll is given
+    // the same millisecond as a scheduled update and then shown from here.
+    // SUMMIT_SCROLL_WITHOUT_MAIN=0 waits for the main thread as before.
+    static const bool scrollsWithoutMain = [] {
+        const char* value = getenv("SUMMIT_SCROLL_WITHOUT_MAIN");
+        return !value || value[0] != '0' || value[1];
+    }();
+    bool scrollAwaitsMainThread = scrollsWithoutMain && m_scrolledSincePositionsAppliedHaiku && canUpdateLayersOnScrollingThread();
+#else
+    bool scrollAwaitsMainThread = false;
+#endif
+
+    if (m_state != SynchronizationState::Idle && canUpdateLayersOnScrollingThread()) {
         applyLayerPositionsInternal();
+#if PLATFORM(HAIKU)
+        m_scrolledSincePositionsAppliedHaiku = false;
+#endif
+    }
 
     switch (m_state) {
     case SynchronizationState::Idle: {
-        if (m_renderingUpdateWasScheduled) {
+        if (m_renderingUpdateWasScheduled || scrollAwaitsMainThread) {
             m_state = SynchronizationState::WaitingForRenderingUpdate;
             constexpr auto maxStartRenderingUpdateDelay = 1_ms;
             scheduleDelayedRenderingUpdateDetectionTimer(maxStartRenderingUpdateDelay);

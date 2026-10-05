@@ -165,7 +165,7 @@ protected:
     bool dispatchMessage(IPC::Connection&, IPC::Decoder&);
     bool dispatchSyncMessage(IPC::Connection&, IPC::Decoder&, UniqueRef<IPC::Encoder>&);
 
-#if OS(LINUX) && !OS(ANDROID)
+#if (OS(LINUX) && !OS(ANDROID)) || OS(HAIKU)
     void didReceiveMemoryPressureEvent(bool isCritical);
 #endif
 

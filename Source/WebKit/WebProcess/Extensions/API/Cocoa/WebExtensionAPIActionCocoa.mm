@@ -28,6 +28,7 @@
 #endif
 
 #import "config.h"
+#import "JSWebExtensionActionDetails.h"
 #import "WebExtensionAPIAction.h"
 #import "WebExtensionAPIKeys.h"
 
@@ -55,6 +56,162 @@
 #endif
 
 namespace WebKit {
+
+static NSDictionary *actionDictionary(RefPtr<JSON::Value> value, String& exception)
+{
+    if (!value || value->type() == JSON::Value::Type::Null)
+        return nil;
+    if (!value->asObject()) {
+        exception = "action details must be an object"_s;
+        return nil;
+    }
+    return parseJSON(value->toJSONString().createNSString().get());
+}
+
+void WebExtensionAPIAction::getTitle(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto dictionary = actionDictionary(details, exception);
+    if (!exception.isNull())
+        return;
+    getTitle(dictionary, WTF::move(callback), exception);
+}
+
+void WebExtensionAPIAction::setTitle(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto dictionary = actionDictionary(details, exception);
+    if (!exception.isNull())
+        return;
+    setTitle(dictionary, WTF::move(callback), exception);
+}
+
+void WebExtensionAPIAction::getBadgeText(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto dictionary = actionDictionary(details, exception);
+    if (!exception.isNull())
+        return;
+    NSString *nativeException = nil;
+    getBadgeText(dictionary, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIAction::setBadgeText(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto dictionary = actionDictionary(details, exception);
+    if (!exception.isNull())
+        return;
+    NSString *nativeException = nil;
+    setBadgeText(dictionary, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIAction::getBadgeBackgroundColor(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto dictionary = actionDictionary(details, exception);
+    if (!exception.isNull())
+        return;
+    NSString *nativeException = nil;
+    getBadgeBackgroundColor(dictionary, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIAction::setBadgeBackgroundColor(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto dictionary = actionDictionary(details, exception);
+    if (!exception.isNull())
+        return;
+    NSString *nativeException = nil;
+    setBadgeBackgroundColor(dictionary, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIAction::isEnabled(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto dictionary = actionDictionary(details, exception);
+    if (!exception.isNull())
+        return;
+    NSString *nativeException = nil;
+    isEnabled(dictionary, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIAction::getPopup(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto dictionary = actionDictionary(details, exception);
+    if (!exception.isNull())
+        return;
+    NSString *nativeException = nil;
+    getPopup(dictionary, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIAction::setPopup(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto dictionary = actionDictionary(details, exception);
+    if (!exception.isNull())
+        return;
+    NSString *nativeException = nil;
+    setPopup(dictionary, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIAction::openPopup(WebPageProxyIdentifier page, RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto dictionary = actionDictionary(details, exception);
+    if (!exception.isNull())
+        return;
+    NSString *nativeException = nil;
+    openPopup(page, dictionary, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIAction::enable(JSContextRef context, JSValueRef value, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto tab = parseWebExtensionActionTabIdentifier(context, value);
+    if (!tab) {
+        exception = tab.error();
+        return;
+    }
+    double tabID = *tab ? toWebAPI(**tab) : std::numeric_limits<double>::quiet_NaN();
+    NSString *nativeException = nil;
+    enable(tabID, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIAction::disable(JSContextRef context, JSValueRef value, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto tab = parseWebExtensionActionTabIdentifier(context, value);
+    if (!tab) {
+        exception = tab.error();
+        return;
+    }
+    double tabID = *tab ? toWebAPI(**tab) : std::numeric_limits<double>::quiet_NaN();
+    NSString *nativeException = nil;
+    disable(tabID, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIAction::setIcon(WebFrame& frame, JSContextRef context, JSValueRef details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    if (!JSValueIsObject(context, details) && !JSValueIsNull(context, details)) {
+        exception = "action details must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    setIcon(frame, toNSDictionary(context, details, NullValuePolicy::Allowed), WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
 
 std::expected<void, String> WebExtensionAPIAction::parseActionDetails(NSDictionary *details, std::optional<WebExtensionWindowIdentifier>& windowIdentifier, std::optional<WebExtensionTabIdentifier>& tabIdentifier)
 {

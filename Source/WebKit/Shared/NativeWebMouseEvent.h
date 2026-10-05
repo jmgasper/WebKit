@@ -26,6 +26,11 @@
 #pragma once
 
 #include "WebMouseEvent.h"
+
+#if PLATFORM(HAIKU)
+#include <Message.h>
+#include <Point.h>
+#endif
 #include <WebCore/PointerID.h>
 
 #if USE(APPKIT)
@@ -90,6 +95,8 @@ public:
     static Ref<NativeWebMouseEvent> create(struct wpe_input_pointer_event*, float deviceScaleFactor, WebMouseEventSyntheticClickType = WebMouseEventSyntheticClickType::NoTap);
 #elif PLATFORM(WIN)
     static Ref<NativeWebMouseEvent> create(HWND, UINT message, WPARAM, LPARAM, bool, float deviceScaleFactor);
+#elif PLATFORM(HAIKU)
+    static RefPtr<NativeWebMouseEvent> create(const BMessage&, BPoint viewPosition, BPoint screenPosition, uint32_t previousButtons);
 #endif
 
 #if USE(APPKIT)
@@ -100,6 +107,8 @@ public:
     ::WebEvent* nativeEvent() const { return m_nativeEvent.get(); }
 #elif PLATFORM(WIN)
     const MSG* nativeEvent() const LIFETIME_BOUND { return &m_nativeEvent; }
+#elif PLATFORM(HAIKU)
+    const BMessage* nativeEvent() const LIFETIME_BOUND { return &m_nativeEvent; }
 #else
     const void* nativeEvent() const { return nullptr; }
 #endif
@@ -125,6 +134,9 @@ private:
     NativeWebMouseEvent(WebMouseEventInit&&, const MSG&);
 
     MSG m_nativeEvent;
+#elif PLATFORM(HAIKU)
+    NativeWebMouseEvent(WebMouseEventInit&&, const BMessage&);
+    BMessage m_nativeEvent;
 #else
     explicit NativeWebMouseEvent(WebMouseEventInit&& init)
         : WebMouseEvent(WTF::move(init.event), WTF::move(init.mouse))

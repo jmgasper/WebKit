@@ -46,6 +46,59 @@
 
 namespace WebKit {
 
+void WebExtensionAPICookies::get(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto object = details ? dynamic_objc_cast<NSDictionary>(parseJSON(details->toJSONString().createNSString().get(), JSONOptions::FragmentsAllowed)) : nil;
+    if (!object) {
+        exception = "cookie details must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    get(object, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPICookies::getAll(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto object = details ? dynamic_objc_cast<NSDictionary>(parseJSON(details->toJSONString().createNSString().get(), JSONOptions::FragmentsAllowed)) : nil;
+    if (!object) {
+        exception = "cookie details must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    getAll(object, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPICookies::set(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto object = details ? dynamic_objc_cast<NSDictionary>(parseJSON(details->toJSONString().createNSString().get(), JSONOptions::FragmentsAllowed)) : nil;
+    if (!object) {
+        exception = "cookie details must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    set(object, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPICookies::remove(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto object = details ? dynamic_objc_cast<NSDictionary>(parseJSON(details->toJSONString().createNSString().get(), JSONOptions::FragmentsAllowed)) : nil;
+    if (!object) {
+        exception = "cookie details must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    remove(object, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+
 static inline std::optional<PAL::SessionID> toImpl(NSString *storeID)
 {
     ASSERT(storeID.length);

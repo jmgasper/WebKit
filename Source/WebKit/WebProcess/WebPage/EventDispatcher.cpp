@@ -36,15 +36,28 @@
 #include "WebTouchEvent.h"
 #include "WebWheelEvent.h"
 #include <WebCore/DisplayUpdate.h>
+#include <WebCore/Document.h>
+#include <WebCore/Element.h>
 #include <WebCore/Frame.h>
 #include <WebCore/HandleUserInputEventResult.h>
 #include <WebCore/KeyboardScrollingAnimator.h>
+#include <WebCore/LocalFrame.h>
+#include <WebCore/LocalFrameInlines.h>
+#include <WebCore/NodeInlines.h>
 #include <WebCore/Page.h>
 #include <WebCore/PageInlines.h>
 #include <WebCore/WheelEventTestMonitor.h>
 #include <wtf/MainThread.h>
+#include <wtf/NeverDestroyed.h>
+#include <wtf/ThreadSafeRefCounted.h>
 #include <wtf/RunLoop.h>
 #include <wtf/SystemTracing.h>
+#include <wtf/text/StringBuilder.h>
+
+#if PLATFORM(HAIKU)
+#include <cstdio>
+#include <cstdlib>
+#endif
 
 #if ENABLE(ASYNC_SCROLLING)
 #include <WebCore/AsyncScrollingCoordinator.h>
@@ -65,6 +78,61 @@
 namespace WebKit {
 using namespace WebCore;
 
+#if PLATFORM(HAIKU)
+static bool traceWheelRoute()
+{
+    static bool enabled = [] {
+        const char* value = std::getenv("SUMMIT_WHEEL_ROUTE_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    return enabled;
+}
+
+// A wheel listener that may call preventDefault() makes every wheel event
+// wait for the page's main thread, which is busy while the page loads: seven
+// of nine news and video sites scrolled that way, in steps of up to 0.6 s.
+// WebKit lets a gesture go on without the main thread once its first event
+// was not prevented, but tells gestures by the phases of a trackpad, which a
+// mouse wheel does not have. So a burst of wheel events stands for one here,
+// as in Chrome: notches that follow one another within 300 ms with the same
+// modifiers. The first of a burst is answered by the page; if the page let
+// it scroll, the rest scroll on the scrolling thread and reach the page's
+// listeners as events they cannot cancel. A page that has not answered the
+// first within 50 ms is not waited for, as WebKit does not wait longer for
+// the first event of a trackpad's gesture - unless the page has cancelled a
+// wheel event before: a map that zooms with the wheel, or a page that
+// scrolls by itself, is always waited for, however busy it is.
+// SUMMIT_WHEEL_BURSTS=0 turns all of this off.
+struct WheelBurstHaiku {
+    MonotonicTime lastEventTime;
+    MonotonicTime awaitingAnswerSince;
+    OptionSet<WebEventModifier> modifiers;
+    bool awaitingAnswer { false };
+    bool scrollsFreely { false };
+    bool pageCancels { false };
+};
+static Lock s_wheelBurstsLock;
+static HashMap<PageIdentifier, WheelBurstHaiku>& wheelBurstsHaiku() WTF_REQUIRES_LOCK(s_wheelBurstsLock)
+{
+    static NeverDestroyed<HashMap<PageIdentifier, WheelBurstHaiku>> bursts;
+    return bursts;
+}
+
+static bool wheelBurstsEnabledHaiku()
+{
+    static bool enabled = [] {
+        const char* value = std::getenv("SUMMIT_WHEEL_BURSTS");
+        return !value || value[0] != '0' || value[1];
+    }();
+    return enabled;
+}
+
+#if ENABLE(ASYNC_SCROLLING) && ENABLE(SCROLLING_THREAD)
+static Seconds haikuScrollRefreshInterval();
+#endif
+
+#endif
+
 EventDispatcher::EventDispatcher(WebProcess& process)
     : m_process(process)
     , m_queue(WorkQueue::create("com.apple.WebKit.EventDispatcher"_s, WorkQueue::QOS::UserInteractive))
@@ -74,6 +142,16 @@ EventDispatcher::EventDispatcher(WebProcess& process)
     , m_observerID(DisplayLinkObserverID::generate())
 #endif
 {
+#if PLATFORM(HAIKU) && ENABLE(ASYNC_SCROLLING) && ENABLE(SCROLLING_THREAD)
+    // Scroll animations that did not start from a wheel event handled on the
+    // scrolling thread would otherwise wait for one to start the refresh
+    // pulses. The dispatcher lives as long as the process.
+    ThreadedScrollingTree::setScrollAnimationStartedCallback([this] {
+        m_queue->dispatch([this] {
+            scheduleHaikuScrollRefresh();
+        });
+    });
+#endif
 }
 
 EventDispatcher::~EventDispatcher()
@@ -110,6 +188,10 @@ void EventDispatcher::removeScrollingTreeForPage(WebPage& webPage)
     ASSERT(m_scrollingTrees.contains(webPage.identifier()));
 
     m_scrollingTrees.remove(webPage.identifier());
+#if PLATFORM(HAIKU)
+    Locker burstLocker { s_wheelBurstsLock };
+    wheelBurstsHaiku().remove(webPage.identifier());
+#endif
 }
 #endif
 
@@ -145,6 +227,10 @@ void EventDispatcher::internalWheelEvent(PageIdentifier pageID, const WebWheelEv
         Locker locker { m_scrollingTreesLock };
         RefPtr scrollingTree = m_scrollingTrees.get(pageID);
         if (!scrollingTree) {
+#if PLATFORM(HAIKU)
+            if (traceWheelRoute())
+                std::fprintf(stderr, "Summit wheel route: no tree, main thread\n");
+#endif
             dispatchWheelEventViaMainThread(pageID, wheelEvent, processingSteps, WTF::move(completionHandler));
             break;
         }
@@ -166,9 +252,91 @@ void EventDispatcher::internalWheelEvent(PageIdentifier pageID, const WebWheelEv
             useMainThreadForScrolling = false;
 #endif
 
+#if PLATFORM(HAIKU)
+        bool continuesBurst = false;
+        bool answersEarly = false;
+        if (wheelBurstsEnabledHaiku()) {
+            static constexpr Seconds longestPauseInBurst = 300_ms;
+            auto now = MonotonicTime::now();
+            Locker burstLocker { s_wheelBurstsLock };
+            auto& burst = wheelBurstsHaiku().ensure(pageID, [] {
+                return WheelBurstHaiku { };
+            }).iterator->value;
+            static constexpr Seconds longestWaitForAnswer = 50_ms;
+            if (now - burst.lastEventTime > longestPauseInBurst || burst.modifiers != wheelEvent.modifiers()) {
+                burst.scrollsFreely = false;
+                burst.awaitingAnswer = false;
+            }
+            burst.lastEventTime = now;
+            burst.modifiers = wheelEvent.modifiers();
+            if (useMainThreadForScrolling && processingSteps.contains(WheelEventProcessingSteps::BlockingDOMEventDispatch)) {
+                if (!burst.scrollsFreely && !burst.pageCancels && burst.awaitingAnswer && now - burst.awaitingAnswerSince > longestWaitForAnswer)
+                    burst.scrollsFreely = true;
+                answersEarly = !burst.pageCancels;
+                if (burst.scrollsFreely) {
+                    continuesBurst = true;
+                    useMainThreadForScrolling = false;
+                    processingSteps = { WheelEventProcessingSteps::AsyncScrolling, WheelEventProcessingSteps::NonBlockingDOMEventDispatch };
+                } else if (!burst.awaitingAnswer) {
+                    burst.awaitingAnswer = true;
+                    burst.awaitingAnswerSince = now;
+                }
+            }
+        }
+        if (traceWheelRoute())
+            std::fprintf(stderr, "Summit wheel route: tree=1 sync=%d blockingDOM=%d route=%s phase=%d burst=%d\n",
+                processingSteps.contains(WheelEventProcessingSteps::SynchronousScrolling),
+                processingSteps.contains(WheelEventProcessingSteps::BlockingDOMEventDispatch),
+                useMainThreadForScrolling ? "main" : "scrolling", int(platformWheelEvent.phase()), continuesBurst);
+#endif
+
         scrollingTree->willProcessWheelEvent();
 
-        ScrollingThread::dispatch([scrollingTree, wheelEvent = Ref<const WebWheelEvent> { wheelEvent }, platformWheelEvent, processingSteps, useMainThreadForScrolling, pageID, this, protectedThis = Ref { *this }, completionHandler = WTF::move(completionHandler)] mutable {
+#if PLATFORM(HAIKU)
+        // The UI process sends the next wheel event when this one has been
+        // answered. While the first notch of a burst waits for a main thread
+        // that is busy, the notches that could scroll without it would wait
+        // in the UI process: it is told after 50 ms that this one is taken
+        // care of, which it is.
+        if (answersEarly && useMainThreadForScrolling && processingSteps.contains(WheelEventProcessingSteps::BlockingDOMEventDispatch)) {
+            struct Answer : ThreadSafeRefCounted<Answer> {
+                Lock lock;
+                CompletionHandler<void(bool)> handler WTF_GUARDED_BY_LOCK(lock);
+            };
+            Ref answer = adoptRef(*new Answer);
+            {
+                Locker answerLocker { answer->lock };
+                answer->handler = WTF::move(completionHandler);
+            }
+            auto answerOnce = [answer](bool handled) {
+                CompletionHandler<void(bool)> handler;
+                {
+                    Locker answerLocker { answer->lock };
+                    handler = std::exchange(answer->handler, nullptr);
+                }
+                if (handler)
+                    handler(handled);
+            };
+            m_queue->dispatchAfter(50_ms, [answerOnce] {
+                answerOnce(true);
+            });
+            completionHandler = CompletionHandler<void(bool)>([answerOnce](bool handled) {
+                answerOnce(handled);
+            }, CompletionHandlerCallThread::AnyThread);
+        }
+#endif
+
+#if PLATFORM(HAIKU)
+        auto dispatchedAt = MonotonicTime::now();
+#endif
+        ScrollingThread::dispatch([scrollingTree, wheelEvent = Ref<const WebWheelEvent> { wheelEvent }, platformWheelEvent, processingSteps, useMainThreadForScrolling, pageID, this, protectedThis = Ref { *this }, completionHandler = WTF::move(completionHandler)
+#if PLATFORM(HAIKU)
+            , dispatchedAt
+#endif
+            ] mutable {
+#if PLATFORM(HAIKU)
+            auto startedAt = MonotonicTime::now();
+#endif
             if (useMainThreadForScrolling) {
                 scrollingTree->willSendEventToMainThread(platformWheelEvent);
                 dispatchWheelEventViaMainThread(pageID, wheelEvent, processingSteps, WTF::move(completionHandler));
@@ -177,6 +345,26 @@ void EventDispatcher::internalWheelEvent(PageIdentifier pageID, const WebWheelEv
             }
 
             auto result = scrollingTree->handleWheelEvent(platformWheelEvent, processingSteps);
+
+#if PLATFORM(HAIKU)
+            // Only a wheel event that actually moves a scrolling tree needs
+            // display-refresh pulses. In particular, wheel events at the end
+            // of a finite feed must not keep requesting compositions.
+            if (result.wasHandled && haikuScrollRefreshInterval()) {
+                m_queue->dispatch([this, protectedThis = Ref { *this }] {
+                    scheduleHaikuScrollRefresh();
+                });
+            }
+#endif
+
+#if PLATFORM(HAIKU)
+            if (traceWheelRoute())
+                std::fprintf(stderr, "Summit wheel result: handled=%d needsMain=%d sync=%d blockingDOM=%d queued=%.1f took=%.1f\n",
+                    result.wasHandled, result.needsMainThreadProcessing(),
+                    result.steps.contains(WheelEventProcessingSteps::SynchronousScrolling),
+                    result.steps.contains(WheelEventProcessingSteps::BlockingDOMEventDispatch),
+                    (startedAt - dispatchedAt).milliseconds(), (MonotonicTime::now() - startedAt).milliseconds());
+#endif
 
             if (result.needsMainThreadProcessing()) {
                 if (result.steps.contains(WheelEventProcessingSteps::SynchronousScrolling)) {
@@ -208,6 +396,108 @@ void EventDispatcher::wheelEvent(PageIdentifier pageID, Ref<WebWheelEvent>&& whe
 #endif
     internalWheelEvent(pageID, wheelEvent, rubberBandableEdges, WTF::move(completionHandler));
 }
+
+#if PLATFORM(HAIKU) && ENABLE(ASYNC_SCROLLING) && ENABLE(SCROLLING_THREAD)
+static Seconds haikuScrollRefreshInterval()
+{
+    static Seconds interval = [] {
+        // Haiku has no display link, so these pulses are what advances layer
+        // positions and scroll animations on the scrolling thread. They run
+        // only while a scrolling tree is active. SUMMIT_SCROLL_REFRESH_TIMER=0
+        // turns them off; 16 to 100 sets the interval in milliseconds.
+        const char* value = std::getenv("SUMMIT_SCROLL_REFRESH_TIMER");
+        if (!value || !value[0])
+            return 16_ms;
+        char* end = nullptr;
+        auto milliseconds = std::strtol(value, &end, 10);
+        if (*end || milliseconds < 0)
+            return 0_s;
+        if (milliseconds == 1)
+            milliseconds = 16;
+        if (milliseconds < 16 || milliseconds > 100)
+            return 0_s;
+        return Seconds::fromMilliseconds(milliseconds);
+    }();
+    return interval;
+}
+
+void EventDispatcher::scheduleHaikuScrollRefresh()
+{
+    // Haiku has no display link. Keep layer positions in step with wheel
+    // scrolling, but stop the timer as soon as the scrolling tree is inactive.
+    auto interval = haikuScrollRefreshInterval();
+    if (!interval || m_haikuScrollRefreshScheduled)
+        return;
+
+    m_haikuScrollRefreshScheduled = true;
+    m_queue->dispatchAfter(interval, [this, protectedThis = Ref { *this }] {
+        refreshHaikuScrollingTrees();
+    });
+}
+
+void EventDispatcher::refreshHaikuScrollingTrees()
+{
+    bool hasActiveTree = false;
+    Vector<PageIdentifier> pagesToProbe;
+    static bool traceDOM = [] {
+        const char* value = std::getenv("SUMMIT_SCROLL_DOM_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    {
+        Locker locker { m_scrollingTreesLock };
+        for (auto& entry : m_scrollingTrees) {
+            Ref scrollingTree = entry.value;
+            if (!scrollingTree->hasRecentActivity())
+                continue;
+            hasActiveTree = true;
+            scrollingTree->displayDidRefresh(scrollingTree->displayID());
+        }
+        if (traceDOM && !hasActiveTree) {
+            for (auto& entry : m_scrollingTrees)
+                pagesToProbe.append(entry.key);
+        }
+    }
+
+    if (!hasActiveTree) {
+        m_haikuScrollRefreshScheduled = false;
+        if (!pagesToProbe.isEmpty()) {
+            RunLoop::mainSingleton().dispatch([pagesToProbe = WTF::move(pagesToProbe)] {
+                for (auto pageID : pagesToProbe) {
+                    RefPtr webPage = WebProcess::singleton().webPage(pageID);
+                    if (!webPage)
+                        continue;
+                    RefPtr frame = dynamicDowncast<LocalFrame>(webPage->corePage()->mainFrame());
+                    RefPtr document = frame ? frame->document() : nullptr;
+                    if (!document)
+                        continue;
+                    for (unsigned y : { 200u, 400u }) {
+                        RefPtr element = document->elementFromPoint(400, y);
+                        if (!element) {
+                            std::fprintf(stderr, "Summit scroll DOM: y=%u element=none\n", y);
+                            continue;
+                        }
+                        StringBuilder path;
+                        for (RefPtr ancestor = element; ancestor && path.length() < 160; ancestor = ancestor->parentElement()) {
+                            if (!path.isEmpty())
+                                path.append('>');
+                            path.append(ancestor->tagName());
+                        }
+                        auto rect = element->boundingClientRect();
+                        auto pathUTF8 = path.toString().utf8();
+                        std::fprintf(stderr, "Summit scroll DOM: y=%u path=%s rect=%.0f,%.0f,%.0f,%.0f\n", y,
+                            reinterpret_cast<const char*>(pathUTF8.data()), rect.x(), rect.y(), rect.width(), rect.height());
+                    }
+                }
+            });
+        }
+        return;
+    }
+
+    m_queue->dispatchAfter(haikuScrollRefreshInterval(), [this, protectedThis = Ref { *this }] {
+        refreshHaikuScrollingTrees();
+    });
+}
+#endif
 
 #if ENABLE(MAC_GESTURE_EVENTS)
 void EventDispatcher::gestureEvent(FrameIdentifier frameID, PageIdentifier pageID, Ref<WebGestureEvent>&& gestureEvent, CompletionHandler<void(std::optional<WebEventType>, bool, std::optional<RemoteUserInputEventData>)>&& completionHandler)
@@ -359,8 +649,26 @@ void EventDispatcher::dispatchWheelEvent(PageIdentifier pageID, const WebWheelEv
 
     bool handled = false;
     if (webPage && webPage->mainFrame()) {
+#if PLATFORM(HAIKU)
+        auto [result, handling] = webPage->wheelEvent(webPage->mainFrame()->frameID(), wheelEvent, processingSteps);
+        handled = result.wasHandled();
+        // The page has answered an event it could cancel: what it decided
+        // holds for the rest of the burst.
+        if (wheelBurstsEnabledHaiku() && processingSteps.contains(WheelEventProcessingSteps::BlockingDOMEventDispatch)) {
+            Locker burstLocker { s_wheelBurstsLock };
+            auto it = wheelBurstsHaiku().find(pageID);
+            if (it != wheelBurstsHaiku().end()) {
+                bool cancelled = handling.contains(EventHandling::DefaultPrevented);
+                it->value.scrollsFreely = !cancelled;
+                it->value.awaitingAnswer = false;
+                if (cancelled)
+                    it->value.pageCancels = true;
+            }
+        }
+#else
         auto [result, _] = webPage->wheelEvent(webPage->mainFrame()->frameID(), wheelEvent, processingSteps);
         handled = result.wasHandled();
+#endif
     }
 
     completionHandler(handled);

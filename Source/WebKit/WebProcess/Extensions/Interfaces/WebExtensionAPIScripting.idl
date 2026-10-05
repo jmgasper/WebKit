@@ -59,16 +59,18 @@ dictionary WebExtensionCSSInjection {
     Conditional=WK_WEB_EXTENSIONS,
     MainWorldOnly,
     ReturnsPromiseWhenCallbackIsOmitted,
+    UseCPPAPI,
 ] interface WebExtensionAPIScripting {
 
-    [RaisesException] void executeScript([NSDictionary] any details, [Optional, CallbackHandler] function callback);
-    [RaisesException] void insertCSS([NSDictionary] any details, [Optional, CallbackHandler] function callback);
-    [RaisesException] void removeCSS([NSDictionary] any details, [Optional, CallbackHandler] function callback);
+    // 'func' is a function, which no JSON conversion preserves, so the details value reaches the implementation unconverted.
+    [RaisesStringException, NeedsScriptContext] void executeScript([ValuesAllowed] any details, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void insertCSS([JSONValue] any details, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void removeCSS([JSONValue] any details, [Optional, CallbackHandler] function callback);
 
-    [RaisesException] void registerContentScripts([NSArray=NSDictionary] array scripts, [Optional, CallbackHandler] function callback);
-    [RaisesException] void getRegisteredContentScripts([Optional, NSDictionary] any filter, [Optional, CallbackHandler] function callback);
-    [RaisesException] void unregisterContentScripts([Optional, NSDictionary] any filter, [Optional, CallbackHandler] function callback);
-    [RaisesException] void updateContentScripts([NSArray=NSDictionary] array scripts, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void registerContentScripts([JSONValue=Array] any scripts, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void getRegisteredContentScripts([Optional, JSONValue] any filter, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void unregisterContentScripts([Optional, JSONValue] any filter, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void updateContentScripts([JSONValue=Array] any scripts, [Optional, CallbackHandler] function callback);
 
-    [ImplementedAs=executionWorld] readonly attribute any ExecutionWorld;
+    [ImplementedAs=executionWorlds] readonly attribute any ExecutionWorld;
 };

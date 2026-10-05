@@ -49,6 +49,10 @@
 #include "ImageBufferCGPDFDocumentBackend.h"
 #endif
 
+#if USE(HAIKU_GRAPHICS)
+#include "ImageBufferUtilitiesHaiku.h"
+#endif
+
 #if USE(SKIA)
 #include "GLContext.h"
 #include "ImageBufferSkiaAcceleratedBackend.h"

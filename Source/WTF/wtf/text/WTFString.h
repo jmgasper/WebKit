@@ -36,6 +36,10 @@
 #include <wtf/RetainPtr.h>
 #endif
 
+#if PLATFORM(HAIKU)
+class BString;
+#endif
+
 #if OS(WINDOWS)
 #include <wtf/text/win/WCharStringExtras.h>
 #endif
@@ -266,6 +270,10 @@ public:
     // Given Cocoa idioms, this is a more useful default. Clients that need to preserve the
     // null string can check isNull explicitly.
     RetainPtr<NSString> createNSString() const;
+#endif
+
+#if PLATFORM(HAIKU)
+    operator BString() const;
 #endif
 
 #if OS(WINDOWS)

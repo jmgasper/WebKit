@@ -27,7 +27,9 @@
 #ifndef OpenTypeUtilities_h
 #define OpenTypeUtilities_h
 
+#if PLATFORM(WIN)
 #include <windows.h>
+#endif
 #include <wtf/Forward.h>
 #include <wtf/RefPtr.h>
 #include <wtf/text/WTFString.h>
@@ -56,7 +58,9 @@ private:
 };
 
 bool renameFont(const SharedBuffer&, const String&, Vector<uint8_t>&);
+#if PLATFORM(WIN)
 RefPtr<FontMemoryResource> renameAndActivateFont(const SharedBuffer&, const String&);
+#endif
 
 } // namespace WebCore
 

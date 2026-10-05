@@ -47,6 +47,10 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 #endif
 
+#if PLATFORM(HAIKU)
+struct rgb_color;
+#endif
+
 namespace WebCore {
 
 class ColorSpace;
@@ -170,6 +174,11 @@ public:
 
 #if USE(CG)
     WEBCORE_EXPORT static Color createAndPreserveColorSpace(CGColorRef, OptionSet<Flags> = { });
+#endif
+
+#if PLATFORM(HAIKU)
+    Color(const rgb_color&);
+    operator rgb_color() const;
 #endif
 
     static constexpr auto transparentBlack = SRGBA<uint8_t> { };

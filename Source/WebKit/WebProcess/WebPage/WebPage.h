@@ -25,6 +25,10 @@
 
 #pragma once
 
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+#include "WebExtensionTabScriptExecution.h"
+#endif
+
 #include "APIObject.h"
 #include "MessageReceiver.h"
 #include "MessageSender.h"
@@ -910,6 +914,10 @@ public:
     void suspendForProcessSwap(CompletionHandler<void(std::optional<bool>)>&&);
 
     void sendSetWindowFrame(const WebCore::FloatRect&);
+#if PLATFORM(HAIKU)
+    void setWindowFrameHaiku(const WebCore::FloatRect&);
+    const WebCore::FloatRect& windowFrameHaiku() const LIFETIME_BOUND { return m_windowFrameHaiku; }
+#endif
 
     double textZoomFactor() const;
     void didSetTextZoomFactor(double);
@@ -1868,7 +1876,7 @@ public:
 #if ENABLE(WK_WEB_EXTENSIONS)
     WebExtensionControllerProxy* webExtensionControllerProxy() const
     {
-#if PLATFORM(COCOA)
+#if PLATFORM(COCOA) || PLATFORM(HAIKU)
         return m_webExtensionController.get();
 #else
         return nullptr;
@@ -2477,6 +2485,10 @@ private:
     void runJavaScript(WebFrame*, RunJavaScriptParameters&&, ContentWorldIdentifier, bool, CompletionHandler<void(RunJavaScriptResult&&)>&&);
     void runJavaScriptInFrameInScriptWorld(RunJavaScriptParameters&&, std::optional<WebCore::FrameIdentifier>, const ContentWorldData&, bool, CompletionHandler<void(RunJavaScriptResult&&)>&&);
     void clearContentWorld(ContentWorldIdentifier, CompletionHandler<void()>&&);
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    void waitForExtensionTabScript(WebExtensionContextIdentifier, ContentWorldIdentifier, const WebExtensionTabScriptTarget&, WebExtensionTabScriptRunAt, CompletionHandler<void(std::expected<WebExtensionTabScriptTarget, String>&&)>&&);
+    void executeExtensionTabScript(WebExtensionContextIdentifier, const ContentWorldData&, const WebExtensionTabScriptTarget&, const URL& authorizedURL, bool matchAboutBlank, const String& source, const URL& sourceURL, bool userGesture, CompletionHandler<void(WebExtensionTabScriptExecutionResult&&)>&&);
+#endif
     void getAccessibilityTreeData(CompletionHandler<void(const std::optional<IPC::SharedBufferReference>&)>&&);
     void updateRenderingWithForcedRepaint(CompletionHandler<void()>&&);
     void takeSnapshot(WebCore::IntRect snapshotRect, WebCore::IntSize bitmapSize, SnapshotOptions, CompletionHandler<void(std::optional<ImageBufferBackendHandle>&&, WebCore::Headroom)>&&);
@@ -3031,7 +3043,11 @@ private:
 
     const Ref<WebUserContentController> m_userContentController;
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if PLATFORM(HAIKU)
+    WebCore::FloatRect m_windowFrameHaiku;
+#endif
+
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     RefPtr<WebExtensionControllerProxy> m_webExtensionController;
 #endif
 

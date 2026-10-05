@@ -61,9 +61,11 @@
 #include "Settings.h"
 #include "StyleComputedStyle+GettersInlines.h"
 #include "StyleDocumentScope.h"
+#include <cstdlib>
 #include <wtf/SetForScope.h>
 #include <wtf/SystemTracing.h>
 #include <wtf/TZoneMallocInlines.h>
+#include <wtf/text/CString.h>
 #include <wtf/text/TextStream.h>
 
 namespace WebCore {
@@ -167,16 +169,49 @@ UpdateScrollInfoAfterLayoutTransaction& LocalFrameViewLayoutContext::updateScrol
     return *m_updateScrollInfoAfterLayoutTransaction;
 }
 
+#if PLATFORM(HAIKU)
+// The layout "why" trace lives in RenderBlock.cpp.
+bool summitLayoutWhyTraceBegin(RenderElement&);
+void summitLayoutWhyTraceEnd(RenderElement&, double milliseconds);
+// So is the reuse of flex and grid items' layouts.
+void summitForgetItemsMarkedByContainer();
+#endif
+
 void LocalFrameViewLayoutContext::layout(bool canDeferUpdateLayerPositions)
 {
     LOG_WITH_STREAM(Layout, stream << "LocalFrameView " << &view() << " LocalFrameViewLayoutContext::layout() with size " << view().layoutSize());
 
     Ref protectedView(view());
 
-    performLayout(canDeferUpdateLayerPositions);
+#if PLATFORM(HAIKU)
+    static bool summitPageUpdateTraceEnabled = [] {
+        const char* value = std::getenv("SUMMIT_PAGE_UPDATE_TRACE");
+        return value && (value[0] == '1' || value[0] == '2' || value[0] == '3') && !value[1];
+    }();
+    auto traceStart = summitPageUpdateTraceEnabled ? MonotonicTime::now() : MonotonicTime { };
+    bool beganWithSubtreeLayout = summitPageUpdateTraceEnabled && !!subtreeLayoutRoot();
+    unsigned layoutPasses = 0;
+    auto reportSlowLayout = [&] {
+        if (!summitPageUpdateTraceEnabled)
+            return;
+        auto duration = MonotonicTime::now() - traceStart;
+        if (duration >= 10_ms)
+            WTFLogAlways("Summit layout: context=%p total=%.1f passes=%u subtree=%u deferredLayerPositions=%u\n",
+                this, duration.milliseconds(), layoutPasses, beganWithSubtreeLayout, canDeferUpdateLayerPositions);
+    };
+#endif
 
-    if (view().hasOneRef())
+    performLayout(canDeferUpdateLayerPositions);
+#if PLATFORM(HAIKU)
+    ++layoutPasses;
+#endif
+
+    if (view().hasOneRef()) {
+#if PLATFORM(HAIKU)
+        reportSlowLayout();
+#endif
         return;
+    }
 
     Style::DocumentScope::LayoutDependencyUpdateContext layoutDependencyUpdateContext;
     while (document() && document()->styleScope().invalidateForLayoutDependencies(layoutDependencyUpdateContext)) {
@@ -186,10 +221,20 @@ void LocalFrameViewLayoutContext::layout(bool canDeferUpdateLayerPositions)
             break;
 
         performLayout(canDeferUpdateLayerPositions);
+#if PLATFORM(HAIKU)
+        ++layoutPasses;
+#endif
 
-        if (view().hasOneRef())
+        if (view().hasOneRef()) {
+#if PLATFORM(HAIKU)
+            reportSlowLayout();
+#endif
             return;
+        }
     }
+#if PLATFORM(HAIKU)
+    reportSlowLayout();
+#endif
 }
 
 void LocalFrameViewLayoutContext::interleavedLayout()
@@ -218,6 +263,27 @@ void LocalFrameViewLayoutContext::performLayout(bool canDeferUpdateLayerPosition
         LOG(Layout, "  is not allowed, bailing");
         return;
     }
+
+#if PLATFORM(HAIKU)
+    static bool summitPageUpdateTraceEnabled = [] {
+        const char* value = std::getenv("SUMMIT_PAGE_UPDATE_TRACE");
+        return value && (value[0] == '1' || value[0] == '2' || value[0] == '3') && !value[1];
+    }();
+    auto traceStart = summitPageUpdateTraceEnabled ? MonotonicTime::now() : MonotonicTime { };
+    auto traceLast = traceStart;
+    Seconds preLayoutDuration;
+    Seconds renderTreeDuration;
+    Seconds viewSizeDuration;
+    Seconds postLayoutDuration;
+    bool beganWithSubtreeLayout = summitPageUpdateTraceEnabled && !!subtreeLayoutRoot();
+    auto markTracePhase = [&](Seconds& duration) {
+        if (!summitPageUpdateTraceEnabled)
+            return;
+        auto now = MonotonicTime::now();
+        duration += now - traceLast;
+        traceLast = now;
+    };
+#endif
 
     LayoutFrameScope layoutFrameScope(*this);
     TraceScope tracingScope(PerformLayoutStart, PerformLayoutEnd);
@@ -262,6 +328,9 @@ void LocalFrameViewLayoutContext::performLayout(bool canDeferUpdateLayerPosition
         protect(view())->willDoLayout(layoutRoot);
         m_firstLayout = false;
     }
+#if PLATFORM(HAIKU)
+    markTracePhase(preLayoutDuration);
+#endif
 
     Vector<FloatQuad> layoutAreas;
     {
@@ -273,7 +342,17 @@ void LocalFrameViewLayoutContext::performLayout(bool canDeferUpdateLayerPosition
 #ifndef NDEBUG
         RenderTreeNeedsLayoutChecker checker(*renderView());
 #endif
+#if PLATFORM(HAIKU)
+        bool summitLayoutWhyTraceBegan = summitLayoutWhyTraceBegin(*layoutRoot);
+        auto summitLayoutWhyTraceStart = summitLayoutWhyTraceBegan ? MonotonicTime::now() : MonotonicTime { };
+#endif
         layoutRoot->layout();
+#if PLATFORM(HAIKU)
+        if (!isLayoutNested())
+            summitForgetItemsMarkedByContainer();
+        if (summitLayoutWhyTraceBegan)
+            summitLayoutWhyTraceEnd(*layoutRoot, (MonotonicTime::now() - summitLayoutWhyTraceStart).milliseconds());
+#endif
         {
             CheckedPtr renderView = this->renderView();
             auto state = renderView ? renderView->textAutosizingState() : RenderView::TextAutosizingState::Normal;
@@ -311,6 +390,9 @@ void LocalFrameViewLayoutContext::performLayout(bool canDeferUpdateLayerPosition
             showRenderTree(renderView());
 #endif
     }
+#if PLATFORM(HAIKU)
+    markTracePhase(renderTreeDuration);
+#endif
     {
         SetForScope layoutPhase(m_layoutPhase, LayoutPhase::InViewSizeAdjust);
         ScriptDisallowedScope::InMainThread scriptDisallowedScope;
@@ -324,16 +406,45 @@ void LocalFrameViewLayoutContext::performLayout(bool canDeferUpdateLayerPosition
                 return;
         }
     }
+#if PLATFORM(HAIKU)
+    markTracePhase(viewSizeDuration);
+    MonotonicTime postDidLayoutEnd;
+    MonotonicTime postTasksEnd;
+#endif
     {
         SetForScope layoutPhase(m_layoutPhase, LayoutPhase::InPostLayout);
+#if PLATFORM(HAIKU)
+        if (m_needsFullRepaint && getenv("SUMMIT_FULL_REPAINT_TRACE"))
+            fprintf(stderr, "Summit full repaint: the layout asked for one\n");
+#endif
         if (m_needsFullRepaint)
             renderView()->repaintRootContents();
         ASSERT(!layoutRoot->needsLayout());
         protect(view())->didLayout(layoutRoot, canDeferUpdateLayerPositions);
+#if PLATFORM(HAIKU)
+        if (summitPageUpdateTraceEnabled)
+            postDidLayoutEnd = MonotonicTime::now();
+#endif
         runOrScheduleAsynchronousTasks(canDeferUpdateLayerPositions);
+#if PLATFORM(HAIKU)
+        if (summitPageUpdateTraceEnabled)
+            postTasksEnd = MonotonicTime::now();
+#endif
     }
     InspectorInstrumentation::didLayout(frame, *layoutRoot, layoutAreas);
     DebugPageOverlays::didLayout(frame);
+#if PLATFORM(HAIKU)
+    markTracePhase(postLayoutDuration);
+    auto traceTotal = traceLast - traceStart;
+    if (traceTotal >= 10_ms) {
+        auto documentURL = document()->url().string().utf8();
+        WTFLogAlways("Summit layout phases: context=%p total=%.1f pre=%.1f renderTree=%.1f viewSize=%.1f post=%.1f postDidLayout=%.1f postTasks=%.1f postOther=%.1f subtree=%u deferredLayerPositions=%u document=%p url=%s\n",
+            this, traceTotal.milliseconds(), preLayoutDuration.milliseconds(), renderTreeDuration.milliseconds(),
+            viewSizeDuration.milliseconds(), postLayoutDuration.milliseconds(), (postDidLayoutEnd - (traceLast - postLayoutDuration)).milliseconds(),
+            (postTasksEnd - postDidLayoutEnd).milliseconds(), (traceLast - postTasksEnd).milliseconds(), beganWithSubtreeLayout, canDeferUpdateLayerPositions,
+            document(), reinterpret_cast<const char*>(documentURL.data()));
+    }
+#endif
 }
 
 void LocalFrameViewLayoutContext::runOrScheduleAsynchronousTasks(bool canDeferUpdateLayerPositions)

@@ -56,6 +56,20 @@ DragData::DragData(const IntPoint& clientPosition, const IntPoint& globalPositio
 }
 #endif
 
+#if PLATFORM(HAIKU)
+DragData::DragData(const IntPoint& clientPosition, const IntPoint& globalPosition, const Vector<String>& fileNames, OptionSet<DragOperation> sourceOperationMask, OptionSet<DragApplicationFlags> flags, OptionSet<DragDestinationAction> destinationActionMask, std::optional<PageIdentifier> pageID)
+    : m_clientPosition(clientPosition)
+    , m_globalPosition(globalPosition)
+    , m_platformDragData(nullptr)
+    , m_draggingSourceOperationMask(sourceOperationMask)
+    , m_applicationFlags(flags)
+    , m_fileNames(fileNames)
+    , m_dragDestinationActionMask(destinationActionMask)
+    , m_pageID(pageID)
+{
+}
+#endif
+
 std::unique_ptr<PasteboardContext> DragData::createPasteboardContext() const
 {
     return PagePasteboardContext::create(std::optional<PageIdentifier> { m_pageID });

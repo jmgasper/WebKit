@@ -123,7 +123,7 @@ String CookieJar::cookieRequestHeaderFieldValue(Document& document, const URL& u
     return result.first;
 }
 
-#if PLATFORM(COCOA)
+#if PLATFORM(COCOA) || (PLATFORM(HAIKU) && USE(CURL))
 
 String CookieJar::cookies(Document& document, const URL& url) const
 {

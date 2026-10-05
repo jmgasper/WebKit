@@ -1759,7 +1759,7 @@ void NetworkProcess::preconnectTo(PAL::SessionID sessionID, WebPageProxyIdentifi
 
     LOG_WITH_STREAM(Network, stream << "(NetworkProcess) Preconnecting to URL "_s << url.string() << " (storedCredentialsPolicy "_s << (int)storedCredentialsPolicy << ")"_s);
 
-#if ENABLE(SERVER_PRECONNECT)
+#if ENABLE(SERVER_PRECONNECT) || PLATFORM(HAIKU)
 #if ENABLE(LEGACY_CUSTOM_PROTOCOL_MANAGER)
     if (RefPtr { supplement<LegacyCustomProtocolManager>() }->supportsScheme(url.protocol().toString()))
         return;

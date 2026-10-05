@@ -35,6 +35,9 @@
 #include "NetworkResourceLoadParameters.h"
 #include "PrivateRelayed.h"
 #include "ServiceWorkerTimingInfo.h"
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+#include "WebExtensionWebRequestGateResultHaiku.h"
+#endif
 #include <WebCore/ContentFilterClient.h>
 #include <WebCore/ContentFilterUnblockHandler.h>
 #include <WebCore/ContentSecurityPolicyClient.h>
@@ -160,6 +163,9 @@ public:
     void didFailLoading(const WebCore::ResourceError&) final;
     void didBlockAuthenticationChallenge() final;
     void didReceiveChallenge(const WebCore::AuthenticationChallenge&) final;
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    void decideAuthenticationChallengeHaiku(const WebCore::AuthenticationChallenge&, CompletionHandler<void(std::optional<WebCore::Credential>&&)>&&) final;
+#endif
     bool shouldCaptureExtraNetworkLoadMetrics() const final;
 
 #if HAVE(BROKEN_MULTIPART_RESPONSE_FLOW_CONTROL)
@@ -263,6 +269,20 @@ private:
 
     enum class FirstLoad : bool { No, Yes };
     void startNetworkLoad(WebCore::ResourceRequest&&, FirstLoad);
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    // Blocking webRequest (see WebExtensionWebRequestGateResultHaiku.h).
+    bool shouldConsultWebRequestHaiku(uint8_t phase) const;
+    void consultWebRequestHaiku(uint8_t phase, const WebCore::ResourceRequest&, const WebCore::ResourceResponse*, const WebCore::AuthenticationChallenge*, CompletionHandler<void(WebExtensionWebRequestGateResultHaiku&&)>&&);
+    // Runs the onBeforeRequest and onBeforeSendHeaders decisions for a request
+    // that is about to be served from the cache or the network. proceed receives
+    // the (possibly modified) request. When an extension cancels or redirects,
+    // abandon runs first and the loader fails or restarts through a synthetic
+    // redirect instead; proceed is then never called.
+    void applyBeforeRequestWebRequestHaiku(WebCore::ResourceRequest&&, Function<void(WebCore::ResourceRequest&&)>&& proceed, Function<void()>&& abandon);
+    void applyBeforeSendHeadersWebRequestHaiku(WebCore::ResourceRequest&&, Function<void(WebCore::ResourceRequest&&)>&& proceed, Function<void()>&& abandon);
+    void startWebRequestRedirectHaiku(WebCore::ResourceRequest&&, const URL&);
+    void continueStartRequestHaiku(WebCore::ResourceRequest&&);
+#endif
     void restartNetworkLoad(WebCore::ResourceRequest&&, CompletionHandler<void(WebCore::ResourceRequest&&)>&&);
     void continueDidReceiveResponse();
     void didReceiveMainResourceResponse(const WebCore::ResourceResponse&);
@@ -375,6 +395,10 @@ private:
     std::unique_ptr<NetworkCache::Entry> m_cacheEntryForValidation;
     std::unique_ptr<NetworkCache::Entry> m_cacheEntryForMaxAgeCapValidation;
     bool m_isWaitingContinueWillSendRequestForCachedRedirect { false };
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    bool m_isApplyingWebRequestResponseHaiku { false };
+    unsigned m_webRequestCredentialAttemptsHaiku { 0 };
+#endif
     std::unique_ptr<NetworkCache::Entry> m_cacheEntryWaitingForContinueDidReceiveResponse;
     RefPtr<NetworkLoadChecker> m_networkLoadChecker;
     bool m_shouldRestartLoad { false };

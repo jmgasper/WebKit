@@ -754,7 +754,7 @@ void NetworkConnectionToWebProcess::preconnectTo(PreconnectRequest&& preconnectR
     }
 #endif
 
-#if ENABLE(SERVER_PRECONNECT)
+#if ENABLE(SERVER_PRECONNECT) || PLATFORM(HAIKU)
     CheckedPtr session = networkSession();
     if (session && session->allowsServerPreconnect()) {
         NetworkLoadParameters parameters;

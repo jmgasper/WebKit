@@ -38,6 +38,10 @@
 OBJC_CLASS NSCachedURLResponse;
 #endif
 
+#if PLATFORM(HAIKU)
+class BCertificate;
+#endif
+
 namespace WebCore {
 class AuthenticationChallenge;
 class Credential;
@@ -88,6 +92,11 @@ public:
     virtual bool shouldUseCredentialStorage(ResourceHandle*) { return false; }
     virtual void didReceiveAuthenticationChallenge(ResourceHandle*, const AuthenticationChallenge&) { }
     virtual void receivedCancellation(ResourceHandle*, const AuthenticationChallenge&) { }
+
+#if PLATFORM(HAIKU) && !USE(CURL)
+        virtual bool didReceiveInvalidCertificate(ResourceHandle*, const BCertificate&,
+            const char*) { return false; }
+#endif
 
 #if PLATFORM(IOS_FAMILY)
     virtual RetainPtr<CFDictionaryRef> connectionProperties(ResourceHandle*) { return nullptr; }

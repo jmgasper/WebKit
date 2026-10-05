@@ -30,6 +30,8 @@
 #include <unicode/utext.h>
 #include <wtf/Assertions.h>
 
+#include <limits>
+
 namespace WTF {
 
 enum class UTextProviderContext {

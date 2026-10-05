@@ -59,11 +59,6 @@ static WebExtensionFrameParameters frameParametersForFrame(_WKFrameTreeNode *fra
     };
 }
 
-bool WebExtensionContext::isWebNavigationMessageAllowed(IPC::Decoder& message)
-{
-    return isLoadedAndPrivilegedMessage(message) && hasPermission(WebExtensionPermission::webNavigation());
-}
-
 void WebExtensionContext::webNavigationTraverseFrameTreeForFrame(_WKFrameTreeNode *frame, _WKFrameTreeNode *parentFrame, WebExtensionTab* tab, Vector<WebExtensionFrameParameters> &frames)
 {
     frames.append(frameParametersForFrame(frame, parentFrame, tab, this, true));

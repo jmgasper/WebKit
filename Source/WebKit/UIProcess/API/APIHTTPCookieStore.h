@@ -27,6 +27,9 @@
 
 #include "APIObject.h"
 #include <WebCore/Cookie.h>
+#if PLATFORM(HAIKU) && USE(CURL)
+#include <WebCore/CookieChange.h>
+#endif
 #include <pal/SessionID.h>
 #include <wtf/CompletionHandler.h>
 #include <wtf/Forward.h>
@@ -57,6 +60,9 @@ class HTTPCookieStoreObserver : public RefCountedAndCanMakeWeakPtr<HTTPCookieSto
 public:
     virtual ~HTTPCookieStoreObserver() { }
     virtual void cookiesDidChange(HTTPCookieStore&) = 0;
+#if PLATFORM(HAIKU) && USE(CURL)
+    virtual void cookiesDidChange(HTTPCookieStore& store, const Vector<WebCore::CookieChange>&) { cookiesDidChange(store); }
+#endif
 };
 
 class HTTPCookieStore final : public ObjectImpl<Object::Type::HTTPCookieStore> {
@@ -72,6 +78,10 @@ public:
     void cookiesForURL(WTF::URL&&, CompletionHandler<void(Vector<WebCore::Cookie>&&)>&&, RefPtr<WTF::WorkQueue> replyQueue = nullptr);
     void setCookies(Vector<WebCore::Cookie>&&, CompletionHandler<void()>&&);
     void deleteCookie(const WebCore::Cookie&, CompletionHandler<void()>&&);
+#if PLATFORM(HAIKU) && USE(CURL)
+    void setCookieWithResult(const WebCore::Cookie&, CompletionHandler<void(bool, std::optional<WebCore::Cookie>&&)>&&);
+    void deleteCookieWithResult(const WebCore::Cookie&, CompletionHandler<void(bool)>&&);
+#endif
     void deleteCookiesForHostnames(const Vector<WTF::String>&, CompletionHandler<void()>&&);
     
     void deleteAllCookies(CompletionHandler<void()>&&);
@@ -83,6 +93,11 @@ public:
     void unregisterObserver(HTTPCookieStoreObserver&);
 
     void cookiesDidChange();
+#if PLATFORM(HAIKU) && USE(CURL)
+    void cookiesDidChange(const Vector<WebCore::CookieChange>&);
+    PAL::SessionID sessionID() const { return m_sessionID; }
+    bool hasObservers() const { return !m_observers.isEmptyIgnoringNullReferences(); }
+#endif
 
     void filterAppBoundCookies(Vector<WebCore::Cookie>&&, CompletionHandler<void(Vector<WebCore::Cookie>&&)>&&);
 

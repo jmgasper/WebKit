@@ -80,7 +80,7 @@ FontPlatformData FontPlatformData::cloneWithSize(const FontPlatformData& source,
     return copy;
 }
 
-#if !USE(SKIA)
+#if !USE(HAIKU_GRAPHICS) && !USE(SKIA)
 void FontPlatformData::updateSize(float size)
 {
     m_metadata.pointSize = size;

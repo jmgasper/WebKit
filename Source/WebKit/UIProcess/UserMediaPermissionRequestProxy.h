@@ -69,6 +69,7 @@ public:
     void setEligibleAudioDevices(Vector<WebCore::CaptureDevice>&& devices) { m_eligibleAudioDevices = WTF::move(devices); }
 
     Vector<String> videoDeviceUIDs() const;
+    const Vector<WebCore::CaptureDevice>& eligibleVideoDevices() const LIFETIME_BOUND { return m_eligibleVideoDevices; }
     Vector<String> audioDeviceUIDs() const;
     bool hasAudioDevice() const { return !m_eligibleAudioDevices.isEmpty(); }
     bool hasVideoDevice() const { return !m_eligibleVideoDevices.isEmpty(); }

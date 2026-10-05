@@ -43,6 +43,9 @@
 #include "HTMLHtmlElement.h"
 #include "HTMLImageElement.h"
 #include "HTMLNames.h"
+#if PLATFORM(HAIKU)
+#include <wtf/text/MakeString.h>
+#endif
 #include "HTMLTableCellElement.h"
 #include "HTMLTableElement.h"
 #include "InlineIteratorLineBox.h"
@@ -114,7 +117,9 @@
 #include "TextAutoSizing.h"
 #include "TextManipulationController.h"
 #include "ViewTransition.h"
+#include <cstdlib>
 #include <wtf/MathExtras.h>
+#include <wtf/MonotonicTime.h>
 #include <wtf/StackStats.h>
 #include <wtf/TZoneMallocInlines.h>
 #include <wtf/text/TextStream.h>
@@ -1561,30 +1566,60 @@ bool RenderElement::repaintAfterLayoutIfNeeded(SingleThreadWeakPtr<const RenderL
         return false;
     };
 
+#if PLATFORM(HAIKU)
+    const char* fullRepaintReason = "";
+#define SUMMIT_REPAINT_REASON(reason) fullRepaintReason = reason
+#else
+#define SUMMIT_REPAINT_REASON(reason)
+#endif
     auto fullRepaint = [&]() {
-        if (requiresFullRepaint == RequiresFullRepaint::Yes)
+        if (requiresFullRepaint == RequiresFullRepaint::Yes) {
+            SUMMIT_REPAINT_REASON("its layout asked for it");
             return true;
+        }
 
-        if (oldClippedOverflowRect.isEmpty() || newClippedOverflowRect.isEmpty())
+        if (oldClippedOverflowRect.isEmpty() || newClippedOverflowRect.isEmpty()) {
+            SUMMIT_REPAINT_REASON("it was or is empty");
             return true;
+        }
 
-        if (!oldClippedOverflowRect.intersects(newClippedOverflowRect))
+        if (!oldClippedOverflowRect.intersects(newClippedOverflowRect)) {
+            SUMMIT_REPAINT_REASON("it is elsewhere");
             return true;
+        }
 
         if (!haveOutlinesBoundsRects)
             return false;
 
         // If our outline bounds rect moved, we have to repaint everything.
-        if (oldRects.outlineBoundsRect->location() != newRects.outlineBoundsRect->location())
+        if (oldRects.outlineBoundsRect->location() != newRects.outlineBoundsRect->location()) {
+            SUMMIT_REPAINT_REASON("it moved");
             return true;
+        }
 
         // If our outline bounds rect resized (as a proxy for a border box resize),
         // we have to repaint if we paint content that scales with the size.
-        if (oldRects.outlineBoundsRect->size() != newRects.outlineBoundsRect->size() && mustFullRepaintOnSizeChange(*oldRects.outlineBoundsRect, *newRects.outlineBoundsRect))
+        if (oldRects.outlineBoundsRect->size() != newRects.outlineBoundsRect->size() && mustFullRepaintOnSizeChange(*oldRects.outlineBoundsRect, *newRects.outlineBoundsRect)) {
+            SUMMIT_REPAINT_REASON("its size changed and its decorations depend on the size");
             return true;
+        }
 
         return false;
     }();
+#undef SUMMIT_REPAINT_REASON
+#if PLATFORM(HAIKU)
+    // SUMMIT_FULL_REPAINT_TRACE=1: a renderer of a megapixel and more that is painted again whole.
+    if (fullRepaint && getenv("SUMMIT_FULL_REPAINT_TRACE")) {
+        auto larger = unionRect(oldClippedOverflowRect, newClippedOverflowRect);
+        if (larger.width().toFloat() * larger.height().toFloat() >= 1e6f) {
+            auto name = renderName();
+            auto element = this->element();
+            auto described = element ? makeString(element->tagName(), " id='"_s, element->getIdAttribute(), "' class='"_s, element->getAttribute(HTMLNames::classAttr), '\'').utf8() : CString();
+            fprintf(stderr, "Summit full repaint: %s %s %.0fx%.0f -> %.0fx%.0f because %s\n", name.characters(), described.data() ? reinterpret_cast<const char*>(described.data()) : "",
+                oldClippedOverflowRect.width().toFloat(), oldClippedOverflowRect.height().toFloat(), newClippedOverflowRect.width().toFloat(), newClippedOverflowRect.height().toFloat(), fullRepaintReason);
+        }
+    }
+#endif
 
     if (!repaintContainer)
         repaintContainer = &view();
@@ -2897,7 +2932,21 @@ void RenderElement::layoutIfNeeded()
         clearNeedsLayoutForSkippedContent();
         return;
     }
+#if PLATFORM(HAIKU)
+    static bool summitPageUpdateTraceEnabled = [] {
+        const char* value = std::getenv("SUMMIT_PAGE_UPDATE_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    auto traceStart = summitPageUpdateTraceEnabled ? MonotonicTime::now() : MonotonicTime { };
+#endif
     layout();
+#if PLATFORM(HAIKU)
+    if (summitPageUpdateTraceEnabled) {
+        auto duration = MonotonicTime::now() - traceStart;
+        if (duration >= 10_ms)
+            WTFLogAlways("Summit renderer layout: renderer=%p type=%s total=%.1f\n", this, renderName().characters(), duration.milliseconds());
+    }
+#endif
     if (Style::AnchorPositionEvaluator::isAnchorPositioned(style()))
         Style::AnchorPositionEvaluator::captureScrollSnapshots(downcast<RenderBox>(*this));
 }

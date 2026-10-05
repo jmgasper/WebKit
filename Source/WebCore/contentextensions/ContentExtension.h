@@ -32,6 +32,7 @@
 #include <wtf/Ref.h>
 #include <wtf/RefCounted.h>
 #include <wtf/RefPtr.h>
+#include <optional>
 
 namespace WebCore {
 
@@ -65,11 +66,11 @@ private:
     void compileGlobalDisplayNoneStyleSheet();
 
     void populateTopURLActionCacheIfNeeded(const URL& topURL) const;
-    mutable URL m_cachedTopURL;
+    mutable std::optional<URL> m_cachedTopURL;
     mutable DFABytecodeInterpreter::Actions m_cachedTopURLActions;
 
     void populateFrameURLActionCacheIfNeeded(const URL& frameURL) const;
-    mutable URL m_cachedFrameURL;
+    mutable std::optional<URL> m_cachedFrameURL;
     mutable DFABytecodeInterpreter::Actions m_cachedFrameURLActions;
 
     Vector<uint64_t> m_universalActions;

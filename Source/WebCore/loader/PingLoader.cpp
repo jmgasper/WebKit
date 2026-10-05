@@ -57,6 +57,7 @@
 #include "ResourceResponse.h"
 #include "SecurityOrigin.h"
 #include "SecurityPolicy.h"
+#include "Settings.h"
 #include "UserContentController.h"
 #include "ViolationReportType.h"
 #include <wtf/text/CString.h>
@@ -126,6 +127,9 @@ void PingLoader::loadImage(LocalFrame& frame, URL&& url)
 void PingLoader::sendPing(LocalFrame& frame, URL&& sendPingURL, const URL& destinationURL)
 {
     ASSERT(frame.document());
+
+    if (!frame.settings().hyperlinkAuditingEnabled())
+        return;
 
     if (!sendPingURL.protocolIsInHTTPFamily())
         return;

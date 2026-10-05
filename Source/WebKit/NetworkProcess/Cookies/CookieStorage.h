@@ -26,6 +26,10 @@
 #pragma once
 
 #include <wtf/Function.h>
+#if USE(CURL)
+#include <WebCore/CookieChange.h>
+#include <wtf/Vector.h>
+#endif
 
 namespace WebKit {
 
@@ -33,6 +37,9 @@ class NetworkStorageSession;
 
 void startObservingCookieChanges(NetworkStorageSession&, Function<void()>&&);
 void stopObservingCookieChanges(NetworkStorageSession&);
+#if USE(CURL)
+void startObservingCookieChangesWithDetails(NetworkStorageSession&, Function<void(Vector<WebCore::CookieChange>&&)>&&);
+#endif
 
 }
 

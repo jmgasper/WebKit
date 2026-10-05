@@ -89,7 +89,19 @@ Locale::WritingDirection LocaleICU::defaultWritingDirection() const
         return WritingDirection::Default;
     }
 #else
-    return WritingDirection::Default;
+    // Ports without HarfBuzz still have ICU's locale direction data.
+    UErrorCode status = U_ZERO_ERROR;
+    auto orientation = uloc_getCharacterOrientation(m_locale.data(), &status);
+    if (U_FAILURE(status))
+        return WritingDirection::Default;
+    switch (orientation) {
+    case ULOC_LAYOUT_LTR:
+        return WritingDirection::LeftToRight;
+    case ULOC_LAYOUT_RTL:
+        return WritingDirection::RightToLeft;
+    default:
+        return WritingDirection::Default;
+    }
 #endif
 }
 

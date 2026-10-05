@@ -56,6 +56,14 @@ dictionary WebExtensionSendMessageOptions {
 
     [ImplementedAs=runtimeIdentifier] readonly attribute DOMString id;
 
+    // Chrome's enum objects. Extensions read them unconditionally
+    // (`reason === chrome.runtime.OnInstalledReason.INSTALL`).
+    [ImplementedAs=onInstalledReasons] readonly attribute any OnInstalledReason;
+    [ImplementedAs=onRestartRequiredReasons] readonly attribute any OnRestartRequiredReason;
+    [ImplementedAs=platformOperatingSystems] readonly attribute any PlatformOs;
+    [ImplementedAs=platformArchitectures] readonly attribute any PlatformArch;
+    [ImplementedAs=contextTypes] readonly attribute any ContextType;
+
     [URL, ConvertNullStringTo=Null, RaisesStringException] DOMString getURL(DOMString resourcePath);
     [JSONValue] any getManifest();
     DOMString getVersion();
@@ -85,5 +93,11 @@ dictionary WebExtensionSendMessageOptions {
     [MainWorldOnly] readonly attribute WebExtensionAPIEvent onMessageExternal;
     [MainWorldOnly] readonly attribute WebExtensionAPIEvent onStartup;
     [MainWorldOnly] readonly attribute WebExtensionAPIEvent onInstalled;
+    [MainWorldOnly, Platform=HAIKU] readonly attribute WebExtensionAPIEvent onSuspend;
+    [MainWorldOnly, Platform=HAIKU] readonly attribute WebExtensionAPIEvent onSuspendCanceled;
+    [MainWorldOnly, Platform=HAIKU] readonly attribute WebExtensionAPIEvent onUpdateAvailable;
+
+    [MainWorldOnly, Platform=HAIKU] void getBrowserInfo([Optional, CallbackHandler] function callback);
+    [MainWorldOnly, Platform=HAIKU] void requestUpdateCheck([Optional, CallbackHandler] function callback);
 
 };

@@ -46,7 +46,11 @@ class PlatformAudioData;
 class LibWebRTCAudioModule;
 #endif
 
-class WEBCORE_EXPORT AudioMediaStreamTrackRenderer : public ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr<AudioMediaStreamTrackRenderer, WTF::DestructionThread::Main>, public LoggerHelper {
+class WEBCORE_EXPORT AudioMediaStreamTrackRenderer : public ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr<AudioMediaStreamTrackRenderer, WTF::DestructionThread::Main>
+#if !RELEASE_LOG_DISABLED
+    , public LoggerHelper
+#endif
+{
     WTF_MAKE_TZONE_ALLOCATED_EXPORT(AudioMediaStreamTrackRenderer, WEBCORE_EXPORT);
 public:
     struct Init {

@@ -88,6 +88,7 @@
     || OS(OPENBSD)             \
     || OS(HAIKU)               \
     || OS(HURD)                \
+    || OS(HAIKU)               \
     || OS(NETBSD)              \
     || OS(QNX)                 \
     || OS(WINDOWS)

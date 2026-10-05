@@ -37,6 +37,7 @@
 #include "HandleUserInputEventResult.h"
 #include "HitTestResult.h"
 #include "KeyboardEvent.h"
+#include "LocalFrameView.h"
 #include "MouseEventWithHitTestResults.h"
 #include "NotImplemented.h"
 #include "Page.h"

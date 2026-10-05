@@ -47,6 +47,11 @@
 #include <wtf/TZoneMallocInlines.h>
 #include <wtf/text/TextStream.h>
 
+#if PLATFORM(HAIKU)
+#include <cstdio>
+#include <cstdlib>
+#endif
+
 namespace WebCore {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(ScrollingTree);
@@ -136,6 +141,32 @@ OptionSet<WheelEventProcessingSteps> ScrollingTree::computeWheelProcessingSteps(
     return { WheelEventProcessingSteps::AsyncScrolling };
 }
 
+#if PLATFORM(HAIKU)
+bool ScrollingTree::wheelLatchEnabledHaiku()
+{
+    // SUMMIT_WHEEL_LATCH=0 hit-tests every notch again.
+    static const bool enabled = [] {
+        const char* value = getenv("SUMMIT_WHEEL_LATCH");
+        return !value || value[0] != '0' || value[1];
+    }();
+    return enabled;
+}
+
+bool ScrollingTree::WheelLatchHaiku::matches(const PlatformWheelEvent& wheelEvent, MonotonicTime now) const
+{
+    static constexpr Seconds longestPauseInBurst = 300_ms;
+    static constexpr int farthestPointerMove = 24;
+    if (!lastEventTime || now - lastEventTime > longestPauseInBurst)
+        return false;
+    auto moved = wheelEvent.position() - position;
+    if (std::abs(moved.width()) + std::abs(moved.height()) > farthestPointerMove)
+        return false;
+    // A notch the other way is a new scroll: what was under the pointer when
+    // the burst began may have left the view by now.
+    return wheelEvent.deltaX() * delta.width() >= 0 && wheelEvent.deltaY() * delta.height() >= 0;
+}
+#endif
+
 OptionSet<WheelEventProcessingSteps> ScrollingTree::determineWheelEventProcessing(const PlatformWheelEvent& wheelEvent)
 {
     // This method is invoked by the event handling thread
@@ -146,10 +177,36 @@ OptionSet<WheelEventProcessingSteps> ScrollingTree::determineWheelEventProcessin
         LOG_WITH_STREAM(ScrollLatching, stream << "\nScrollingTree::determineWheelEventProcessing " << wheelEvent << " have latched node " << latchedNodeAndSteps->scrollingNodeID << " steps " << latchedNodeAndSteps->processingSteps << " gesture state " << m_treeState.gestureState);
         return latchedNodeAndSteps->processingSteps;
     }
+#if PLATFORM(HAIKU)
+    // While the main thread keeps the layers, a notch of a burst takes the
+    // answer of the notch before it instead of waiting.
+    bool continuesBurst = wheelLatchEnabledHaiku() && m_wheelLatchForStepsHaiku.matches(wheelEvent, MonotonicTime::now());
+    if (continuesBurst && !canHitTestWithoutWaitingHaiku()) {
+        m_wheelLatchForStepsHaiku.lastEventTime = MonotonicTime::now();
+        return m_wheelLatchForStepsHaiku.steps;
+    }
+#endif
     if (wheelEvent.isGestureStart() || wheelEvent.isNonGestureEvent())
         m_treeState.gestureState = std::nullopt;
 
     auto processingSteps = computeWheelProcessingSteps(wheelEvent);
+#if PLATFORM(HAIKU)
+    // A burst is one that began with a notch that scrolled without waiting for
+    // the page. It goes on scrolling what it began to scroll, as wheel
+    // scrolling does in other browsers: something that comes to pass under
+    // the pointer and listens for the wheel hears of the notches and cannot
+    // cancel them.
+    bool waitsForPage = processingSteps.containsAny({ WheelEventProcessingSteps::SynchronousScrolling, WheelEventProcessingSteps::BlockingDOMEventDispatch });
+    if (continuesBurst) {
+        if (waitsForPage)
+            processingSteps = { WheelEventProcessingSteps::AsyncScrolling, WheelEventProcessingSteps::NonBlockingDOMEventDispatch };
+        m_wheelLatchForStepsHaiku.lastEventTime = MonotonicTime::now();
+        m_wheelLatchForStepsHaiku.steps = processingSteps;
+    } else if (waitsForPage || !wheelLatchEnabledHaiku())
+        m_wheelLatchForStepsHaiku = { };
+    else
+        m_wheelLatchForStepsHaiku = { MonotonicTime::now(), wheelEvent.position(), { }, processingSteps, wheelEvent.delta() };
+#endif
 
     m_latchingController.receivedWheelEvent(wheelEvent, processingSteps, m_allowLatching);
 
@@ -158,11 +215,36 @@ OptionSet<WheelEventProcessingSteps> ScrollingTree::determineWheelEventProcessin
     return processingSteps;
 }
 
+#if PLATFORM(HAIKU)
+bool ScrollingTraceScopeHaiku::enabled()
+{
+    static const bool enabled = [] {
+        const char* value = getenv("SUMMIT_SCROLL_LOCK_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    return enabled;
+}
+
+void ScrollingTraceScopeHaiku::report(const char* name, Seconds duration)
+{
+    if (duration > 20_ms)
+        fprintf(stderr, "Summit scroll lock: %s %.1f ms\n", name, duration.milliseconds());
+}
+#endif
+
 WheelEventHandlingResult ScrollingTree::handleWheelEvent(const PlatformWheelEvent& wheelEvent, OptionSet<WheelEventProcessingSteps> processingSteps)
 {
     LOG_WITH_STREAM(Scrolling, stream << "ScrollingTree " << this << " handleWheelEvent " << wheelEvent);
 
+#if PLATFORM(HAIKU)
+    std::optional<ScrollingTraceScopeHaiku> waitsForLock;
+    waitsForLock.emplace("a wheel event waited for the lock");
+#endif
     Locker locker { m_treeLock };
+#if PLATFORM(HAIKU)
+    waitsForLock.reset();
+    ScrollingTraceScopeHaiku traceScope("handling a wheel event");
+#endif
 
     if (isMonitoringWheelEvents())
         receivedWheelEventWithPhases(wheelEvent.phase(), wheelEvent.momentumPhase());
@@ -200,12 +282,27 @@ WheelEventHandlingResult ScrollingTree::handleWheelEvent(const PlatformWheelEven
             }
         }
 
+#if PLATFORM(HAIKU)
+        assertIsHeld(m_treeLock);
+        if (wheelLatchEnabledHaiku() && m_wheelLatchForNodeHaiku.nodeID && m_wheelLatchForNodeHaiku.matches(wheelEvent, MonotonicTime::now())) {
+            if (RefPtr node = nodeForID(*m_wheelLatchForNodeHaiku.nodeID)) {
+                m_wheelLatchForNodeHaiku.lastEventTime = MonotonicTime::now();
+                return handleWheelEventWithNode(wheelEvent, processingSteps, node.get());
+            }
+        }
+#endif
+
         FloatPoint position = wheelEvent.position();
         {
             Locker locker { m_treeStateLock };
             position.move(rootNode->viewToContentsOffset(m_treeState.mainFrameScrollPosition));
         }
         auto node = scrollingNodeForPoint(position);
+#if PLATFORM(HAIKU)
+        m_wheelLatchForNodeHaiku = { MonotonicTime::now(), wheelEvent.position(), { }, { }, wheelEvent.delta() };
+        if (node)
+            m_wheelLatchForNodeHaiku.nodeID = node->scrollingNodeID();
+#endif
 
         LOG_WITH_STREAM(Scrolling, stream << "ScrollingTree::handleWheelEvent found node " << (node ? node->scrollingNodeID() : std::optional<ScrollingNodeID> { }) << " for point " << position);
 
@@ -214,6 +311,19 @@ WheelEventHandlingResult ScrollingTree::handleWheelEvent(const PlatformWheelEven
 
     static constexpr OptionSet<WheelEventProcessingSteps> mainThreadSteps = { WheelEventProcessingSteps::NonBlockingDOMEventDispatch, WheelEventProcessingSteps::BlockingDOMEventDispatch };
     result.steps.add(processingSteps & mainThreadSteps);
+#if PLATFORM(HAIKU)
+    static bool tracePosition = [] {
+        const char* value = std::getenv("SUMMIT_SCROLL_POSITION_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    if (tracePosition && m_rootNode) {
+        auto position = m_rootNode->currentScrollPosition();
+        auto maximum = m_rootNode->maximumScrollPosition();
+        std::fprintf(stderr, "Summit wheel position: y=%.1f max=%.1f content=%.1f view=%.1f delta=%.1f handled=%d\n",
+            position.y(), maximum.y(), m_rootNode->totalContentsSize().height(),
+            m_rootNode->scrollableAreaSize().height(), wheelEvent.delta().height(), result.wasHandled);
+    }
+#endif
     return result;
 }
 
@@ -493,7 +603,15 @@ bool ScrollingTree::commitTreeStateInternal(std::unique_ptr<ScrollingStateTree>&
 bool ScrollingTree::commitTreeState(std::unique_ptr<ScrollingStateTree>&& scrollingStateTree, std::optional<LayerHostingContextIdentifier> hostingContextIdentifier)
 {
     SetForScope inCommitTreeState(m_inCommitTreeState, true);
+#if PLATFORM(HAIKU)
+    std::optional<ScrollingTraceScopeHaiku> waitsForLock;
+    waitsForLock.emplace("a commit waited for the lock");
+#endif
     Locker locker { m_treeLock };
+#if PLATFORM(HAIKU)
+    waitsForLock.reset();
+    ScrollingTraceScopeHaiku traceScope("committing the tree");
+#endif
     return commitTreeStateInternal(WTF::move(scrollingStateTree), hostingContextIdentifier);
 }
 
@@ -619,6 +737,9 @@ void ScrollingTree::removeAllNodes()
 void ScrollingTree::applyLayerPositions()
 {
     Locker locker { m_treeLock };
+#if PLATFORM(HAIKU)
+    ScrollingTraceScopeHaiku traceScope("applying layer positions");
+#endif
 
     if (!m_needsApplyLayerPositions.exchange(false))
         return;

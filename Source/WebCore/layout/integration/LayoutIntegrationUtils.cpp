@@ -34,6 +34,18 @@
 #include "RenderElementInlines.h"
 #include "RenderObject.h"
 #include "RenderObjectInlines.h"
+#if PLATFORM(HAIKU)
+#include <OS.h>
+#include <cstdio>
+#include <cstdlib>
+#endif
+
+#if PLATFORM(HAIKU)
+namespace WebCore {
+// Layout reuse for flex and grid items lives in RenderBlock.cpp.
+void summitSetNeedsLayoutByContainer(RenderBox&);
+}
+#endif
 
 namespace WebCore {
 namespace Layout {
@@ -129,6 +141,19 @@ static LayoutUnit blockSizeForGridItem(const LayoutState& layoutState, const Ele
 {
     ASSERT(box.isGridItem());
     CheckedRef renderer = downcast<RenderBox>(*box.rendererForIntegration());
+#if PLATFORM(HAIKU)
+    static bool traceGridItemHeights = [] {
+        const char* value = std::getenv("SUMMIT_GRID_PHASE_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    bigtime_t startedAt = traceGridItemHeights ? system_time() : 0;
+    bool wasClean = traceGridItemHeights && !renderer->needsLayout();
+    bool widthMatches = false;
+    if (traceGridItemHeights) {
+        auto previousGridAreaWidth = renderer->gridAreaContentLogicalWidth();
+        widthMatches = previousGridAreaWidth && *previousGridAreaWidth && **previousGridAreaWidth == inlineAxisConstraint;
+    }
+#endif
 
     switch (logicalHeightType) {
     case LayoutIntegration::LogicalHeightType::MinContent:
@@ -136,13 +161,42 @@ static LayoutUnit blockSizeForGridItem(const LayoutState& layoutState, const Ele
     case LayoutIntegration::LogicalHeightType::MinContentContribution:
     case LayoutIntegration::LogicalHeightType::MaxContentContribution: {
         renderer->setGridAreaContentLogicalWidth(inlineAxisConstraint);
+        #if PLATFORM(HAIKU)
+        summitSetNeedsLayoutByContainer(renderer.get());
+#else
         renderer->setNeedsLayout(MarkingBehavior::MarkOnlyThis);
+#endif
 
         layoutState.layoutWithFormattingContextForBox(box, { }, { });
 
         renderer->clearGridAreaContentSize();
 
-        return layoutState.geometryForBox(box).borderBoxHeight();
+        auto height = layoutState.geometryForBox(box).borderBoxHeight();
+#if PLATFORM(HAIKU)
+        if (traceGridItemHeights) {
+            struct Totals {
+                unsigned calls { 0 };
+                unsigned kinds[4] { 0, 0, 0, 0 };
+                unsigned clean { 0 };
+                unsigned sameWidth { 0 };
+                unsigned reusable { 0 };
+                bigtime_t elapsed { 0 };
+            };
+            static thread_local Totals totals;
+            ++totals.calls;
+            ++totals.kinds[static_cast<unsigned>(logicalHeightType)];
+            totals.clean += wasClean;
+            totals.sameWidth += widthMatches;
+            totals.reusable += wasClean && widthMatches;
+            totals.elapsed += system_time() - startedAt;
+            if (totals.calls == 200) {
+                std::fprintf(stderr, "Summit grid item heights: calls=%u min=%u max=%u minContribution=%u maxContribution=%u clean=%u sameWidth=%u reusable=%u elapsed=%.2f\n",
+                    totals.calls, totals.kinds[0], totals.kinds[1], totals.kinds[2], totals.kinds[3], totals.clean, totals.sameWidth, totals.reusable, totals.elapsed / 1000.0);
+                totals = { };
+            }
+        }
+#endif
+        return height;
     }
     }
 
@@ -242,4 +296,3 @@ std::pair<LayoutRect, LayoutRect> IntegrationUtils::toMarginAndBorderBoxVisualRe
 
 }
 }
-

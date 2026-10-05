@@ -353,49 +353,6 @@ void WebExtensionController::updateWebsitePoliciesForNavigation(API::WebsitePoli
     websitePolicies.setActiveContentRuleListActionPatterns(WTF::move(actionPatterns));
 }
 
-void WebExtensionController::resourceLoadDidSendRequest(WebPageProxyIdentifier pageID, const ResourceLoadInfo& loadInfo, const WebCore::ResourceRequest& request)
-{
-    for (Ref context : m_extensionContexts)
-        context->resourceLoadDidSendRequest(pageID, loadInfo, request);
-}
-
-void WebExtensionController::resourceLoadDidPerformHTTPRedirection(WebPageProxyIdentifier pageID, const ResourceLoadInfo& loadInfo, const WebCore::ResourceResponse& response, const WebCore::ResourceRequest& request)
-{
-    for (Ref context : m_extensionContexts)
-        context->resourceLoadDidPerformHTTPRedirection(pageID, loadInfo, response, request);
-}
-
-void WebExtensionController::resourceLoadDidReceiveChallenge(WebPageProxyIdentifier pageID, const ResourceLoadInfo& loadInfo, const WebCore::AuthenticationChallenge& challenge)
-{
-    for (Ref context : m_extensionContexts)
-        context->resourceLoadDidReceiveChallenge(pageID, loadInfo, challenge);
-}
-
-void WebExtensionController::resourceLoadDidReceiveResponse(WebPageProxyIdentifier pageID, const ResourceLoadInfo& loadInfo, const WebCore::ResourceResponse& response)
-{
-    for (Ref context : m_extensionContexts)
-        context->resourceLoadDidReceiveResponse(pageID, loadInfo, response);
-}
-
-void WebExtensionController::resourceLoadDidCompleteWithError(WebPageProxyIdentifier pageID, const ResourceLoadInfo& loadInfo, const WebCore::ResourceResponse& response, const WebCore::ResourceError& error)
-{
-    for (Ref context : m_extensionContexts)
-        context->resourceLoadDidCompleteWithError(pageID, loadInfo, response, error);
-}
-
-#if ENABLE(CONTENT_EXTENSIONS)
-void WebExtensionController::resourceLoadWasBlockedByContentRuleList(WebPageProxyIdentifier pageID, const WebExtensionContentRuleListBlockedLoadInfo& info)
-{
-    for (auto& identifier : info.blockingContentRuleListIdentifiers) {
-        for (Ref context : m_extensionContexts) {
-            if (context->uniqueIdentifier() == identifier) {
-                context->resourceLoadWasBlockedByDeclarativeNetRequest(pageID, info);
-                break;
-            }
-        }
-    }
-}
-#endif
 
 // MARK: Inspector
 

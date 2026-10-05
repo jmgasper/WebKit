@@ -149,6 +149,7 @@ bool _mi_prim_thread_is_in_threadpool(void);
         || (defined(__BIONIC__)  && (defined(__x86_64__) || defined(__i386__) || (defined(__arm__) && __ARM_ARCH >= 7) || defined(__aarch64__))) \
         || (defined(__FreeBSD__) && (defined(__x86_64__) || defined(__i386__) || defined(__aarch64__))) \
         || (defined(__OpenBSD__) && (defined(__x86_64__) || defined(__i386__) || defined(__aarch64__))) \
+        || (defined(__HAIKU__)   && (defined(__x86_64__) || defined(__aarch64__))) \
       ))
 
 static inline void* mi_prim_tls_slot(size_t slot) mi_attr_noexcept {
@@ -373,6 +374,11 @@ static inline mi_theap_t* _mi_theap_cached(void);
 #elif defined(__OpenBSD__) || defined(__ANDROID__)
   #define MI_TLS_MODEL_DYNAMIC_PTHREADS     1
   // #define MI_TLS_MODEL_DYNAMIC_PTHREADS_DEFAULT_ENTRY_IS_NULL  1
+#elif defined(__HAIKU__) && (defined(__x86_64__) || defined(__aarch64__))
+  // Haiku: a thread local of a shared library is a call into the runtime
+  // loader (__tls_get_addr) at every access; a slot from tls_allocate() is
+  // a load off the thread pointer.
+  #define MI_TLS_MODEL_DYNAMIC_HAIKU        1
 #else
   #define MI_TLS_MODEL_THREAD_LOCAL         1
 #endif
@@ -459,6 +465,29 @@ static inline mi_theap_t* _mi_theap_cached(void) {
   }
   #endif
   return theap;
+}
+
+#elif MI_TLS_MODEL_DYNAMIC_HAIKU
+// Slots from tls_allocate() (Haiku). They are allocated when the first thread
+// (the main one, from the process constructor) is initialized; until then, or
+// if none was left, the thread locals are used. Slot 0 is the TLS base.
+#define MI_THEAP_INITASNULL  1
+
+extern mi_decl_hidden size_t _mi_theap_default_slot;
+extern mi_decl_hidden size_t _mi_theap_cached_slot;
+extern mi_decl_hidden mi_decl_thread mi_theap_t* __mi_theap_default;
+extern mi_decl_hidden mi_decl_thread mi_theap_t* __mi_theap_cached;
+
+static inline mi_theap_t* _mi_theap_default(void) {
+  const size_t slot = _mi_theap_default_slot;
+  if mi_likely(slot!=0) { return (mi_theap_t*)mi_prim_tls_slot(slot); }
+  return __mi_theap_default;
+}
+
+static inline mi_theap_t* _mi_theap_cached(void) {
+  const size_t slot = _mi_theap_cached_slot;
+  if mi_likely(slot!=0) { return (mi_theap_t*)mi_prim_tls_slot(slot); }
+  return __mi_theap_cached;
 }
 
 #elif MI_TLS_MODEL_DYNAMIC_PTHREADS

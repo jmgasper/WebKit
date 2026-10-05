@@ -30,6 +30,7 @@
 #include "JSWebExtensionAPIDeclarativeNetRequest.h"
 #include "WebExtensionAPIObject.h"
 #include "WebExtensionConstants.h"
+#include <wtf/JSONValues.h>
 
 #if ENABLE(DNR_ON_RULE_MATCHED_DEBUG)
 #include "WebExtensionAPIEvent.h"
@@ -43,6 +44,41 @@ class WebExtensionAPIDeclarativeNetRequest : public WebExtensionAPIObject, publi
     WEB_EXTENSION_DECLARE_JS_WRAPPER_CLASS(WebExtensionAPIDeclarativeNetRequest, declarativeNetRequest, declarativeNetRequest);
 
 public:
+#if PLATFORM(HAIKU)
+    // C++ port of Cocoa/WebExtensionAPIDeclarativeNetRequestCocoa.mm.
+    void updateEnabledRulesets(RefPtr<JSON::Value> options, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+    void getEnabledRulesets(Ref<WebExtensionCallbackHandler>&&);
+
+    void updateDynamicRules(RefPtr<JSON::Value> options, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+    void getDynamicRules(RefPtr<JSON::Value> filter, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+
+    void updateSessionRules(RefPtr<JSON::Value> options, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+    void getSessionRules(RefPtr<JSON::Value> filter, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+
+    void getMatchedRules(RefPtr<JSON::Value> filter, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+
+    void isRegexSupported(RefPtr<JSON::Value> options, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+    void setExtensionActionOptions(RefPtr<JSON::Value> options, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+
+    void getAvailableStaticRuleCount(Ref<WebExtensionCallbackHandler>&&);
+
+    double maxNumberOfStaticRulesets() const { return webExtensionDeclarativeNetRequestMaximumNumberOfStaticRulesets; }
+    double maxNumberOfEnabledRulesets() const { return webExtensionDeclarativeNetRequestMaximumNumberOfEnabledRulesets; }
+    double maxNumberOfDynamicAndSessionRules() const { return webExtensionDeclarativeNetRequestMaximumNumberOfDynamicAndSessionRules; }
+    double maxNumberOfDynamicRules() const { return webExtensionDeclarativeNetRequestMaximumNumberOfDynamicAndSessionRules; }
+    double maxNumberOfSessionRules() const { return webExtensionDeclarativeNetRequestMaximumNumberOfDynamicAndSessionRules; }
+    double maxNumberOfRegexRules() const { return webExtensionDeclarativeNetRequestMaximumNumberOfRegexRules; }
+    double guaranteedMinimumStaticRules() const { return webExtensionDeclarativeNetRequestGuaranteedMinimumStaticRules; }
+    String dynamicRulesetIdentifier() const { return "_dynamic"_s; }
+    String sessionRulesetIdentifier() const { return "_session"_s; }
+
+private:
+    void updateRules(bool session, RefPtr<JSON::Value> options, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+    void getRules(bool session, RefPtr<JSON::Value> filter, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+
+public:
+#endif // PLATFORM(HAIKU)
+
 #if PLATFORM(COCOA)
     void updateEnabledRulesets(NSDictionary *options, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
     void getEnabledRulesets(Ref<WebExtensionCallbackHandler>&&);

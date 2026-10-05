@@ -1,0 +1,53 @@
+/*
+ * Copyright (C) 2026 KunanyiOS contributors.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+#pragma once
+
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+
+#include <expected>
+#include <wtf/HashMap.h>
+#include <wtf/HashSet.h>
+#include <wtf/JSONValues.h>
+
+namespace WebKit {
+
+enum class WebExtensionStateErrorHaiku {
+    InvalidPath,
+    ReadFailed,
+    InvalidJSON,
+    TemporaryFileFailed,
+    WriteFailed,
+    ReplaceFailed,
+};
+
+std::expected<Ref<JSON::Object>, WebExtensionStateErrorHaiku> readWebExtensionStateHaiku(const String& path);
+std::expected<void, WebExtensionStateErrorHaiku> writeWebExtensionStateHaiku(const String& path, const JSON::Object&);
+
+// Saved booleans override known manifest defaults; other saved values are ignored.
+HashSet<String> enabledWebExtensionRulesetsHaiku(const HashMap<String, bool>& manifestDefaults, const JSON::Value* savedState);
+
+} // namespace WebKit
+
+#endif // ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)

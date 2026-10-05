@@ -38,11 +38,16 @@ class WebExtensionAPIPermissions : public WebExtensionAPIObject, public JSWebExt
     WEB_EXTENSION_DECLARE_JS_WRAPPER_CLASS(WebExtensionAPIPermissions, permissions, permissions);
 
 public:
-#if PLATFORM(COCOA)
     void getAll(Ref<WebExtensionCallbackHandler>&&);
+    void contains(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+    void request(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+    void remove(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+#if PLATFORM(COCOA)
     void contains(NSDictionary *details, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
     void request(NSDictionary *details, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
     void remove(NSDictionary *details, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
+
+#endif
 
     WebExtensionAPIEvent& onAdded();
     WebExtensionAPIEvent& onRemoved();
@@ -51,6 +56,7 @@ private:
     RefPtr<WebExtensionAPIEvent> m_onAdded;
     RefPtr<WebExtensionAPIEvent> m_onRemoved;
 
+#if PLATFORM(COCOA)
     bool parseDetailsDictionary(NSDictionary *, HashSet<String>& permissions, HashSet<String>& origins, NSString *callingAPIName, NSString **outExceptionString);
     bool verifyRequestedPermissions(HashSet<String>& permissions, HashSet<Ref<WebExtensionMatchPattern>>& matchPatterns, NSString *callingAPIName, NSString **outExceptionString);
     bool validatePermissionsDetails(HashSet<String>& permissions, HashSet<String>& origins, HashSet<Ref<WebExtensionMatchPattern>>& matchPatterns, NSString *callingAPIName, NSString **outExceptionString);

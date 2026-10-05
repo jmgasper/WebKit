@@ -59,6 +59,12 @@
 #include <wtf/TZoneMallocInlines.h>
 #include <wtf/text/TextStream.h>
 
+#if PLATFORM(HAIKU)
+#include <OS.h>
+#include <cstdio>
+#include <cstdlib>
+#endif
+
 namespace WebCore {
 namespace Layout {
 
@@ -197,6 +203,13 @@ std::unique_ptr<InlineLayoutResult> InlineFormattingContext::layout(const Constr
 
 std::pair<LayoutUnit, LayoutUnit> InlineFormattingContext::minimumMaximumContentSize(InlineDamage* lineDamage)
 {
+#if PLATFORM(HAIKU)
+    static bool traceIntrinsicWidth = [] {
+        const char* value = std::getenv("SUMMIT_INTRINSIC_WIDTH_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    const bigtime_t startedAt = traceIntrinsicWidth ? system_time() : 0;
+#endif
     auto& inlineContentCache = this->inlineContentCache();
     auto minimumContentSize = inlineContentCache.minimumContentSize();
     auto maximumContentSize = inlineContentCache.maximumContentSize();
@@ -205,6 +218,9 @@ std::pair<LayoutUnit, LayoutUnit> InlineFormattingContext::minimumMaximumContent
         return { ceiledLayoutUnit(*minimumContentSize), ceiledLayoutUnit(*maximumContentSize) };
 
     rebuildInlineItemListIfNeeded(lineDamage);
+#if PLATFORM(HAIKU)
+    const bigtime_t builtAt = traceIntrinsicWidth ? system_time() : 0;
+#endif
     auto& inlineItems = inlineContentCache.inlineItems();
 
     if (!isEmptyInlineContent(inlineItems.content())) {
@@ -212,11 +228,23 @@ std::pair<LayoutUnit, LayoutUnit> InlineFormattingContext::minimumMaximumContent
 
         if (!minimumContentSize)
             minimumContentSize = intrinsicWidthHandler.minimumContentSize();
+#if PLATFORM(HAIKU)
+        const bigtime_t minimumAt = traceIntrinsicWidth ? system_time() : 0;
+#endif
         if (!maximumContentSize) {
             maximumContentSize = intrinsicWidthHandler.maximumContentSize();
             if (intrinsicWidthHandler.maximumIntrinsicWidthLineContent())
                 inlineContentCache.setMaximumIntrinsicWidthLineContent(WTF::move(*intrinsicWidthHandler.maximumIntrinsicWidthLineContent()));
         }
+#if PLATFORM(HAIKU)
+        if (traceIntrinsicWidth) {
+            auto elapsed = system_time() - startedAt;
+            if (elapsed >= 500)
+                std::fprintf(stderr, "Summit intrinsic width: root=%p items=%zu damage=%d build=%.2f minimum=%.2f maximum=%.2f total=%.2f\n",
+                    &root(), inlineItems.content().size(), !!lineDamage, (builtAt - startedAt) / 1000.0,
+                    (minimumAt - builtAt) / 1000.0, (system_time() - minimumAt) / 1000.0, elapsed / 1000.0);
+        }
+#endif
     } else {
         minimumContentSize = minimumContentSize.value_or(0.f);
         maximumContentSize = maximumContentSize.value_or(0.f);
@@ -651,4 +679,3 @@ void InlineFormattingContext::rebuildInlineItemListIfNeeded(InlineDamage* lineDa
 
 }
 }
-

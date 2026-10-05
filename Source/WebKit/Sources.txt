@@ -321,6 +321,7 @@ Shared/Extensions/WebExtensionSQLiteRow.cpp
 Shared/Extensions/WebExtensionSQLiteStore.cpp
 Shared/Extensions/WebExtensionLocalization.cpp
 Shared/Extensions/WebExtensionPermission.cpp
+Shared/Extensions/WebExtensionRegisteredScriptParser.cpp
 Shared/Extensions/WebExtensionUtilities.cpp
 Shared/Extensions/WebExtensionRegisteredScriptsSQLiteStore.cpp
 
@@ -609,11 +610,22 @@ UIProcess/Downloads/DownloadProxyMap.cpp
 UIProcess/Extensions/WebExtension.cpp
 UIProcess/Extensions/WebExtensionAlarm.cpp
 UIProcess/Extensions/WebExtensionContext.cpp
+UIProcess/Extensions/API/WebExtensionContextAPIEvent.cpp
+UIProcess/Extensions/API/WebExtensionContextAPIPort.cpp
+UIProcess/Extensions/API/WebExtensionContextAPIRuntime.cpp
+UIProcess/Extensions/API/WebExtensionContextAPIScripting.cpp
+UIProcess/Extensions/API/WebExtensionContextAPIWebNavigation.cpp
 UIProcess/Extensions/WebExtensionController.cpp
+UIProcess/Extensions/WebExtensionControllerWebRequest.cpp
+UIProcess/Extensions/WebExtensionContextWebRequest.cpp
 UIProcess/Extensions/WebExtensionControllerConfiguration.cpp
 UIProcess/Extensions/WebExtensionDataRecord.cpp
 UIProcess/Extensions/WebExtensionDeclarativeNetRequestSQLiteStore.cpp
+UIProcess/Extensions/WebExtensionDynamicScripts.cpp
 UIProcess/Extensions/WebExtensionMatchPattern.cpp
+UIProcess/Extensions/WebExtensionWebsiteData.cpp
+UIProcess/Extensions/WebExtensionMatchPatternProcessPool.cpp
+UIProcess/Extensions/WebExtensionResources.cpp @no-unify
 UIProcess/Extensions/WebExtensionStorageSQLiteStore.cpp
 
 UIProcess/Extensions/API/WebExtensionContextAPIAlarms.cpp
@@ -711,12 +723,31 @@ WebProcess/EncryptedMedia/MediaKeySystemPermissionRequestManager.cpp
 
 WebProcess/Extensions/WebExtensionContextProxy.cpp
 WebProcess/Extensions/WebExtensionControllerProxy.cpp
+WebProcess/Extensions/WebExtensionNavigationURLFilter.cpp
+WebProcess/Extensions/WebExtensionNavigationParameters.cpp
+WebProcess/Extensions/WebExtensionWebRequestFilter.cpp
+WebProcess/Extensions/WebExtensionWebRequestBody.cpp
 
 WebProcess/Extensions/API/WebExtensionAPIAlarms.cpp
+WebProcess/Extensions/API/WebExtensionAPIEvent.cpp
+WebProcess/Extensions/API/WebExtensionAPILocalization.cpp
 WebProcess/Extensions/API/WebExtensionAPIRuntime.cpp
 WebProcess/Extensions/API/WebExtensionAPINamespace.cpp
+WebProcess/Extensions/API/WebExtensionAPIPort.cpp
+WebProcess/Extensions/API/WebExtensionAPIStorage.cpp
+WebProcess/Extensions/API/WebExtensionAPIStorageArea.cpp
 WebProcess/Extensions/API/WebExtensionAPITest.cpp
+WebProcess/Extensions/API/WebExtensionAPIWebNavigation.cpp
+WebProcess/Extensions/API/WebExtensionAPIWebRequest.cpp
+WebProcess/Extensions/API/WebExtensionAPIWebRequestEvent.cpp
+WebProcess/Extensions/API/WebExtensionAPIWebNavigationEvent.cpp
 WebProcess/Extensions/API/WebExtensionAPIWebPageNamespace.cpp
+
+WebProcess/Extensions/Bindings/JSWebExtensionMessageReply.cpp
+WebProcess/Extensions/Bindings/JSWebExtensionPromise.cpp
+WebProcess/Extensions/Bindings/JSWebExtensionStorageValues.cpp
+WebProcess/Extensions/Bindings/JSWebExtensionString.cpp
+WebProcess/Extensions/Bindings/JSWebExtensionTabParameters.cpp
 
 WebProcess/FileAPI/BlobRegistryProxy.cpp
 

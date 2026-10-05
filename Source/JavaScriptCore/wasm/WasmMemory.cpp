@@ -198,9 +198,18 @@ RefPtr<Memory> Memory::tryCreate(VM& vm, PageCount initial, PageCount maximum, M
     }
     
     if (fastMemory) {
-        constexpr bool readable = false;
-        constexpr bool writable = false;
-        OSAllocator::protect(fastMemory + initialBytes, BufferMemoryHandle::fastMappedBytes() - initialBytes, readable, writable);
+#if OS(HAIKU)
+        if (BufferMemoryHandle::signalingMemoryStartsInaccessible()) {
+            // The reservation starts inaccessible; open the initial pages.
+            if (initialBytes)
+                OSAllocator::protect(fastMemory, initialBytes, true, true);
+        } else
+#endif
+        {
+            constexpr bool readable = false;
+            constexpr bool writable = false;
+            OSAllocator::protect(fastMemory + initialBytes, BufferMemoryHandle::fastMappedBytes() - initialBytes, readable, writable);
+        }
         switch (sharingMode) {
         case MemorySharingMode::Default: {
             return Memory::create(adoptRef(*new BufferMemoryHandle(fastMemory, initialBytes, BufferMemoryHandle::fastMappedBytes(), initial, maximum, MemorySharingMode::Default, MemoryMode::Signaling)), addressType, WTF::move(growSuccessCallback));
@@ -249,9 +258,17 @@ RefPtr<Memory> Memory::tryCreate(VM& vm, PageCount initial, PageCount maximum, M
             return nullptr;
         }
 
-        constexpr bool readable = false;
-        constexpr bool writable = false;
-        OSAllocator::protect(slowMemory + initialBytes, reservedMaximumBytes - initialBytes, readable, writable);
+#if OS(HAIKU)
+        if (BufferMemoryHandle::signalingMemoryStartsInaccessible()) {
+            if (initialBytes)
+                OSAllocator::protect(slowMemory, initialBytes, true, true);
+        } else
+#endif
+        {
+            constexpr bool readable = false;
+            constexpr bool writable = false;
+            OSAllocator::protect(slowMemory + initialBytes, reservedMaximumBytes - initialBytes, readable, writable);
+        }
 
         Ref handle = adoptRef(*new BufferMemoryHandle(slowMemory, initialBytes, reservedMaximumBytes, initial, maximum, MemorySharingMode::Shared, MemoryMode::BoundsChecking));
         auto span = handle->mutableSpan();

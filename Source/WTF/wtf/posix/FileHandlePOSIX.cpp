@@ -36,6 +36,12 @@
 #include <wtf/FileSystem.h>
 #include <wtf/MappedFileData.h>
 
+#if OS(HAIKU) && !defined(MAP_FILE)
+/* Haiku did not define MAP_FILE until R1beta6, because it is the default mode (as specified in
+ * POSIX). Most other system define it to the value 0 anyways. */
+#define MAP_FILE 0
+#endif
+
 namespace WTF::FileSystemImpl {
 
 std::optional<uint64_t> FileHandle::read(std::span<uint8_t> data)

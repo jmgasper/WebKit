@@ -30,10 +30,16 @@
 
 namespace WebCore {
 namespace Layout {
+struct TrackAlignmentOffsets {
+    LayoutUnit position;
+    LayoutUnit distribution;
+};
+
 struct UsedTrackSizes {
     TrackSizes columnSizes;
     TrackSizes rowSizes;
+    TrackAlignmentOffsets columnAlignment;
+    TrackAlignmentOffsets rowAlignment;
 };
 }
 }
-

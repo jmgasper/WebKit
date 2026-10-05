@@ -34,6 +34,7 @@
 #include "DocumentView.h"
 #include "EditingInlines.h"
 #include "Editor.h"
+#include "Element.h"
 #include "ElementAncestorIteratorInlines.h"
 #include "FloatQuad.h"
 #include "FrameSelection.h"
@@ -41,9 +42,11 @@
 #include "GraphicsContext.h"
 #include "GraphicsLayer.h"
 #include "HTMLBRElement.h"
+#include "HTMLHtmlElement.h"
 #include "HTMLNames.h"
 #include "HitTestResult.h"
 #include "InspectorInstrumentation.h"
+#include "JSExecState.h"
 #include "LayoutBox.h"
 #include "LayoutIntegrationCoverage.h"
 #include "LegacyRenderSVGModelObject.h"
@@ -97,7 +100,12 @@
 #include "StyleTransformResolver.h"
 #include "TransformState.h"
 #include "ViewTransition.h"
+#include <JavaScriptCore/ScriptCallStack.h>
+#include <JavaScriptCore/ScriptCallStackFactory.h>
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <wtf/text/CString.h>
 #include <stdio.h>
 #include <wtf/HexNumber.h>
 #include <wtf/Seconds.h>
@@ -582,8 +590,39 @@ void RenderObject::clearNeedsLayout(HadSkippedLayout hadSkippedLayout)
 
 void RenderObject::scheduleLayout(RenderElement* layoutRoot)
 {
-    if (auto* renderView = dynamicDowncast<RenderView>(layoutRoot))
+    if (auto* renderView = dynamicDowncast<RenderView>(layoutRoot)) {
+#if PLATFORM(HAIKU)
+        static bool traceInvalidations = [] {
+            const char* value = std::getenv("SUMMIT_LAYOUT_INVALIDATION_TRACE");
+            return value && value[0] == '1' && !value[1];
+        }();
+        if (traceInvalidations) {
+            auto* sourceNode = node();
+            auto* sourceElement = dynamicDowncast<Element>(sourceNode);
+            auto nodeName = sourceNode ? sourceNode->nodeName().utf8() : CString { };
+            auto id = sourceElement ? sourceElement->getAttribute(HTMLNames::idAttr).string().utf8() : CString { };
+            auto classes = sourceElement ? sourceElement->getAttribute(HTMLNames::classAttr).string().utf8() : CString { };
+            auto documentURL = document().url().string().utf8();
+            WTFLogAlways("Summit layout invalidation: renderer=%p document=%p type=%s node=%s id=%s class=%s url=%s\n",
+                this, &document(), renderName().characters(), nodeName.data(), id.data(), classes.data(), reinterpret_cast<const char*>(documentURL.data()));
+            if (sourceNode && is<HTMLHtmlElement>(*sourceNode)) {
+                auto stack = Inspector::createScriptCallStack(JSExecState::currentState(), 8);
+                if (auto* frame = stack->firstNonNativeCallFrame()) {
+                    auto url = frame->sourceURL().utf8();
+                    auto function = frame->functionName().utf8();
+                    WTFLogAlways("Summit layout script: function=%s url=%s line=%u column=%u\n",
+                        reinterpret_cast<const char*>(function.data()), reinterpret_cast<const char*>(url.data()), frame->lineNumber(), frame->columnNumber());
+                }
+                static const char* nativeTraceMatch = std::getenv("SUMMIT_LAYOUT_BACKTRACE_MATCH");
+                static unsigned matchingInvalidations = 0;
+                if (nativeTraceMatch && std::strstr(reinterpret_cast<const char*>(documentURL.data()), nativeTraceMatch)
+                    && ++matchingInvalidations % 25 == 0)
+                    WTFReportBacktraceWithPrefixAndStackDepth("Summit layout stack ", 14);
+            }
+        }
+#endif
         return protect(renderView->frameView().layoutContext())->scheduleLayout();
+    }
 
     if (layoutRoot && layoutRoot->isRooted())
         protect(layoutRoot->view().frameView().layoutContext())->scheduleSubtreeLayout(*layoutRoot);

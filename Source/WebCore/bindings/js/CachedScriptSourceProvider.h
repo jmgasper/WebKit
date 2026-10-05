@@ -40,6 +40,9 @@ public:
 
     virtual ~CachedScriptSourceProvider()
     {
+#if PLATFORM(HAIKU)
+        discardPendingBytecodeHaiku();
+#endif
         protect(m_cachedScript)->removeClient(*this);
     }
 
@@ -56,7 +59,32 @@ public:
         SUPPRESS_UNCOUNTED_ARG return m_cachedScript->codeBlockHashConcurrently(startOffset, endOffset, kind, isModuleType() ? CachedScript::ShouldDecodeAsUTF8Only::Yes : CachedScript::ShouldDecodeAsUTF8Only::No);
     }
 
+#if PLATFORM(HAIKU)
+    // Compiled code kept on disk between visits (CachedScriptSourceProviderHaiku.cpp).
+    RefPtr<JSC::CachedBytecode> cachedBytecode() const final;
+    void cacheBytecode(const JSC::BytecodeCacheGenerator&) const final;
+    void updateCache(const JSC::UnlinkedFunctionExecutable*, const JSC::SourceCode&, JSC::CodeSpecializationKind, const JSC::UnlinkedFunctionCodeBlock*) const final;
+    void commitCachedBytecode() const final;
+#endif
+
 private:
+#if PLATFORM(HAIKU)
+    struct PendingFunctionsHaiku;
+    String bytecodeCachePathHaiku() const;
+    void scheduleBytecodeCommitHaiku() const;
+    bool encodePendingFunctionsHaiku(double budgetMilliseconds) const;
+    void commitStepHaiku() const;
+    void discardPendingBytecodeHaiku();
+
+    mutable RefPtr<JSC::CachedBytecode> m_cachedBytecodeHaiku;
+    // Functions compiled since, encoded when the file is written.
+    mutable PendingFunctionsHaiku* m_pendingFunctionsHaiku { nullptr };
+    mutable double m_encodeMillisecondsHaiku { 0 };
+    mutable size_t m_cachedBytecodeFileSizeHaiku { 0 };
+    mutable bool m_triedBytecodeLoadHaiku { false };
+    mutable bool m_bytecodeCommitScheduledHaiku { false };
+#endif
+
     CachedScriptSourceProvider(CachedScript* cachedScript, JSC::SourceProviderSourceType sourceType, Ref<CachedScriptFetcher>&& scriptFetcher)
         : SourceProvider(JSC::SourceOrigin { cachedScript->response().url(), WTF::move(scriptFetcher) }, String(cachedScript->response().url().string()), cachedScript->response().isRedirected() ? String(cachedScript->url().string()) : String(), cachedScript->requiresPrivacyProtections() ? JSC::SourceTaintedOrigin::KnownTainted : JSC::SourceTaintedOrigin::Untainted, TextPosition(), sourceType)
         , m_cachedScript(cachedScript)

@@ -26,7 +26,7 @@
 #include "config.h"
 #include "Icon.h"
 
-#if !USE(GLIB) && !PLATFORM(IOS_FAMILY) && !PLATFORM(MAC) && !PLATFORM(WIN)
+#if !USE(GLIB) && !PLATFORM(IOS_FAMILY) && !PLATFORM(MAC) && !PLATFORM(WIN) && !PLATFORM(HAIKU)
 
 namespace WebCore {
 
@@ -43,4 +43,4 @@ RefPtr<Icon> Icon::createIconForFiles(const Vector<String>&)
 
 } // namespace WebCore
 
-#endif // !USE(GLIB) && !PLATFORM(IOS_FAMILY) && !PLATFORM(MAC) && !PLATFORM(WIN)
+#endif // !USE(GLIB) && !PLATFORM(IOS_FAMILY) && !PLATFORM(MAC) && !PLATFORM(WIN) && !PLATFORM(HAIKU)

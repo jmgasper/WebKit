@@ -1,0 +1,127 @@
+/*
+ * Copyright (C) 2006 Zack Rusin <zack@kde.org>
+ * Copyright (C) 2006 Apple Computer, Inc.  All rights reserved.
+ * Copyright (C) 2007 Trolltech ASA
+ * Copyright (C) 2010 Stephan Aßmus <superstippi@gmx.de>
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY APPLE COMPUTER, INC. ``AS IS'' AND ANY
+ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL APPLE COMPUTER, INC. OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+ * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+#include "config.h"
+#include "MIMETypeRegistry.h"
+
+#include <MimeType.h>
+#include <String.h>
+
+#include <wtf/Assertions.h>
+#include <wtf/MainThread.h>
+#include <wtf/text/CString.h>
+
+namespace WebCore {
+struct ExtensionMap {
+    const char* extension;
+    const char* mimeType;
+};
+
+// Web content depends on exact types for these (for example streaming WebAssembly
+// compilation and module scripts), so they must not depend on the system database.
+static const ExtensionMap extensionMap[] = {
+    { "avif", "image/avif" },
+    { "bmp", "image/bmp" },
+    { "css", "text/css" },
+    { "gif", "image/gif" },
+    { "hpkg", "application/x-vnd.haiku-package" },
+    { "htm", "text/html" },
+    { "html", "text/html" },
+    { "ico", "image/x-icon" },
+    { "jpeg", "image/jpeg" },
+    { "jpg", "image/jpeg" },
+    { "js", "text/javascript" },
+    { "json", "application/json" },
+    { "mjs", "text/javascript" },
+    { "otf", "font/otf" },
+    { "pdf", "application/pdf" },
+    { "png", "image/png" },
+    { "rss", "application/rss+xml" },
+    { "svg", "image/svg+xml" },
+    { "text", "text/plain" },
+    { "ttf", "font/ttf" },
+    { "txt", "text/plain" },
+    { "wasm", "application/wasm" },
+    { "webp", "image/webp" },
+    { "woff", "font/woff" },
+    { "woff2", "font/woff2" },
+    { "xbm", "image/x-xbitmap" },
+    { "xml", "text/xml" },
+    { "xsl", "text/xsl" },
+    { "xhtml", "application/xhtml+xml" },
+    { 0, 0 }
+};
+
+String MIMETypeRegistry::mimeTypeForExtension(const StringView ext)
+{
+    String str = ext.convertToASCIILowercase();
+
+    // Try WebCore built-in types.
+    const ExtensionMap* extMap = extensionMap;
+    while (extMap->extension) {
+        if (str == StringView::fromLatin1(extMap->extension))
+            return String::fromUTF8(extMap->mimeType);
+        ++extMap;
+    }
+
+    // Try system mime database.
+    BString fakeFileName("filename.");
+    fakeFileName.Append(str);
+
+    BMimeType type;
+    if (BMimeType::GuessMimeType(fakeFileName.String(), &type) == B_OK)
+        return String::fromUTF8(type.Type());
+
+    // unknown
+    return String();
+}
+
+
+String MIMETypeRegistry::preferredExtensionForMIMEType(const String& type)
+{
+	BMimeType mimeType(type.utf8().legacyCStringPointer());
+	BMessage storage;
+	mimeType.GetFileExtensions(&storage);
+	const char* extension = storage.FindString("extensions");
+
+	return String::fromUTF8(extension);
+}
+
+Vector<String> MIMETypeRegistry::extensionsForMIMEType(const String&)
+{
+    ASSERT_NOT_IMPLEMENTED_YET();
+    return { };
+}
+
+bool MIMETypeRegistry::isApplicationPluginMIMEType(const String&)
+{
+    return false;
+}
+
+} // namespace WebCore
+

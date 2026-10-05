@@ -1272,8 +1272,10 @@ static JSValueRef getHelpTextCallback(JSContextRef context, JSObjectRef thisObje
 
 static JSValueRef getCustomContentCallback(JSContextRef context, JSObjectRef thisObject, JSStringRef propertyName, JSValueRef* exception)
 {
+#if PLATFORM(COCOA)
     auto customContent = toAXElement(thisObject)->customContent();
     return JSValueMakeString(context, customContent.get());
+#endif
 }
 
 static JSValueRef getLiveRegionRelevantCallback(JSContextRef context, JSObjectRef thisObject, JSStringRef propertyName, JSValueRef* exception)

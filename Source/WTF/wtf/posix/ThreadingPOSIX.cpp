@@ -31,6 +31,7 @@
  */
 
 #include "config.h"
+#include <atomic>
 #include <wtf/Threading.h>
 
 #if USE(PTHREADS)
@@ -47,6 +48,9 @@
 
 #if OS(HAIKU)
 #include <OS.h>
+#include <wtf/haiku/ProcessPriorityHaiku.h>
+#include <wtf/Lock.h>
+#include <wtf/HashMap.h>
 #endif
 
 #if OS(LINUX)
@@ -96,6 +100,52 @@
 #endif
 
 namespace WTF {
+
+#if OS(HAIKU)
+static std::atomic<bool> s_processBackgroundedHaiku { false };
+static Lock s_backgroundedThreadsLock;
+static HashMap<thread_id, int32>& backgroundedThreadPriorities() WTF_REQUIRES_LOCK(s_backgroundedThreadsLock)
+{
+    static NeverDestroyed<HashMap<thread_id, int32>> priorities;
+    return priorities.get();
+}
+
+bool isProcessBackgroundedHaiku()
+{
+    return s_processBackgroundedHaiku.load(std::memory_order_relaxed);
+}
+
+void setProcessBackgroundedHaiku(bool backgrounded)
+{
+    static const bool enabled = [] {
+        const char* value = getenv("SUMMIT_BACKGROUND_PROCESS_PRIORITY");
+        return !value || strcmp(value, "0");
+    }();
+    if (!enabled)
+        return;
+    Locker locker { s_backgroundedThreadsLock };
+    if (s_processBackgroundedHaiku.exchange(backgrounded) == backgrounded)
+        return;
+    auto& priorities = backgroundedThreadPriorities();
+    if (backgrounded) {
+        // Every thread of the team below real time, the main thread included;
+        // threads created from now on are lowered as they start.
+        int32 cookie = 0;
+        thread_info info;
+        while (get_next_thread_info(B_CURRENT_TEAM, &cookie, &info) == B_OK) {
+            if (info.priority <= B_LOW_PRIORITY || info.priority >= B_REAL_TIME_DISPLAY_PRIORITY)
+                continue;
+            priorities.set(info.thread, info.priority);
+            set_thread_priority(info.thread, B_LOW_PRIORITY);
+        }
+        return;
+    }
+    for (auto& entry : priorities)
+        set_thread_priority(entry.key, entry.value); // A thread that has exited is simply gone.
+    priorities.clear();
+}
+#endif
+
 
 Thread::~Thread() = default;
 
@@ -445,6 +495,38 @@ void Thread::updateSchedulingAttributes(SchedulingState state) const
         || setpriority(PRIO_PROCESS, m_id, attributes.niceLevel))
         logSchedulingAttributesFailure(m_id);
 #endif // HAVE(SCHED_SETATTR)
+#elif OS(HAIKU)
+    // Quality of service as Haiku priorities, so that under load the threads
+    // that keep a page responsive (scrolling, event dispatch, compositing)
+    // run ahead of page scripts and loading, and background upkeep behind them.
+    int32 priority = B_NORMAL_PRIORITY;
+    switch (state == SchedulingState::Demoted ? QOS::Default : m_qos) {
+    case QOS::UserInteractive:
+        priority = B_DISPLAY_PRIORITY;
+        break;
+    case QOS::UserInitiated:
+        priority = B_NORMAL_PRIORITY + 2;
+        break;
+    case QOS::Default:
+        break;
+    case QOS::Utility:
+        priority = B_NORMAL_PRIORITY - 3;
+        break;
+    case QOS::Background:
+        priority = B_LOW_PRIORITY;
+        break;
+    }
+    thread_id thread = get_pthread_thread_id(m_handle);
+    // A process whose pages are all hidden yields to the one in front; the
+    // priority the thread should get back is remembered.
+    if (isProcessBackgroundedHaiku() && priority > B_LOW_PRIORITY) {
+        Locker locker { s_backgroundedThreadsLock };
+        if (thread >= 0 && s_processBackgroundedHaiku.load())
+            backgroundedThreadPriorities().set(thread, priority);
+        priority = B_LOW_PRIORITY;
+    }
+    if (thread >= 0)
+        set_thread_priority(thread, priority);
 #else
     UNUSED_PARAM(state);
 #endif // OS(LINUX)
@@ -874,6 +956,8 @@ void Thread::yield()
     nanosleep(&minimalSleep, nullptr);
 #endif
 }
+
+
 
 } // namespace WTF
 

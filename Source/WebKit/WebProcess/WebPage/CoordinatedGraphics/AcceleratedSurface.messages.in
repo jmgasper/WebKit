@@ -28,4 +28,8 @@
 messages -> AcceleratedSurface {
     ReleaseBuffer(uint64_t id, UnixFileDescriptor releaseFence)
     FrameDone()
+#if PLATFORM(HAIKU)
+    SetDirectPresentTarget(int32_t area)
+    RedisplayDirect()
+#endif
 }

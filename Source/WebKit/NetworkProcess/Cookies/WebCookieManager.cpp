@@ -149,13 +149,29 @@ void WebCookieManager::notifyCookiesDidChange(PAL::SessionID sessionID)
     protect(m_process)->send(Messages::NetworkProcessProxy::CookiesDidChange(sessionID), 0);
 }
 
+#if PLATFORM(HAIKU) && USE(CURL)
+void WebCookieManager::notifyCookiesDidChange(PAL::SessionID sessionID, Vector<CookieChange>&& changes)
+{
+    ASSERT(RunLoop::isMain());
+    if (!changes.isEmpty())
+        protect(m_process)->send(Messages::NetworkProcessProxy::CookiesDidChangeWithDetails(sessionID, changes), 0);
+}
+#endif
+
 void WebCookieManager::startObservingCookieChanges(PAL::SessionID sessionID)
 {
     if (CheckedPtr storageSession = m_process->storageSession(sessionID)) {
+#if PLATFORM(HAIKU) && USE(CURL)
+        WebKit::startObservingCookieChangesWithDetails(*storageSession, [weakThis = WeakPtr { *this }, sessionID](Vector<CookieChange>&& changes) {
+            if (RefPtr protectedThis = weakThis.get())
+                protectedThis->notifyCookiesDidChange(sessionID, WTF::move(changes));
+        });
+#else
         WebKit::startObservingCookieChanges(*storageSession, [weakThis = WeakPtr { *this }, sessionID] {
             if (RefPtr protectedThis = weakThis.get())
                 protectedThis->notifyCookiesDidChange(sessionID);
         });
+#endif
     }
 }
 

@@ -240,9 +240,9 @@ std::optional<DynamicMediaQueryEvaluationChanges> ScopeRuleSets::evaluateDynamic
     return evaluationChanges;
 }
 
-void ScopeRuleSets::appendAuthorStyleSheets(std::span<const Ref<CSSStyleSheet>> styleSheets, MQ::MediaQueryEvaluator* mediaQueryEvaluator, InspectorCSSOMWrappers& inspectorCSSOMWrappers)
+void ScopeRuleSets::appendAuthorStyleSheets(std::span<const Ref<CSSStyleSheet>> styleSheets, MQ::MediaQueryEvaluator* mediaQueryEvaluator, InspectorCSSOMWrappers& inspectorCSSOMWrappers, bool preserveResolverMutatingRules)
 {
-    RuleSetBuilder builder(*m_authorStyle, *mediaQueryEvaluator, &m_styleResolver, RuleSetBuilder::ShrinkToFit::Enable);
+    RuleSetBuilder builder(*m_authorStyle, *mediaQueryEvaluator, &m_styleResolver, RuleSetBuilder::ShrinkToFit::Enable, preserveResolverMutatingRules);
 
     RefPtr<CSSStyleSheet> previous;
     for (auto& cssSheet : styleSheets) {

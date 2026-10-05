@@ -40,7 +40,13 @@
 #include "TrackSizingFunctions.h"
 #include "UnplacedGridItem.h"
 #include "UsedTrackSizes.h"
+#include <numeric>
 #include <wtf/Vector.h>
+#if PLATFORM(HAIKU)
+#include <OS.h>
+#include <cstdio>
+#include <cstdlib>
+#endif
 
 namespace WebCore {
 namespace Layout {
@@ -54,6 +60,41 @@ struct GridAreaSizes {
     Vector<LayoutUnit> inlineSizes;
     Vector<LayoutUnit> blockSizes;
 };
+
+#if PLATFORM(HAIKU)
+static bool summitGridPhaseTraceEnabled()
+{
+    static bool enabled = [] {
+        const char* value = std::getenv("SUMMIT_GRID_PHASE_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    return enabled;
+}
+
+static void recordSummitGridPhases(bigtime_t placement, bigtime_t sizing, bigtime_t items, bigtime_t alignment)
+{
+    struct Totals {
+        unsigned calls { 0 };
+        bigtime_t placement { 0 };
+        bigtime_t sizing { 0 };
+        bigtime_t items { 0 };
+        bigtime_t alignment { 0 };
+    };
+    static thread_local Totals totals;
+    ++totals.calls;
+    totals.placement += placement;
+    totals.sizing += sizing;
+    totals.items += items;
+    totals.alignment += alignment;
+    if (totals.calls < 100)
+        return;
+    std::fprintf(stderr, "Summit grid phases: calls=%u placement=%.2f sizing=%.2f items=%.2f alignment=%.2f total=%.2f\n",
+        totals.calls, totals.placement / 1000.0, totals.sizing / 1000.0,
+        totals.items / 1000.0, totals.alignment / 1000.0,
+        (totals.placement + totals.sizing + totals.items + totals.alignment) / 1000.0);
+    totals = { };
+}
+#endif
 
 GridLayout::GridLayout(const GridFormattingContext& gridFormattingContext)
     : m_gridFormattingContext(gridFormattingContext)
@@ -87,8 +128,11 @@ auto computeGridItemRects = [](const PlacedGridItems& placedGridItems, const Bor
     return gridItemRects;
 };
 
-static GridAreaSizes computeGridAreaSizes(const PlacedGridItems& gridItems, const LayoutUnit usedColumnGap, const LayoutUnit usedRowGap, const UsedTrackSizes& usedTrackSizes)
+static GridAreaSizes computeGridAreaSizes(const PlacedGridItems& gridItems, LayoutUnit usedColumnGap, LayoutUnit usedRowGap, const UsedTrackSizes& usedTrackSizes)
 {
+    usedColumnGap += usedTrackSizes.columnAlignment.distribution;
+    usedRowGap += usedTrackSizes.rowAlignment.distribution;
+
     auto gridItemsCount = gridItems.size();
     GridAreaSizes gridAreaSizes;
     gridAreaSizes.inlineSizes.reserveInitialCapacity(gridItemsCount);
@@ -103,9 +147,28 @@ static GridAreaSizes computeGridAreaSizes(const PlacedGridItems& gridItems, cons
     return gridAreaSizes;
 }
 
+static TrackAlignmentOffsets computeTrackAlignmentOffsets(const AxisConstraint& axisConstraint, const TrackSizes& trackSizes, LayoutUnit gap, const StyleContentAlignmentData& contentAlignment)
+{
+    if (axisConstraint.scenario() != AxisConstraint::FreeSpaceScenario::Definite || trackSizes.size() < 2)
+        return { };
+    if (contentAlignment.distribution() != ContentDistribution::SpaceBetween)
+        return { };
+
+    auto tracksSize = std::reduce(trackSizes.begin(), trackSizes.end(), 0_lu);
+    auto guttersSize = GridLayoutUtils::totalGuttersSize(trackSizes.size(), gap);
+    auto freeSpace = axisConstraint.availableSpace() - tracksSize - guttersSize;
+    if (freeSpace <= 0_lu)
+        return { };
+    return { 0_lu, freeSpace / (trackSizes.size() - 1) };
+}
+
 // https://drafts.csswg.org/css-grid-1/#layout-algorithm
 GridLayoutResult GridLayout::layout(const UnplacedGridItems& unplacedGridItems, LeadingImplicitTracks leadingImplicitTracks, const GridLayoutState& gridLayoutState, GridLayoutScope scope)
 {
+#if PLATFORM(HAIKU)
+    bool traceGridPhases = summitGridPhaseTraceEnabled() && scope != GridLayoutScope::ColumnSizingOnly;
+    bigtime_t startedAt = traceGridPhases ? system_time() : 0;
+#endif
     auto& gridDefinition = gridLayoutState.gridDefinition;
     auto& gridTemplateColumnsTrackSizes = gridDefinition.gridTemplateColumns.sizes;
     auto& gridTemplateRowsTrackSizes = gridDefinition.gridTemplateRows.sizes;
@@ -118,6 +181,9 @@ GridLayoutResult GridLayout::layout(const UnplacedGridItems& unplacedGridItems, 
 
     auto columnTrackSizingFunctionsList = trackSizingFunctions(columnsCount, leadingImplicitTracks.columnsCount, gridTemplateColumnsTrackSizes, gridDefinition.gridAutoColumns, gridDefinition.zoom);
     auto rowTrackSizingFunctionsList = trackSizingFunctions(rowsCount, leadingImplicitTracks.rowsCount, gridTemplateRowsTrackSizes, gridDefinition.gridAutoRows, gridDefinition.zoom);
+#if PLATFORM(HAIKU)
+    bigtime_t placedAt = traceGridPhases ? system_time() : 0;
+#endif
 
     // https://drafts.csswg.org/css-grid-1/#algo-grid-sizing
     // Fast path: the caller only needs the column sizes resolved by step 1 of the grid sizing
@@ -126,20 +192,30 @@ GridLayoutResult GridLayout::layout(const UnplacedGridItems& unplacedGridItems, 
     // skip row sizing, grid-item layout, and alignment.
     if (scope == GridLayoutScope::ColumnSizingOnly) {
         TrackSizes columnSizes = GridSizer { formattingContext, gridLayoutState }.sizeColumnsOnlyFastPath(placedGridItems, columnTrackSizingFunctionsList, rowTrackSizingFunctionsList);
-        return { { columnSizes, { } }, { } };
+        return { { columnSizes, { }, { }, { } }, { } };
     }
 
     // 2. FIXME: Find the size of the grid container.
 
     // 3. Given the resulting grid container size, run the Grid Sizing Algorithm to size the grid.
     UsedTrackSizes usedTrackSizes = GridSizer { formattingContext, gridLayoutState }.sizeGrid(placedGridItems, columnTrackSizingFunctionsList, rowTrackSizingFunctionsList);
+    usedTrackSizes.columnAlignment = computeTrackAlignmentOffsets(gridLayoutState.gridLayoutConstraints.inlineAxis, usedTrackSizes.columnSizes,
+        gridLayoutState.usedColumnGap, gridLayoutState.usedJustifyContent);
+    usedTrackSizes.rowAlignment = computeTrackAlignmentOffsets(gridLayoutState.gridLayoutConstraints.blockAxis, usedTrackSizes.rowSizes,
+        gridLayoutState.usedRowGap, gridLayoutState.usedAlignContent);
 
     CheckedRef formattingContextRootStyle = formattingContext.root().style();
     auto gridAreaSizes = computeGridAreaSizes(placedGridItems, gridLayoutState.usedColumnGap, gridLayoutState.usedRowGap, usedTrackSizes);
+#if PLATFORM(HAIKU)
+    bigtime_t sizedAt = traceGridPhases ? system_time() : 0;
+#endif
 
     // 4. Lay out the grid items into their respective containing blocks. Each grid area’s
     // width and height are considered definite for this purpose.
     auto [ usedInlineSizes, usedBlockSizes ] = layoutGridItems(placedGridItems, gridAreaSizes, columnTrackSizingFunctionsList, rowTrackSizingFunctionsList);
+#if PLATFORM(HAIKU)
+    bigtime_t itemsAt = traceGridPhases ? system_time() : 0;
+#endif
 
     // https://drafts.csswg.org/css-grid-1/#alignment
     auto usedInlineMargins = computeInlineMargins(placedGridItems);
@@ -152,6 +228,11 @@ GridLayoutResult GridLayout::layout(const UnplacedGridItems& unplacedGridItems, 
     auto blockAxisPositions = performBlockAxisSelfAlignment(placedGridItems, usedBlockMargins, usedBlockSizes, gridAreaSizes.blockSizes);
 
     auto gridItemRects = computeGridItemRects(placedGridItems, inlineAxisPositions, blockAxisPositions, usedInlineSizes, usedBlockSizes, usedInlineMargins, usedBlockMargins);
+
+#if PLATFORM(HAIKU)
+    if (traceGridPhases)
+        recordSummitGridPhases(placedAt - startedAt, sizedAt - placedAt, itemsAt - sizedAt, system_time() - itemsAt);
+#endif
 
     return { WTF::move(usedTrackSizes), WTF::move(gridItemRects) };
 }

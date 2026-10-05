@@ -29,13 +29,17 @@
 #include "APIHTTPCookieStore.h"
 #include "APIProcessPoolConfiguration.h"
 #include "APIWebsiteDataRecord.h"
+#if !PLATFORM(HAIKU)
 #include "AuthenticatorManager.h"
+#endif
 #include "DeviceIdHashSaltStorage.h"
 #include "DownloadProxy.h"
 #include "GPUProcessProxy.h"
 #include "ITPThirdPartyData.h"
 #include "Logging.h"
+#if !PLATFORM(HAIKU)
 #include "MockAuthenticatorManager.h"
+#endif
 #include "NetworkProcessConnectionInfo.h"
 #include "NetworkProcessMessages.h"
 #include "PageLoadState.h"
@@ -106,7 +110,9 @@
 #endif
 
 #if ENABLE(WEB_AUTHN)
+#if !PLATFORM(HAIKU)
 #include "VirtualAuthenticatorManager.h"
+#endif
 #endif // ENABLE(WEB_AUTHN)
 
 namespace WebKit {
@@ -166,7 +172,7 @@ WebsiteDataStore::WebsiteDataStore(Ref<WebsiteDataStoreConfiguration>&& configur
     , m_configuration(WTF::move(configuration))
     , m_trackingPreventionDebugMode(m_configuration->resourceLoadStatisticsDebugModeEnabled())
     , m_queue(WorkQueue::create("com.apple.WebKit.WebsiteDataStore"_s))
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(HAIKU)
     , m_authenticatorManager(AuthenticatorManager::create())
 #endif
 #if ENABLE(DEVICE_ORIENTATION)
@@ -318,7 +324,12 @@ SOAuthorizationCoordinator& WebsiteDataStore::soAuthorizationCoordinator(const W
 
 static Ref<NetworkProcessProxy> networkProcessForSession(PAL::SessionID sessionID)
 {
-#if ((PLATFORM(GTK) || PLATFORM(WPE)) && !ENABLE(2022_GLIB_API))
+#if PLATFORM(HAIKU)
+    // Curl's alternative-services state belongs to the process. Keep every
+    // profile, including ephemeral profiles, in its own network process.
+    UNUSED_PARAM(sessionID);
+    return NetworkProcessProxy::create();
+#elif ((PLATFORM(GTK) || PLATFORM(WPE)) && !ENABLE(2022_GLIB_API))
     if (sessionID.isEphemeral()) {
         // Reuse a previous persistent session network process for ephemeral sessions.
         for (auto& dataStore : allDataStores().values()) {
@@ -2394,7 +2405,7 @@ void WebsiteDataStore::addSecKeyProxyStore(Ref<SecKeyProxyStore>&& store)
 }
 #endif
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(HAIKU)
 void WebsiteDataStore::setMockWebAuthenticationConfiguration(WebCore::MockWebAuthenticationConfiguration&& configuration)
 {
     if (RefPtr manager = dynamicDowncast<MockAuthenticatorManager>(m_authenticatorManager))
@@ -3048,6 +3059,14 @@ void WebsiteDataStore::setCookies(Vector<WebCore::Cookie>&& cookies, CompletionH
 {
     protect(networkProcess())->sendWithAsyncReply(Messages::WebCookieManager::SetCookie(m_sessionID, WTF::move(cookies), ++m_cookiesVersion), WTF::move(completionHandler));
 }
+
+#if PLATFORM(HAIKU) && USE(CURL)
+void WebsiteDataStore::setCookieWithResult(const WebCore::Cookie& cookie, CompletionHandler<void(bool, std::optional<WebCore::Cookie>&&)>&& completionHandler)
+{
+    // Preserve the cookie-version barrier used when starting resource loads.
+    protect(networkProcess())->sendWithAsyncReply(Messages::WebCookieManager::SetCookieWithResult(m_sessionID, cookie, ++m_cookiesVersion), WTF::move(completionHandler));
+}
+#endif
 
 void WebsiteDataStore::setStorageAccessPermissionForTesting(bool granted, WebPageProxyIdentifier webPageProxyID, const String& topFrame, const String& subFrame, CompletionHandler<void()>&& completionHandler)
 {

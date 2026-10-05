@@ -31,10 +31,61 @@
 #include "NotImplemented.h"
 #include <wtf/TZoneMallocInlines.h>
 
+#if PLATFORM(HAIKU)
+#include "CurlContext.h"
+#include <cstdlib>
+#include <wtf/MainThread.h>
+#include <wtf/Threading.h>
+#include <wtf/text/CString.h>
+#include <wtf/text/MakeString.h>
+#endif
+
 namespace WebCore {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(DNSResolveQueueCurl);
 
+#if PLATFORM(HAIKU)
+void DNSResolveQueueCurl::updateIsUsingProxy()
+{
+    // Through a proxy, the names a page uses are the proxy's to resolve.
+    auto mode = CurlContext::singleton().proxySettings().mode();
+    bool fromEnvironment = mode == CurlProxySettings::Mode::Default
+        && (getenv("all_proxy") || getenv("ALL_PROXY") || getenv("https_proxy") || getenv("HTTPS_PROXY") || getenv("http_proxy"));
+    m_isUsingProxy = mode == CurlProxySettings::Mode::Custom || fromEnvironment;
+}
+
+static curl_socket_t refuseSocketHaiku(void*, curlsocktype, struct curl_sockaddr*)
+{
+    return CURL_SOCKET_BAD;
+}
+
+// <link rel=dns-prefetch> and the like: the name is resolved into libcurl's
+// DNS cache, which every transfer of the network process shares, so the
+// first request to the server does not wait for DNS (30-50 ms here, a round
+// trip to the resolver; Haiku keeps no cache of its own). Nothing connects:
+// the socket libcurl asks for is refused once the address is known.
+void DNSResolveQueueCurl::platformResolve(const String& hostname)
+{
+    auto& context = CurlContext::singleton();
+    auto url = makeString("https://"_s, hostname, '/').utf8();
+    Thread::create("DNS prefetch"_s, [url = WTF::move(url), share = context.shareHandle().handle(), timeout = context.dnsCacheTimeout()] {
+        if (CURL* handle = curl_easy_init()) {
+            curl_easy_setopt(handle, CURLOPT_URL, url.data());
+            curl_easy_setopt(handle, CURLOPT_SHARE, share);
+            curl_easy_setopt(handle, CURLOPT_DNS_CACHE_TIMEOUT, static_cast<long>(timeout.seconds()));
+            curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
+            curl_easy_setopt(handle, CURLOPT_CONNECT_ONLY, 1L);
+            curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 10L);
+            curl_easy_setopt(handle, CURLOPT_OPENSOCKETFUNCTION, refuseSocketHaiku);
+            curl_easy_perform(handle);
+            curl_easy_cleanup(handle);
+        }
+        callOnMainThread([] {
+            DNSResolveQueue::singleton().decrementRequestCount();
+        });
+    }, ThreadType::Network)->detach();
+}
+#else
 void DNSResolveQueueCurl::updateIsUsingProxy()
 {
     notImplemented();
@@ -44,6 +95,7 @@ void DNSResolveQueueCurl::platformResolve(const String& /* hostname */)
 {
     notImplemented();
 }
+#endif
 
 void DNSResolveQueueCurl::resolve(const String& /* hostname */, uint64_t /* identifier */, DNSCompletionHandler&& /* completionHandler */)
 {

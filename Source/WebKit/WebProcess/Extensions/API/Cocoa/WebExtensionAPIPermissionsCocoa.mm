@@ -46,6 +46,52 @@
 namespace WebKit {
 
 
+// Preserve the existing Cocoa implementation behind the C++ JSON bindings.
+static NSDictionary *permissionDetailsDictionary(RefPtr<JSON::Value> details, String& exception)
+{
+    if (!details || !details->asObject()) {
+        exception = "permissions must be an object"_s;
+        return nil;
+    }
+    auto dictionary = dynamic_objc_cast<NSDictionary>(parseJSON(details->toJSONString().createNSString().get()));
+    if (!dictionary)
+        exception = "could not convert permission details"_s;
+    return dictionary;
+}
+
+void WebExtensionAPIPermissions::contains(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto dictionary = permissionDetailsDictionary(WTF::move(details), exception);
+    if (!dictionary)
+        return;
+    NSString *nativeException = nil;
+    contains(dictionary, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIPermissions::request(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto dictionary = permissionDetailsDictionary(WTF::move(details), exception);
+    if (!dictionary)
+        return;
+    NSString *nativeException = nil;
+    request(dictionary, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIPermissions::remove(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto dictionary = permissionDetailsDictionary(WTF::move(details), exception);
+    if (!dictionary)
+        return;
+    NSString *nativeException = nil;
+    remove(dictionary, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
 void WebExtensionAPIPermissions::getAll(Ref<WebExtensionCallbackHandler>&& callback)
 {
     // Documentation: https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/permissions/getAll

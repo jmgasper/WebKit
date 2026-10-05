@@ -79,11 +79,20 @@ NetworkDataTaskCurl::NetworkDataTaskCurl(NetworkSession& session, NetworkDataTas
         blockCookies();
     restrictRequestReferrerToOriginIfNeeded(request);
 
+#if PLATFORM(HAIKU)
+    m_preconnectOnlyHaiku = parameters.shouldPreconnectOnly == PreconnectOnly::Yes;
+    // Nothing to gain (plain http, or a server seen to use HTTP/1.1): the
+    // preconnect completes as soon as it is resumed.
+    if (m_preconnectOnlyHaiku && !CurlRequest::canPreconnectHaiku(request.url()))
+        return;
+#endif
+
     m_curlRequest = createCurlRequest(WTF::move(request));
     if (!m_initialCredential.isEmpty()) {
         m_curlRequest->setUserPass(m_initialCredential.user(), m_initialCredential.password());
         m_curlRequest->setAuthenticationScheme(ProtectionSpace::AuthenticationScheme::HTTPBasic);
     }
+    m_curlRequest->start();
 }
 
 NetworkDataTaskCurl::~NetworkDataTaskCurl()
@@ -101,6 +110,15 @@ void NetworkDataTaskCurl::resume()
 
     if (m_curlRequest)
         m_curlRequest->resume();
+#if PLATFORM(HAIKU)
+    else if (m_preconnectOnlyHaiku) {
+        RunLoop::mainSingleton().dispatch([this, protectedThis = Ref { *this }] {
+            if (state() == State::Canceling || state() == State::Completed || !m_client)
+                return;
+            m_client->didCompleteWithError({ }, { });
+        });
+    }
+#endif
 }
 
 void NetworkDataTaskCurl::cancel()
@@ -132,7 +150,12 @@ NetworkDataTask::State NetworkDataTaskCurl::state() const
 
 Ref<CurlRequest> NetworkDataTaskCurl::createCurlRequest(ResourceRequest&& request, RequestStatus status)
 {
-    if (status == RequestStatus::NewRequest && !m_blockingCookies)
+    bool preconnectOnly = false;
+#if PLATFORM(HAIKU)
+    preconnectOnly = m_preconnectOnlyHaiku;
+#endif
+    // A preconnect sends no request: it needs no cookies.
+    if (status == RequestStatus::NewRequest && !m_blockingCookies && !preconnectOnly)
         appendCookieHeader(request);
 
     // Creates a CurlRequest in suspended state.
@@ -142,6 +165,10 @@ Ref<CurlRequest> NetworkDataTaskCurl::createCurlRequest(ResourceRequest&& reques
 
     if (m_session->networkProcess().localhostAliasesForTesting().contains<StringViewHashTranslator>(curlRequest->resourceRequest().url().host()))
         curlRequest->enableLocalhostAlias();
+#if PLATFORM(HAIKU)
+    if (preconnectOnly)
+        curlRequest->setPreconnectOnly();
+#endif
 
     return curlRequest;
 }
@@ -168,7 +195,7 @@ void NetworkDataTaskCurl::curlDidReceiveResponse(CurlRequest& request, CurlRespo
 
     handleCookieHeaders(request.resourceRequest(), receivedResponse);
 
-    if (shouldStartHTTPRedirection()) {
+    if (m_response.shouldRedirect()) {
         willPerformHTTPRedirection();
         return;
     }
@@ -236,7 +263,12 @@ void NetworkDataTaskCurl::curlDidFailWithError(CurlRequest& request, ResourceErr
     if (state() == State::Canceling || state() == State::Completed || (!m_client && !isDownload()))
         return;
 
-    if (resourceError.isCertificationVerificationError()) {
+    bool preconnectOnly = false;
+#if PLATFORM(HAIKU)
+    preconnectOnly = m_preconnectOnlyHaiku;
+#endif
+    // A preconnect asks nobody about a certificate: the load that follows will.
+    if (resourceError.isCertificationVerificationError() && !preconnectOnly) {
         tryServerTrustEvaluation(AuthenticationChallenge(request.resourceRequest().url(), certificateInfo, resourceError));
         return;
     }
@@ -254,22 +286,6 @@ void NetworkDataTaskCurl::curlDidFailWithError(CurlRequest& request, ResourceErr
     }
 
     m_client->didCompleteWithError(resourceError);
-}
-
-bool NetworkDataTaskCurl::shouldStartHTTPRedirection()
-{
-    auto statusCode = m_response.httpStatusCode();
-    if (statusCode < 300 || statusCode >= 400)
-        return false;
-
-    // Some 3xx status codes aren't actually redirects.
-    if (statusCode == 300 || statusCode == 304 || statusCode == 305 || statusCode == 306)
-        return false;
-
-    if (m_response.httpHeaderField(HTTPHeaderName::Location).isEmpty())
-        return false;
-
-    return true;
 }
 
 bool NetworkDataTaskCurl::shouldRedirectAsGET(const ResourceRequest& request, bool crossOrigin)
@@ -409,6 +425,7 @@ void NetworkDataTaskCurl::willPerformHTTPRedirection()
             m_curlRequest->setUserPass(m_initialCredential.user(), m_initialCredential.password());
             m_curlRequest->setAuthenticationScheme(ProtectionSpace::AuthenticationScheme::HTTPBasic);
         }
+        m_curlRequest->start();
 
         if (m_state != State::Suspended) {
             m_state = State::Suspended;
@@ -531,6 +548,7 @@ void NetworkDataTaskCurl::restartWithCredential(const ProtectionSpace& protectio
     m_curlRequest->setUserPass(credential.user(), credential.password());
     if (shouldDisableServerTrustEvaluation)
         m_curlRequest->disableServerTrustEvaluation();
+    m_curlRequest->start();
 
     if (m_state != State::Suspended) {
         m_state = State::Suspended;

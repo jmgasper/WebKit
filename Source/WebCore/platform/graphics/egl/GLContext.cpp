@@ -45,6 +45,9 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(GLContext);
 const char* GLContext::errorString(int statusCode)
 {
     static_assert(sizeof(int) >= sizeof(EGLint), "EGLint must not be wider than int");
+#if PLATFORM(HAIKU)
+    static_assert(std::is_same_v<GLNativeWindowType, unsigned long>, "GLContext.h declares GLNativeWindowType as unsigned long for ANGLE's translation units");
+#endif
     switch (statusCode) {
 #define CASE_RETURN_STRING(name) case name: return #name
         // https://www.khronos.org/registry/EGL/sdk/docs/man/html/eglGetError.xhtml
@@ -232,6 +235,14 @@ std::unique_ptr<GLContext> GLContext::createPbufferContext(GLDisplay& display, E
 
 std::unique_ptr<GLContext> GLContext::createOffscreenContext(GLDisplay& display, Target target, EGLContext sharingContext)
 {
+#if PLATFORM(HAIKU)
+    // Pbuffers are the offscreen path Mesa's Haiku EGL platform is qualified
+    // with, so try them first. Surfaceless contexts remain the fallback below.
+    if (auto context = createPbufferContext(display, sharingContext))
+        return context;
+    RELEASE_LOG_INFO(Compositing, "Could not create Pbuffer context: %s. Trying a surfaceless context.", lastErrorString());
+#endif
+
     if (auto context = createSurfacelessContext(display, target, sharingContext))
         return context;
 

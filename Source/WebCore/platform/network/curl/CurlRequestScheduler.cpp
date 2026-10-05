@@ -27,8 +27,13 @@
 
 #include "config.h"
 #include "CurlRequestScheduler.h"
+
+#include <cstdlib>
+#include <cstring>
 #include <wtf/TZoneMallocInlines.h>
 #include <wtf/Threading.h>
+#include <wtf/MonotonicTime.h>
+#include <cstdio>
 
 #if USE(CURL)
 
@@ -38,28 +43,60 @@ namespace WebCore {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(CurlRequestScheduler);
 
-CurlRequestScheduler::CurlRequestScheduler(long maxConnects, long maxTotalConnections, long maxHostConnections)
-    : m_maxConnects(maxConnects)
-    , m_maxTotalConnections(maxTotalConnections)
-    , m_maxHostConnections(maxHostConnections)
+static size_t workerCount()
 {
+    size_t count = 4;
+    if (const char* value = std::getenv("SUMMIT_CURL_THREADS")) {
+        auto parsed = std::strtol(value, nullptr, 10);
+        if (parsed >= 1 && parsed <= 16)
+            count = parsed;
+    }
+    return count;
+}
+
+CurlRequestScheduler::CurlRequestScheduler(long maxConnects, long maxTotalConnections, long maxHostConnections)
+{
+    auto count = workerCount();
+    m_workers.reserveInitialCapacity(count);
+    for (size_t index = 0; index < count; ++index)
+        m_workers.append(makeUnique<Worker>(*this, maxConnects, maxTotalConnections, maxHostConnections));
 }
 
 CurlRequestScheduler::~CurlRequestScheduler()
 {
-    stopThread();
+    m_workers.clear();
 }
 
-bool CurlRequestScheduler::add(CurlRequestSchedulerClient* client)
+CurlRequestScheduler::Worker& CurlRequestScheduler::workerForHost(const String& host)
+{
+    return *m_workers[host.hash() % m_workers.size()];
+}
+
+CurlRequestScheduler::Worker* CurlRequestScheduler::workerForClient(CurlRequestSchedulerClient* client)
+{
+    Locker locker { m_assignmentLock };
+    return m_assignments.get(client);
+}
+
+void CurlRequestScheduler::unassign(CurlRequestSchedulerClient* client)
+{
+    Locker locker { m_assignmentLock };
+    m_assignments.remove(client);
+}
+
+bool CurlRequestScheduler::add(CurlRequestSchedulerClient* client, const String& host)
 {
     ASSERT(isMainThread());
 
     if (!client)
         return false;
 
-    startTransfer(client);
-    startOrWakeUpThread();
-
+    Worker& worker = workerForHost(host);
+    {
+        Locker locker { m_assignmentLock };
+        m_assignments.set(client, &worker);
+    }
+    worker.add(client);
     return true;
 }
 
@@ -70,10 +107,47 @@ void CurlRequestScheduler::cancel(CurlRequestSchedulerClient* client)
     if (!client)
         return;
 
+    if (auto* worker = workerForClient(client))
+        worker->cancel(client);
+}
+
+void CurlRequestScheduler::callOnWorkerThread(CurlRequestSchedulerClient* client, Function<void()>&& task)
+{
+    auto* worker = client ? workerForClient(client) : nullptr;
+    (worker ? *worker : *m_workers[0]).callOnWorkerThread(WTF::move(task));
+}
+
+// Worker: one multi handle and the thread that drives it -----------------
+
+CurlRequestScheduler::Worker::Worker(CurlRequestScheduler& scheduler, long maxConnects, long maxTotalConnections, long maxHostConnections)
+    : m_scheduler(scheduler)
+    , m_maxConnects(maxConnects)
+    , m_maxTotalConnections(maxTotalConnections)
+    , m_maxHostConnections(maxHostConnections)
+{
+}
+
+CurlRequestScheduler::Worker::~Worker()
+{
+    stopThread();
+}
+
+void CurlRequestScheduler::Worker::add(CurlRequestSchedulerClient* client)
+{
+    ASSERT(isMainThread());
+
+    startTransfer(client);
+    startOrWakeUpThread();
+}
+
+void CurlRequestScheduler::Worker::cancel(CurlRequestSchedulerClient* client)
+{
+    ASSERT(isMainThread());
+
     cancelTransfer(client);
 }
 
-void CurlRequestScheduler::callOnWorkerThread(Function<void()>&& task)
+void CurlRequestScheduler::Worker::callOnWorkerThread(Function<void()>&& task)
 {
     {
         Locker locker { m_mutex };
@@ -83,7 +157,7 @@ void CurlRequestScheduler::callOnWorkerThread(Function<void()>&& task)
     startOrWakeUpThread();
 }
 
-void CurlRequestScheduler::startOrWakeUpThread()
+void CurlRequestScheduler::Worker::startOrWakeUpThread()
 {
     ASSERT(isMainThread());
 
@@ -108,7 +182,7 @@ void CurlRequestScheduler::startOrWakeUpThread()
     }, ThreadType::Network);
 }
 
-void CurlRequestScheduler::wakeUpThreadIfPossible()
+void CurlRequestScheduler::Worker::wakeUpThreadIfPossible()
 {
     Locker locker { m_multiHandleMutex };
     if (!m_curlMultiHandle)
@@ -117,7 +191,7 @@ void CurlRequestScheduler::wakeUpThreadIfPossible()
     m_curlMultiHandle->wakeUp();
 }
 
-void CurlRequestScheduler::stopThreadIfNoMoreJobRunning()
+void CurlRequestScheduler::Worker::stopThreadIfNoMoreJobRunning()
 {
     ASSERT(!isMainThread());
 
@@ -128,7 +202,7 @@ void CurlRequestScheduler::stopThreadIfNoMoreJobRunning()
     m_runThread = false;
 }
 
-void CurlRequestScheduler::stopThread()
+void CurlRequestScheduler::Worker::stopThread()
 {
     {
         Locker locker { m_mutex };
@@ -142,7 +216,7 @@ void CurlRequestScheduler::stopThread()
     }
 }
 
-void CurlRequestScheduler::executeTasks()
+void CurlRequestScheduler::Worker::executeTasks()
 {
     ASSERT(!isMainThread());
 
@@ -157,7 +231,7 @@ void CurlRequestScheduler::executeTasks()
         task();
 }
 
-void CurlRequestScheduler::workerThread()
+void CurlRequestScheduler::Worker::workerThread()
 {
     ASSERT(!isMainThread());
 
@@ -169,6 +243,13 @@ void CurlRequestScheduler::workerThread()
         m_curlMultiHandle->setMaxHostConnections(m_maxHostConnections);
     }
 
+    // SUMMIT_NET_TRACE=1 reports loop iterations that kept queued requests
+    // waiting: how long the tasks, the poll, perform and the completions took.
+    static const bool traceIterations = [] {
+        const char* value = getenv("SUMMIT_NET_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+
     while (true) {
         {
             Locker locker { m_mutex };
@@ -176,16 +257,26 @@ void CurlRequestScheduler::workerThread()
                 break;
         }
 
+        auto iterationStart = MonotonicTime::now();
+        size_t taskCount = 0;
+        {
+            Locker locker { m_mutex };
+            taskCount = m_taskQueue.size();
+        }
         executeTasks();
+        auto tasksDone = MonotonicTime::now();
 
         const int selectTimeoutMS = INT_MAX;
         m_curlMultiHandle->poll({ }, selectTimeoutMS);
+        auto pollDone = MonotonicTime::now();
 
         int activeCount = 0;
         while (m_curlMultiHandle->perform(activeCount) == CURLM_CALL_MULTI_PERFORM) { }
+        auto performDone = MonotonicTime::now();
 
         // check the curl messages indicating completed transfers
         // and free their resources
+        unsigned completions = 0;
         while (true) {
             int messagesInQueue = 0;
             CURLMsg* msg = m_curlMultiHandle->readInfo(messagesInQueue);
@@ -193,8 +284,19 @@ void CurlRequestScheduler::workerThread()
                 break;
 
             ASSERT(msg->msg == CURLMSG_DONE);
+            ++completions;
             if (auto client = m_clientMaps.inlineGet(msg->easy_handle))
                 completeTransfer(client, msg->data.result);
+        }
+
+        if (traceIterations) {
+            auto end = MonotonicTime::now();
+            auto busy = (end - iterationStart) - (pollDone - tasksDone);
+            if (busy > 50_ms) {
+                fprintf(stderr, "Summit net: worker %p slow iteration: tasks %zu in %.0f ms, poll %.0f ms, perform %.0f ms (%d active), %u completions in %.0f ms\n",
+                    this, taskCount, (tasksDone - iterationStart).milliseconds(), (pollDone - tasksDone).milliseconds(),
+                    (performDone - pollDone).milliseconds(), activeCount, completions, (end - performDone).milliseconds());
+            }
         }
 
 //        stopThreadIfNoMoreJobRunning();
@@ -206,7 +308,7 @@ void CurlRequestScheduler::workerThread()
     }
 }
 
-void CurlRequestScheduler::startTransfer(CurlRequestSchedulerClient* client)
+void CurlRequestScheduler::Worker::startTransfer(CurlRequestSchedulerClient* client)
 {
     client->retain();
 
@@ -228,44 +330,48 @@ void CurlRequestScheduler::startTransfer(CurlRequestSchedulerClient* client)
     m_taskQueue.append(WTF::move(task));
 }
 
-void CurlRequestScheduler::completeTransfer(CurlRequestSchedulerClient* client, CURLcode result)
+void CurlRequestScheduler::Worker::completeTransfer(CurlRequestSchedulerClient* client, CURLcode result)
 {
     finalizeTransfer(client, [client, result]() {
         client->didCompleteTransfer(result);
     });
 }
 
-void CurlRequestScheduler::cancelTransfer(CurlRequestSchedulerClient* client)
+void CurlRequestScheduler::Worker::cancelTransfer(CurlRequestSchedulerClient* client)
 {
     finalizeTransfer(client, [client]() {
         client->didCancelTransfer();
     });
 }
 
-void CurlRequestScheduler::finalizeTransfer(CurlRequestSchedulerClient* client, Function<void()> completionHandler)
+void CurlRequestScheduler::Worker::finalizeTransfer(CurlRequestSchedulerClient* client, Function<void()> completionHandler)
 {
-    Locker locker { m_mutex };
+    {
+        Locker locker { m_mutex };
 
-    if (!m_activeJobs.contains(client))
-        return;
+        if (!m_activeJobs.contains(client))
+            return;
 
-    m_activeJobs.remove(client);
+        m_activeJobs.remove(client);
 
-    auto task = [this, client, completionHandler = WTF::move(completionHandler)]() {
-        if (client->handle()) {
-            ASSERT(m_clientMaps.contains(client->handle()));
-            m_clientMaps.remove(client->handle());
-            m_curlMultiHandle->removeHandle(client->handle());
-        }
+        auto task = [this, client, completionHandler = WTF::move(completionHandler)]() {
+            if (client->handle()) {
+                ASSERT(m_clientMaps.contains(client->handle()));
+                m_clientMaps.remove(client->handle());
+                m_curlMultiHandle->removeHandle(client->handle());
+            }
 
-        completionHandler();
+            completionHandler();
 
-        callOnMainThread([client]() {
-            client->release();
-        });
-    };
+            callOnMainThread([client]() {
+                client->release();
+            });
+        };
 
-    m_taskQueue.append(WTF::move(task));
+        m_taskQueue.append(WTF::move(task));
+    }
+    // Outside m_mutex: the scheduler's lock is never taken under a worker's.
+    m_scheduler.unassign(client);
 }
 
 }

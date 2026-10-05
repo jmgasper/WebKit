@@ -37,7 +37,11 @@
 #include <wtf/WeakRef.h>
 #include <wtf/text/WTFString.h>
 
+#if USE(HAIKU_GRAPHICS)
+typedef unsigned int CGGlyph;
+#else
 typedef unsigned short CGGlyph;
+#endif
 
 typedef const struct __CTRun * CTRunRef;
 

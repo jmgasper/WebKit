@@ -89,6 +89,24 @@ enum class WebKit::WebExtensionEventListenerType : uint8_t {
     WindowsOnCreated,
     WindowsOnFocusChanged,
     WindowsOnRemoved,
+#if PLATFORM(HAIKU)
+    PrivacyOnChange,
+    IdleOnStateChanged,
+    ManagementOnDisabled,
+    ManagementOnEnabled,
+    ManagementOnInstalled,
+    ManagementOnUninstalled,
+    NotificationsOnClosed,
+    NotificationsOnShown,
+    RuntimeOnSuspend,
+    RuntimeOnSuspendCanceled,
+    RuntimeOnUpdateAvailable,
+    WebNavigationOnCreatedNavigationTarget,
+    WebNavigationOnHistoryStateUpdated,
+    WebNavigationOnReferenceFragmentUpdated,
+    WebNavigationOnTabReplaced,
+    DownloadsOnErased,
+#endif
 };
 
 #endif

@@ -47,6 +47,100 @@
 
 namespace WebKit {
 
+// C++ bindings retain the existing Cocoa implementations.
+void WebExtensionAPIWindows::createWindow(RefPtr<JSON::Value> info, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto infoValue = info ? parseJSON(info->toJSONString().createNSString().get(), JSONOptions::FragmentsAllowed) : nil;
+    auto infoObject = dynamic_objc_cast<NSDictionary>(infoValue);
+    if (infoValue && !infoObject) {
+        exception = "options must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    createWindow(infoObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIWindows::get(WebPageProxyIdentifier page, double windowID, RefPtr<JSON::Value> info, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto infoValue = info ? parseJSON(info->toJSONString().createNSString().get(), JSONOptions::FragmentsAllowed) : nil;
+    auto infoObject = dynamic_objc_cast<NSDictionary>(infoValue);
+    if (infoValue && !infoObject) {
+        exception = "options must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    get(page, windowID, infoObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIWindows::getCurrent(WebPageProxyIdentifier page, RefPtr<JSON::Value> info, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto infoValue = info ? parseJSON(info->toJSONString().createNSString().get(), JSONOptions::FragmentsAllowed) : nil;
+    auto infoObject = dynamic_objc_cast<NSDictionary>(infoValue);
+    if (infoValue && !infoObject) {
+        exception = "options must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    getCurrent(page, infoObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIWindows::getLastFocused(RefPtr<JSON::Value> info, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto infoValue = info ? parseJSON(info->toJSONString().createNSString().get(), JSONOptions::FragmentsAllowed) : nil;
+    auto infoObject = dynamic_objc_cast<NSDictionary>(infoValue);
+    if (infoValue && !infoObject) {
+        exception = "options must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    getLastFocused(infoObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIWindows::getAll(RefPtr<JSON::Value> info, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto infoValue = info ? parseJSON(info->toJSONString().createNSString().get(), JSONOptions::FragmentsAllowed) : nil;
+    auto infoObject = dynamic_objc_cast<NSDictionary>(infoValue);
+    if (infoValue && !infoObject) {
+        exception = "options must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    getAll(infoObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIWindows::update(double windowID, RefPtr<JSON::Value> info, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto infoValue = info ? parseJSON(info->toJSONString().createNSString().get(), JSONOptions::FragmentsAllowed) : nil;
+    auto infoObject = dynamic_objc_cast<NSDictionary>(infoValue);
+    if (infoValue && !infoObject) {
+        exception = "options must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    update(windowID, infoObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIWindows::remove(double windowID, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    NSString *nativeException = nil;
+    remove(windowID, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+
 static inline NSString *NODELETE toWebAPI(WebExtensionWindow::State state)
 {
     switch (state) {

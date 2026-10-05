@@ -30,6 +30,7 @@
 #include "ImageDecoderClient.h"
 #include "Logging.h"
 #include "NativeImage.h"
+#include <wtf/MainThread.h>
 #include <wtf/SystemTracing.h>
 #include <wtf/text/TextStream.h>
 
@@ -68,7 +69,16 @@ void AsyncImageDecoder::startWorkQueue()
 
     m_workQueue = WorkQueue::create("org.webkit.ImageDecoder"_s, WorkQueue::QOS::Default);
 
-    protect(m_workQueue)->dispatch([protectedThis = Ref { *this }, weakRunLoop = ThreadSafeWeakPtr { RunLoop::currentSingleton() }, protectedWorkQueue = Ref { *m_workQueue }, protectedClient = m_client.get(), protectedRequestQueue = Ref { requestQueue() }] () mutable {
+    // Finished decodes are handed back on the run loop of whichever thread first
+    // asked for one. That is the owning thread when the request comes from a
+    // rendering update, and it is not when a paint asks: SkiaPaintingEngine
+    // paints tiles on a worker pool, and a decode requested there would report
+    // back on a worker. The client's answer walks into CachedResource and
+    // MemoryCache, whose singleton asserts the main thread, so a decode asked
+    // for anywhere else still has to be answered on it.
+    RunLoop& replyRunLoop = isMainThread() ? RunLoop::currentSingleton() : RunLoop::mainSingleton();
+
+    protect(m_workQueue)->dispatch([protectedThis = Ref { *this }, weakRunLoop = ThreadSafeWeakPtr { replyRunLoop }, protectedWorkQueue = Ref { *m_workQueue }, protectedClient = m_client.get(), protectedRequestQueue = Ref { requestQueue() }] () mutable {
         Request request;
         while (protectedRequestQueue->dequeue(request)) {
             TraceScope tracingScope(AsyncImageDecodeStart, AsyncImageDecodeEnd);

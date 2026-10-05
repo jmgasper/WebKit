@@ -134,17 +134,19 @@ public:
         RuleMutationScope(CSSStyleSheet*, RuleMutationType = OtherMutation, StyleRuleKeyframes* insertedKeyframesRule = nullptr);
         RuleMutationScope(CSSRule*);
         ~RuleMutationScope();
+        void setInsertedStyleRule(StyleRule*);
 
     private:
         RefPtr<CSSStyleSheet> m_styleSheet;
         RuleMutationType m_mutationType;
         ContentsClonedForMutation m_contentsClonedForMutation;
         RefPtr<StyleRuleKeyframes> m_insertedKeyframesRule;
+        RefPtr<StyleRule> m_insertedStyleRule;
         String m_modifiedKeyframesRuleName;
     };
 
     ContentsClonedForMutation willMutateRules();
-    void didMutateRules(RuleMutationType, ContentsClonedForMutation, StyleRuleKeyframes* insertedKeyframesRule, const String& modifiedKeyframesRuleName);
+    void didMutateRules(RuleMutationType, ContentsClonedForMutation, StyleRuleKeyframes* insertedKeyframesRule, StyleRule* insertedStyleRule, const String& modifiedKeyframesRuleName);
     void didMutateRuleFromCSSStyleDeclaration();
     void didMutate();
     

@@ -32,10 +32,14 @@
 #include <wtf/HashSet.h>
 #include <wtf/RefCounted.h>
 #include <wtf/TZoneMallocInlines.h>
-#include <wtf/spi/cocoa/SecuritySPI.h>
 #include <wtf/text/WTFString.h>
 
+// The local authentication context belongs to the Cocoa authenticator.
+#if PLATFORM(COCOA)
+#include <wtf/spi/cocoa/SecuritySPI.h>
+
 OBJC_CLASS LAContext;
+#endif
 
 namespace WebCore {
 class AuthenticatorAssertionResponse;
@@ -55,7 +59,9 @@ public:
     virtual void requestNewPin(uint64_t, CompletionHandler<void(const WTF::String&)>&& completionHandler) const { completionHandler(WTF::String()); }
     virtual void selectAssertionResponse(Vector<Ref<WebCore::AuthenticatorAssertionResponse>>&&, WebKit::WebAuthenticationSource, CompletionHandler<void(WebCore::AuthenticatorAssertionResponse*)>&& completionHandler) const { completionHandler(nullptr); }
     virtual void decidePolicyForLocalAuthenticator(CompletionHandler<void(WebKit::LocalAuthenticatorPolicy)>&& completionHandler) const { completionHandler(WebKit::LocalAuthenticatorPolicy::Disallow); }
+#if PLATFORM(COCOA)
     virtual void requestLAContextForUserVerification(CompletionHandler<void(LAContext *)>&& completionHandler) const { completionHandler(nullptr); }
+#endif
 
 protected:
     WebAuthenticationPanelClient() = default;

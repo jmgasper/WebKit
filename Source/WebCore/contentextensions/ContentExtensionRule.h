@@ -28,6 +28,7 @@
 #if ENABLE(CONTENT_EXTENSIONS)
 
 #include <WebCore/ContentExtensionActions.h>
+#include <WebCore/ContentExtensionURLConditions.h>
 #include <WebCore/ResourceLoadInfo.h>
 #include <wtf/Hasher.h>
 #include <wtf/text/WTFString.h>
@@ -46,6 +47,8 @@ struct Trigger {
     bool frameURLFilterIsCaseSensitive { false };
     ResourceFlags flags { 0 };
     Vector<String> conditions;
+    Vector<String> urlFilterAlternatives;
+    URLConditionGroups urlConditionGroups;
 
     WEBCORE_EXPORT Trigger isolatedCopy() const &;
     WEBCORE_EXPORT Trigger isolatedCopy() &&;
@@ -53,7 +56,14 @@ struct Trigger {
     void checkValidity()
     {
         auto actionCondition = static_cast<ActionCondition>(flags & ActionConditionMask);
-        ASSERT_UNUSED(actionCondition, conditions.isEmpty() == (actionCondition == ActionCondition::None));
+        if (actionCondition == ActionCondition::Conjunction) {
+            ASSERT(conditions.isEmpty() && !urlConditionGroups.isEmpty());
+            ASSERT((flags & URLConditionMask) == urlConditionRequirements(urlConditionGroups));
+        } else {
+            ASSERT(urlConditionGroups.isEmpty());
+            ASSERT(!(flags & URLConditionMask));
+            ASSERT(conditions.isEmpty() == (actionCondition == ActionCondition::None));
+        }
         if (topURLFilterIsCaseSensitive)
             ASSERT(actionCondition == ActionCondition::IfTopURL || actionCondition == ActionCondition::UnlessTopURL);
         if (frameURLFilterIsCaseSensitive)
@@ -67,7 +77,9 @@ struct Trigger {
             && !topURLFilterIsCaseSensitive
             && !frameURLFilterIsCaseSensitive
             && !flags
-            && conditions.isEmpty();
+            && conditions.isEmpty()
+            && urlFilterAlternatives.isEmpty()
+            && urlConditionGroups.isEmpty();
     }
 
     friend bool operator==(const Trigger&, const Trigger&) = default;
@@ -75,7 +87,7 @@ struct Trigger {
 
 inline void add(Hasher& hasher, const Trigger& trigger)
 {
-    add(hasher, trigger.urlFilterIsCaseSensitive, trigger.urlFilter, trigger.flags, trigger.conditions);
+    add(hasher, trigger.urlFilterIsCaseSensitive, trigger.topURLFilterIsCaseSensitive, trigger.frameURLFilterIsCaseSensitive, trigger.urlFilter, trigger.flags, trigger.conditions, trigger.urlFilterAlternatives, trigger.urlConditionGroups);
 }
 
 struct TriggerHashTraits : public WTF::CustomHashTraits<Trigger> {

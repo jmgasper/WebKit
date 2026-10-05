@@ -26,6 +26,12 @@
 #include "config.h"
 #include "FlexIntegrationUtils.h"
 
+#if PLATFORM(HAIKU)
+#include <OS.h>
+#include <cstdio>
+#include <cstdlib>
+#endif
+
 #include "LocalFrameView.h"
 #include "RenderBlockFlow.h"
 #include "RenderBoxInlines.h"
@@ -41,11 +47,29 @@
 #include "StylePrimitiveNumericTypes+Evaluation.h"
 #include <wtf/TZoneMallocInlines.h>
 
+#if PLATFORM(HAIKU)
+namespace WebCore {
+// Layout reuse for flex and grid items lives in RenderBlock.cpp.
+void summitSetChildNeedsLayoutByContainer(RenderBox&);
+}
+#endif
+
 namespace WebCore {
 
 namespace LayoutIntegration {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(FlexItemContentCache);
+
+#if PLATFORM(HAIKU)
+static bool traceFlexWidth()
+{
+    static bool enabled = [] {
+        const char* value = std::getenv("SUMMIT_FLEX_WIDTH_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    return enabled;
+}
+#endif
 
 FlexIntegrationUtils::FlexIntegrationUtils(RenderFlexibleBox& flexBox, FlexLayoutState& flexLayoutState, FlexItemContentCache& flexItemContentCache)
     : m_flexBox(flexBox)
@@ -85,7 +109,11 @@ void FlexIntegrationUtils::layoutFlexItemForStretchedCrossSize(const FlexLayoutI
         renderer->setOverridingBorderBoxLogicalHeight(crossSize);
     else
         renderer->setOverridingBorderBoxLogicalWidth(crossSize);
+#if PLATFORM(HAIKU)
+    summitSetChildNeedsLayoutByContainer(renderer.get());
+#else
     renderer->setChildNeedsLayout(MarkingBehavior::MarkOnlyThis);
+#endif
     renderer->layoutIfNeeded();
 }
 
@@ -144,7 +172,11 @@ void FlexIntegrationUtils::layoutFlexItemWithMainSize(FlexLayoutItem& flexLayout
     };
 
     if (shouldMarkFlexItemForLayout())
+#if PLATFORM(HAIKU)
+        summitSetChildNeedsLayoutByContainer(flexItem.get());
+#else
         flexItem->setChildNeedsLayout(MarkingBehavior::MarkOnlyThis);
+#endif
     else
         flexItem->markForPaginationRelayoutIfNeeded();
 
@@ -374,7 +406,11 @@ LayoutUnit FlexIntegrationUtils::computeBlockAxisContentSizeForFlexItem(const Fl
     // where we want percentages to be treated as auto. For flex-basis itself, this is not a problem because
     // by definition we have an indefinite flex basis here and thus percentages should not resolve.
     auto percentResolveDisableScope = FlexPercentResolveDisabler { flexBox().view().frameView().layoutContext(), renderer };
+#if PLATFORM(HAIKU)
+    summitSetChildNeedsLayoutByContainer(renderer.get());
+#else
     renderer->setChildNeedsLayout(MarkingBehavior::MarkOnlyThis);
+#endif
     renderer->layoutIfNeeded();
     flexLayoutState().setFlexItemHasCompletedLayout(renderer);
 
@@ -515,8 +551,24 @@ std::optional<LayoutUnit> FlexIntegrationUtils::computeMainAxisExtentForFlexItem
         // (Compare code in RenderBlock::computeIntrinsicLogicalWidthContributions)
         if (flexLayoutItem.style().logicalWidth().isAuto() && !FlexFormattingUtils::flexItemHasAspectRatio(flexItem)) {
             if (size.isMinContent()) {
+#if PLATFORM(HAIKU)
+                const bool trace = traceFlexWidth();
+                const bigtime_t startedAt = trace ? system_time() : 0;
+                const bool invalidBefore = trace && flexItem->hasInvalidContentLogicalWidths();
+                const bool needsLayoutBefore = trace && flexItem->needsLayout();
+#endif
                 invalidateFlexItemContentLogicalWidthsIfNeeded(flexLayoutItem);
-                return flexItem->minContentLogicalWidthContribution() - flexItem->borderAndPaddingLogicalWidth();
+                auto result = flexItem->minContentLogicalWidthContribution() - flexItem->borderAndPaddingLogicalWidth();
+#if PLATFORM(HAIKU)
+                if (trace) {
+                    auto elapsed = system_time() - startedAt;
+                    if (elapsed >= 500)
+                        std::fprintf(stderr, "Summit flex width: phase=minimum item=%p us=%lld invalidBefore=%d needsLayoutBefore=%d invalidAfter=%d width=%.1f\n",
+                            &flexItem.get(), static_cast<long long>(elapsed), invalidBefore, needsLayoutBefore,
+                            flexItem->hasInvalidContentLogicalWidths(), result.toFloat());
+                }
+#endif
+                return result;
             }
             if (size.isMaxContent()) {
                 invalidateFlexItemContentLogicalWidthsIfNeeded(flexLayoutItem);

@@ -31,7 +31,7 @@
 #define ARCH_LOONGARCH 0
 #define HAVE_NEON_ASM 0
 #define HAVE_NEON 1
-#if defined(__APPLE__) && ((TARGET_OS_IOS && !TARGET_OS_MACCATALYST) || TARGET_OS_TV || TARGET_OS_VISION)
+#if defined(__HAIKU__) || (defined(__APPLE__) && ((TARGET_OS_IOS && !TARGET_OS_MACCATALYST) || TARGET_OS_TV || TARGET_OS_VISION))
 #define HAVE_NEON_DOTPROD 0
 #define HAVE_NEON_I8MM 0
 #define HAVE_SVE 0

@@ -184,10 +184,38 @@ void ExtensionStyleSheets::updateInjectedStyleSheetCache() const
     });
 }
 
+#if PLATFORM(HAIKU)
+// In StyleDocumentScope.cpp.
+bool summitAddExtensionStyleSheetIncrementally(Document&, CSSStyleSheet&);
+#endif
+
 void ExtensionStyleSheets::injectPageSpecificUserStyleSheet(const UserStyleSheet& userStyleSheet)
 {
+#if PLATFORM(HAIKU)
+    // When the sheets already made from the injected style sheets are all the page's own, the new
+    // one comes after them: it is made alone and added, in place of making every sheet again.
+    bool newSheetComesLast = m_injectedStyleSheetCacheValid
+        && m_injectedUserStyleSheets.size() + m_injectedAuthorStyleSheets.size() == m_pageSpecificStyleSheets.size();
+    m_pageSpecificStyleSheets.append(userStyleSheet);
+    if (!newSheetComesLast && getenv("SUMMIT_EXTENSION_CSS_TRACE")) {
+        WTFLogAlways("Summit extension css: sheet restyles everything: the injected sheets %s (%u user, %u author sheets made, %u for the page)\n",
+            m_injectedStyleSheetCacheValid ? "are not all the page's own" : "were not made yet", static_cast<unsigned>(m_injectedUserStyleSheets.size()),
+            static_cast<unsigned>(m_injectedAuthorStyleSheets.size()), static_cast<unsigned>(m_pageSpecificStyleSheets.size()));
+    }
+    if (newSheetComesLast && userStyleSheet.level() == UserStyleLevel::User) {
+        Ref document = m_document;
+        Ref sheet = createExtensionsStyleSheet(document, userStyleSheet.url(), userStyleSheet.source(), userStyleSheet.level());
+        m_injectedStyleSheetToSource.set(sheet.copyRef(), userStyleSheet.source());
+        m_injectedUserStyleSheets.append(sheet.copyRef());
+        if (!summitAddExtensionStyleSheetIncrementally(document, sheet))
+            document->styleScope().didChangeExtensionStyleSheets();
+        return;
+    }
+    invalidateInjectedStyleSheetCache();
+#else
     m_pageSpecificStyleSheets.append(userStyleSheet);
     invalidateInjectedStyleSheetCache();
+#endif
 }
 
 void ExtensionStyleSheets::removePageSpecificUserStyleSheet(const UserStyleSheet& userStyleSheet)

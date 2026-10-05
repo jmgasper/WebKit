@@ -282,6 +282,9 @@ public:
     std::optional<WebCore::FloatBoxExtent> pendingObscuredContentInsets;
 #endif
     RunLoop::Timer tryCloseTimeoutTimer;
+#if PLATFORM(HAIKU)
+    uint64_t tryCloseRequestGeneration { 0 };
+#endif
     WebCore::Color underPageBackgroundColorOverride;
     WebCore::Color underlayColor;
     RunLoop::Timer updateReportedMediaCaptureStateTimer;

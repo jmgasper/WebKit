@@ -273,7 +273,8 @@
                   { "name": "wpe-linux-bot-39", "platform": "wpe" },
                   { "name": "wpe-linux-bot-40", "platform": "wpe" },
                   { "name": "wpe-linux-bot-41", "platform": "wpe" },
-                  { "name": "wpe-linux-bot-42", "platform": "wpe-rpi4-64bits-mesa-v254" }
+                  { "name": "wpe-linux-bot-42", "platform": "wpe-rpi4-64bits-mesa-v254" },
+                  { "name": "haiku-bot-1", "platform": "haiku" }
                 ],
 
   "builders":   [
@@ -747,6 +748,11 @@
                     "name": "WPE-Linux-ARM64-bit-Release-v254-BuildAndTest", "factory": "BuildAndTestAllPlusTest262WebDriverMVTFactory",
                     "platform": "wpe", "configuration": "release", "architectures": ["arm64"],
                     "workernames": ["wpe-linux-bot-41"]
+                  },
+                  {
+                    "name": "Haiku-64-bit-Release-Build", "factory": "BuildFactory",
+                    "platform": "haiku", "configuration": "release", "architectures": ["x86_64"],
+                    "workernames": ["haiku-bot-1"]
                   }
                 ],
 
@@ -768,7 +774,8 @@
                                      "WPE-Linux-64-bit-Release-Build",
                                      "WPE-Linux-64-bit-Release-GCC-Build",
                                      "WPE-Linux-64-bit-Release-Non-Unified-Build",
-                                     "WPE-Linux-ARM64-bit-Release-Build"]
+                                     "WPE-Linux-ARM64-bit-Release-Build",
+                                     "Haiku-64-bit-Release-Build"]
                   },
                   { "type": "AnyBranchScheduler", "name": "webkitglib-v252", "change_filter": "webkitglib_v252_filter", "treeStableTimer": 45.0,
                     "builderNames": ["WPE-Linux-ARM64-bit-Release-v252-BuildAndTest", "WPE-Linux-RPi4-64bits-Mesa-Release-v252-Perf-Build"]

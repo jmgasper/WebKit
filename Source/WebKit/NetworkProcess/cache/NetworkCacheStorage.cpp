@@ -506,6 +506,9 @@ void Storage::synchronize()
         size_t recordsSize = 0;
         unsigned recordCount = 0;
         unsigned blobCount = 0;
+#if OS(HAIKU)
+        size_t unsharedBlobsSize = 0;
+#endif
 
         String anyType;
         traverseRecordsFiles(recordsPathIsolatedCopy(), anyType, [&](const String& fileName, const String& hashString, const String& type, bool isBlob, const String& recordDirectoryPath) {
@@ -520,6 +523,9 @@ void Storage::synchronize()
             if (isBlob) {
                 ++blobCount;
                 blobFilter->add(hash);
+#if OS(HAIKU)
+                unsharedBlobsSize += FileSystem::fileSize(filePath).value_or(0);
+#endif
                 return;
             }
 
@@ -531,6 +537,9 @@ void Storage::synchronize()
         recordsSize = estimateRecordsSize(recordCount, blobCount);
 
         m_blobStorage.synchronize();
+#if OS(HAIKU)
+        m_blobStorage.setUnsharedBlobsSize(unsharedBlobsSize);
+#endif
 
         deleteEmptyRecordsDirectories(recordsPathIsolatedCopy());
 

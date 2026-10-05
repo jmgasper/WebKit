@@ -154,6 +154,10 @@
 #define PAS_OS_WINDOWS 1
 #endif
 
+#if defined(__HAIKU__)
+#define PAS_OS_HAIKU 1
+#endif
+
 #if PAS_OS(DARWIN)
 #if TARGET_OS_IOS
 #define PAS_OS_IOS 1

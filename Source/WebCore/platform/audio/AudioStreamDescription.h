@@ -35,6 +35,7 @@ struct PlatformDescription {
         None,
         CAAudioStreamBasicType,
         GStreamerAudioStreamDescription,
+        HaikuAudioStreamDescription,
     } type { None };
     Variant<std::nullptr_t, const AudioStreamBasicDescription*> description;
 };

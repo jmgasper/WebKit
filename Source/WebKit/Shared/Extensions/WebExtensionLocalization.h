@@ -51,7 +51,7 @@ public:
     RefPtr<JSON::Object> localizationJSON() { return m_localizationJSON; };
 
     RefPtr<JSON::Object> localizedJSONforJSON(RefPtr<JSON::Object>);
-    String localizedStringForKey(String key, Vector<String> placeholders = { });
+    String localizedStringForKey(String key, Vector<String> placeholders = { }, bool escapeLessThan = false);
     String localizedStringForString(String);
 
 private:

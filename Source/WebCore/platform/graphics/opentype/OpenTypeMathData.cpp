@@ -272,7 +272,9 @@ OpenTypeMathData::OpenTypeMathData(const FontPlatformData& font)
 {
 }
 #else
-OpenTypeMathData::OpenTypeMathData(const FontPlatformData&) = default;
+OpenTypeMathData::OpenTypeMathData(const FontPlatformData& font)
+{
+}
 #endif
 
 OpenTypeMathData::~OpenTypeMathData() = default;

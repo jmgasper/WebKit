@@ -58,7 +58,7 @@ void CryptoAlgorithmX25519::generateKey(const CryptoAlgorithmParameters&, bool e
     callback(WTF::move(pair));
 }
 
-#if !PLATFORM(COCOA) && !USE(GCRYPT)
+#if !PLATFORM(COCOA) && !USE(GCRYPT) && !USE(OPENSSL)
 std::optional<Vector<uint8_t>> CryptoAlgorithmX25519::platformDeriveBits(const CryptoKeyOKP&, const CryptoKeyOKP&)
 {
     return std::nullopt;

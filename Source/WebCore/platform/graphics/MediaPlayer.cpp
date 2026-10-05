@@ -112,6 +112,20 @@
 
 #endif // PLATFORM(COCOA)
 
+#if PLATFORM(HAIKU)
+#include "MediaPlayerPrivateHaiku.h"
+#if USE(COORDINATED_GRAPHICS)
+#include "CoordinatedPlatformLayerBufferProxy.h"
+#endif
+#if ENABLE(MEDIA_SOURCE)
+#include "MediaPlayerPrivateHaikuMSE.h"
+#endif
+#if ENABLE(MEDIA_STREAM)
+#include "MediaPlayerPrivateMediaStreamHaiku.h"
+#endif
+#define PlatformMediaEngineClassName MediaPlayerPrivate
+#endif
+
 #if USE(EXTERNAL_HOLEPUNCH)
 #include "MediaPlayerPrivateHolePunch.h"
 #endif
@@ -349,6 +363,16 @@ static void buildMediaEnginesVector() WTF_REQUIRES_LOCK(mediaEngineVectorLock)
         MediaPlayerPrivateGStreamerMSE::registerMediaEngine(addMediaEngine);
 #endif
     }
+#endif
+
+#if PLATFORM(HAIKU)
+    MediaPlayerPrivate::registerMediaEngine(addMediaEngine);
+#if ENABLE(MEDIA_SOURCE)
+    MediaPlayerPrivateHaikuMSE::registerMediaEngine(addMediaEngine);
+#endif
+#if ENABLE(MEDIA_STREAM)
+    MediaPlayerPrivateMediaStreamHaiku::registerMediaEngine(addMediaEngine);
+#endif
 #endif
 
 #if USE(MEDIA_FOUNDATION)
@@ -1824,8 +1848,9 @@ bool MediaPlayer::isGStreamerHolePunchingEnabled()
 {
     return protect(client())->isGStreamerHolePunchingEnabled();
 }
+#endif
 
-#if USE(COORDINATED_GRAPHICS)
+#if (USE(GSTREAMER) || PLATFORM(HAIKU)) && USE(COORDINATED_GRAPHICS)
 void MediaPlayer::setPlatformLayerBufferProxy(Ref<CoordinatedPlatformLayerBufferProxy>&& proxy)
 {
     if (m_private)
@@ -1836,7 +1861,6 @@ RefPtr<CoordinatedPlatformLayerBufferProxy> MediaPlayer::platformLayerBufferProx
 {
     return m_private ? protect(m_private)->platformLayerBufferProxy() : nullptr;
 }
-#endif
 #endif
 
 String MediaPlayer::languageOfPrimaryAudioTrack() const

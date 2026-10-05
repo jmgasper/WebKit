@@ -84,7 +84,154 @@
 #include <wtf/cocoa/RuntimeApplicationChecksCocoa.h>
 #endif
 
+#if PLATFORM(HAIKU)
+#include "CSSSerializationContext.h"
+#include "CSSValuePool.h"
+#include "EventLoop.h"
+#include "HTMLNames.h"
+#include "StyleExtractor.h"
+#include "StyleExtractorState.h"
+#include "TypedElementDescendantIteratorInlines.h"
+#include <wtf/WeakHashMap.h>
+#include <wtf/WeakHashSet.h>
+#include <wtf/text/StringBuilder.h>
+#endif
+
 namespace WebCore {
+
+#if PLATFORM(HAIKU)
+// Elements a style resolution left without style because a style sheet was
+// still loading (Document::hasNodesWithMissingStyle()). Upstream then
+// restyles the whole document at every later style sheet change, and when a
+// script asks for style or layout while a sheet loads ("This should just
+// invalidate elements with missing styles"). Wikipedia's ResourceLoader adds
+// module styles while the page runs: each one restyled the article from
+// scratch, 300 to 400 ms on a Raspberry Pi 4. These elements are remembered
+// instead, and only their subtrees are invalidated besides what the new
+// sheets match, unless more than 4096 were left. A full rebuild forgets them.
+// SUMMIT_MISSING_STYLE_INVALIDATION=all restyles everything as before;
+// =verify also restyles everything afterwards and reports differences.
+struct SummitMissingStyleHaiku {
+    WTF_DEPRECATED_MAKE_STRUCT_FAST_ALLOCATED(SummitMissingStyleHaiku);
+    WeakHashSet<Element, WeakPtrImplWithEventTargetData> elements;
+    unsigned noted { 0 };
+    bool overflow { false };
+};
+
+static WeakHashMap<Document, std::unique_ptr<SummitMissingStyleHaiku>, WeakPtrImplWithEventTargetData>& summitMissingStyleTableHaiku()
+{
+    static NeverDestroyed<WeakHashMap<Document, std::unique_ptr<SummitMissingStyleHaiku>, WeakPtrImplWithEventTargetData>> table;
+    return table;
+}
+
+static const char* summitMissingStyleModeHaiku()
+{
+    static const char* mode = [] {
+        const char* value = getenv("SUMMIT_MISSING_STYLE_INVALIDATION");
+        return value ? value : "";
+    }();
+    return mode;
+}
+
+void summitNoteElementWithMissingStyleHaiku(Document& document, Element& element)
+{
+    auto& entry = summitMissingStyleTableHaiku().ensure(document, [] { return makeUnique<SummitMissingStyleHaiku>(); }).iterator->value;
+    if (entry->overflow)
+        return;
+    if (++entry->noted > 4096) {
+        entry->overflow = true;
+        entry->elements.clear();
+        return;
+    }
+    entry->elements.add(element);
+}
+
+void summitForgetElementsWithMissingStyleHaiku(Document& document)
+{
+    summitMissingStyleTableHaiku().remove(document);
+}
+
+void summitVerifyStyleInvalidationHaiku(Document&);
+
+// False when the caller has to invalidate everything as before.
+bool summitInvalidateElementsWithMissingStyleHaiku(Document& document)
+{
+    if (!strcmp(summitMissingStyleModeHaiku(), "all"))
+        return false;
+    auto& table = summitMissingStyleTableHaiku();
+    auto iterator = table.find(document);
+    if (iterator == table.end())
+        return true;
+    if (iterator->value->overflow)
+        return false;
+    Vector<Ref<Element>> elements;
+    for (auto& element : iterator->value->elements)
+        elements.append(element);
+    iterator->value->elements.clear();
+    iterator->value->noted = 0;
+    for (auto& element : elements) {
+        if (&element->document() == &document && element->isConnected())
+            element->invalidateStyleForSubtree();
+    }
+    if (!strcmp(summitMissingStyleModeHaiku(), "verify"))
+        summitVerifyStyleInvalidationHaiku(document);
+    return true;
+}
+
+// Restyles everything once the targeted invalidation has been resolved, and
+// reports elements whose style came out different.
+void summitVerifyStyleInvalidationHaiku(Document& document)
+{
+    document.eventLoop().queueTask(TaskSource::InternalAsyncTask, [weakDocument = WeakPtr { document }] {
+        RefPtr document = weakDocument.get();
+        if (!document || !document->renderView())
+            return;
+        static constexpr CSSPropertyID properties[] = { CSSPropertyDisplay, CSSPropertyVisibility, CSSPropertyOpacity, CSSPropertyPosition,
+            CSSPropertyFloat, CSSPropertyColor, CSSPropertyBackgroundColor, CSSPropertyWidth, CSSPropertyHeight, CSSPropertyMaxHeight,
+            CSSPropertyOverflowX, CSSPropertyPointerEvents, CSSPropertyFontSize, CSSPropertyZIndex, CSSPropertyTop, CSSPropertyLeft,
+            CSSPropertyMarginTop, CSSPropertyPaddingTop, CSSPropertyBorderTopWidth, CSSPropertyTransform, CSSPropertyFilter };
+        auto valuesOf = [&](Element& element, const Style::ComputedStyle& style) {
+            Style::Extractor extractor(&element);
+            StringBuilder values;
+            for (auto property : properties)
+                values.append(extractor.propertyValueSerializationInStyle(style, property, CSS::defaultSerializationContext(), CSSValuePool::singleton(), nullptr, Style::ExtractorState::PropertyValueType::Computed), ';');
+            return values.toString();
+        };
+        document->updateStyleIfNeeded();
+        HashMap<Ref<Element>, String> targeted;
+        for (Ref element : descendantsOfType<Element>(*document)) {
+            if (auto* style = element->existingComputedStyle())
+                targeted.add(element, valuesOf(element, *style));
+        }
+        document->scheduleFullStyleRebuild();
+        document->updateStyleIfNeeded();
+        unsigned elements = 0;
+        unsigned different = 0;
+        unsigned missing = 0;
+        for (Ref element : descendantsOfType<Element>(*document)) {
+            auto* style = element->existingComputedStyle();
+            if (!style)
+                continue;
+            ++elements;
+            auto found = targeted.find(element);
+            if (found == targeted.end()) {
+                ++missing;
+                continue;
+            }
+            auto values = valuesOf(element, *style);
+            if (found->value == values)
+                continue;
+            if (++different <= 5) {
+                WTFLogAlways("Summit style invalidation MISMATCH: <%s class=\"%s\"> targeted %s full %s\n", element->localName().string().utf8().legacyCStringPointer(),
+                    element->getAttribute(HTMLNames::classAttr).string().left(60).utf8().legacyCStringPointer(),
+                    found->value.utf8().legacyCStringPointer(), values.utf8().legacyCStringPointer());
+            }
+        }
+        WTFLogAlways("Summit style invalidation: verified %u elements, %u differ, %u had no style before the full restyle, url %s\n", elements, different, missing,
+            document->url().string().left(80).utf8().legacyCStringPointer());
+    });
+}
+#endif
 
 namespace Style {
 
@@ -326,6 +473,9 @@ auto TreeResolver::resolveElement(Element& element, const Style::ComputedStyle* 
 {
     if (m_didSeePendingStylesheet && !element.renderOrDisplayContentsStyle() && !m_document->isIgnoringPendingStylesheets()) {
         m_document->setHasNodesWithMissingStyle();
+#if PLATFORM(HAIKU)
+        summitNoteElementWithMissingStyleHaiku(m_document, element);
+#endif
         return { };
     }
 

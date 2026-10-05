@@ -80,8 +80,14 @@ HashMap<String, RTCNetwork> NetworkRTCMonitor::gatherNetworkMap()
         if (iterator->ifa_addr->sa_family != AF_INET && iterator->ifa_addr->sa_family != AF_INET6)
             continue;
 
+#if OS(HAIKU)
+        // Haiku says IFF_LINK for an interface with a link.
+        if (!(iterator->ifa_flags & IFF_LINK))
+            continue;
+#else
         if (!(iterator->ifa_flags & IFF_RUNNING))
             continue;
+#endif
 
         auto address = addressFromInterface(*iterator);
         if (!address)

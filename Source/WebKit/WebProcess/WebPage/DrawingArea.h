@@ -169,6 +169,16 @@ public:
     virtual void updateGeometryWC(uint64_t, WebCore::IntSize, float deviceScaleFactor, float intrinsicDeviceScaleFactor) { };
 #endif
 
+#if PLATFORM(HAIKU)
+    // DrawingAreaHaiku's own protocol: the UI process asks it to resize, and
+    // tells it when a frame bitmap has reached the screen. A coordinated
+    // drawing area publishes frames through AcceleratedSurface instead and
+    // hears about neither, so these answer for the drawing areas that do not
+    // implement them rather than being pure.
+    virtual void updateGeometryHaiku(uint64_t, const WebCore::IntSize&, float, CompletionHandler<void()>&& completionHandler) { completionHandler(); }
+    virtual void didPresentBitmapHaiku(uint64_t) { }
+#endif
+
 #if USE(COORDINATED_GRAPHICS) || USE(TEXTURE_MAPPER)
     virtual void updateGeometry(const WebCore::IntSize&, CompletionHandler<void()>&&) = 0;
     virtual bool enterAcceleratedCompositingModeIfNeeded() = 0;
@@ -185,6 +195,11 @@ public:
 
 #if PLATFORM(GTK) || PLATFORM(WPE)
     virtual void dispatchPendingCallbacksAfterEnsuringDrawing() = 0;
+#elif PLATFORM(HAIKU)
+    // The coordinated drawing area keeps presentation callbacks and overrides
+    // this. DrawingAreaHaiku has none, and the message that would ask for them
+    // is not declared for this port either.
+    virtual void dispatchPendingCallbacksAfterEnsuringDrawing() { }
 #endif
 
 #if ENABLE(DAMAGE_TRACKING)
@@ -245,6 +260,8 @@ private:
 
 #if PLATFORM(COCOA) || PLATFORM(GTK) || PLATFORM(WPE)
     virtual void dispatchAfterEnsuringDrawing(IPC::AsyncReplyID) = 0;
+#elif PLATFORM(HAIKU)
+    virtual void dispatchAfterEnsuringDrawing(IPC::AsyncReplyID) { }
 #endif
 
 #if PLATFORM(COCOA) || PLATFORM(GTK)

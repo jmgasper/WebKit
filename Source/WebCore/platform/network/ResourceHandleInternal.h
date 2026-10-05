@@ -20,7 +20,7 @@
  * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
  * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #pragma once
@@ -32,6 +32,18 @@
 #include "ResourceRequest.h"
 #include "Timer.h"
 #include <wtf/MonotonicTime.h>
+
+#if PLATFORM(HAIKU) && !USE(CURL)
+#include <String.h>
+#include "BUrlProtocolHandler.h"
+#endif
+
+#if USE(CURL)
+#include "CurlRequest.h"
+#include "SynchronousLoaderClient.h"
+#include <wtf/MessageQueue.h>
+#include <wtf/MonotonicTime.h>
+#endif
 
 #if PLATFORM(COCOA)
 #include <wtf/WeakObjCPtr.h>
@@ -71,7 +83,7 @@ public:
         m_password = url.password();
         m_firstRequest.removeCredentials();
     }
-    
+
     ~ResourceHandleInternal();
 
     ResourceHandleClient* client() { return m_client; }
@@ -86,7 +98,7 @@ public:
     // Suggested credentials for the current redirection step.
     String m_user;
     String m_password;
-    
+
     Credential m_initialCredential;
     
 #if PLATFORM(COCOA)
@@ -97,6 +109,13 @@ public:
     // We need to keep a reference to the original challenge to be able to cancel it.
     // It is almost identical to m_currentWebChallenge.nsURLAuthenticationChallenge(), but has a different sender.
     WeakObjCPtr<NSURLAuthenticationChallenge> m_currentMacChallenge;
+#endif
+#if USE(CURL)
+    RefPtr<CurlResourceHandleDelegate> m_delegate;
+
+    unsigned m_authFailureCount { 0 };
+    RefPtr<CurlRequest> m_curlRequest;
+    RefPtr<SynchronousLoaderMessageQueue> m_messageQueue;
 #endif
     Box<NetworkLoadMetrics> m_networkLoadMetrics;
     MonotonicTime m_startTime;
@@ -116,6 +135,16 @@ public:
     bool m_shouldContentSniff;
     bool m_failsTAOCheck { false };
     bool m_hasCrossOriginRedirect { false };
+
+#if PLATFORM(HAIKU) && !USE(CURL)
+    RefPtr<BUrlProtocolHandler> m_urlrequest;
+    BString m_url;
+#endif
+
+#if USE(CURL)
+    bool m_cancelled { false };
+    bool m_addedCacheValidationHeaders { false };
+#endif
     bool m_isMainFrameNavigation { false };
 };
 

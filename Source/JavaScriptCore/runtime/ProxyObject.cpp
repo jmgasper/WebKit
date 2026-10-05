@@ -618,7 +618,18 @@ JSC_DEFINE_HOST_FUNCTION(performProxyCall, (JSGlobalObject* globalObject, CallFr
 
     JSObject* handler = uncheckedDowncast<JSObject>(handlerValue);
     CallData callData;
+#if PLATFORM(HAIKU)
+    // The name was made an atom string again on every call: a quarter of a
+    // call through a Proxy, which content blockers put around JSON.parse,
+    // fetch and the like (issue #22). Atoms belong to their thread's table,
+    // so each thread keeps its own (and a reference, so it stays an atom).
+    static thread_local AtomStringImpl* applyAtom;
+    if (!applyAtom) [[unlikely]]
+        applyAtom = makeIdentifier(vm, "apply"_s).releaseImpl().leakRef();
+    JSValue applyMethod = handler->getMethod(globalObject, callData, Identifier::fromString(vm, applyAtom), "'apply' property of a Proxy's handler should be callable"_s);
+#else
     JSValue applyMethod = handler->getMethod(globalObject, callData, makeIdentifier(vm, "apply"_s), "'apply' property of a Proxy's handler should be callable"_s);
+#endif
     RETURN_IF_EXCEPTION(scope, encodedJSValue());
     JSObject* target = proxy->target();
     if (applyMethod.isUndefined()) {

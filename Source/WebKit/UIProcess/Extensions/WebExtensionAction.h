@@ -103,6 +103,13 @@ public:
 
     String badgeText() const;
     void setBadgeText(String);
+#if PLATFORM(HAIKU)
+    // Packed 0xRRGGBBAA; null setters restore scope inheritance.
+    uint32_t badgeBackgroundColor() const;
+    uint32_t badgeTextColor() const;
+    void setBadgeBackgroundColor(std::optional<uint32_t>);
+    void setBadgeTextColor(std::optional<uint32_t>);
+#endif
 
     bool hasUnreadBadgeText() const;
     void setHasUnreadBadgeText(bool);
@@ -153,6 +160,10 @@ public:
 #endif
 
 private:
+#if PLATFORM(HAIKU)
+    friend class ExtensionActionPopupHaiku;
+    std::optional<uint32_t> customBadgeTextColor() const;
+#endif
     RefPtr<WebExtensionAction> fallbackAction() const;
 
     void clearIconCache();
@@ -191,6 +202,10 @@ private:
 #endif
     String m_customLabel;
     String m_customBadgeText;
+#if PLATFORM(HAIKU)
+    std::optional<uint32_t> m_customBadgeBackgroundColor;
+    std::optional<uint32_t> m_customBadgeTextColor;
+#endif
     ssize_t m_blockedResourceCount { 0 };
     std::optional<bool> m_customEnabled;
     std::optional<bool> m_hasUnreadBadgeText;

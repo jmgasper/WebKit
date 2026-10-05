@@ -69,6 +69,7 @@ dictionary WebExtensionWebRequestDetails {
 
 [
     Conditional=WK_WEB_EXTENSIONS,
+    UseCPPAPI,
     MainWorldOnly,
     ReturnsPromiseWhenCallbackIsOmitted,
 ] interface WebExtensionAPIWebRequest {
@@ -82,5 +83,19 @@ dictionary WebExtensionWebRequestDetails {
     readonly attribute WebExtensionAPIWebRequestEvent onResponseStarted;
     readonly attribute WebExtensionAPIWebRequestEvent onCompleted;
     readonly attribute WebExtensionAPIWebRequestEvent onErrorOccurred;
+
+    [Platform=HAIKU] void handlerBehaviorChanged([Optional, CallbackHandler] function callback);
+
+    // Chrome's extraInfoSpec enum objects, e.g. OnHeadersReceivedOptions.EXTRA_HEADERS.
+    [ImplementedAs=onBeforeRequestOptions] readonly attribute any OnBeforeRequestOptions;
+    [ImplementedAs=onBeforeSendHeadersOptions] readonly attribute any OnBeforeSendHeadersOptions;
+    [ImplementedAs=onSendHeadersOptions] readonly attribute any OnSendHeadersOptions;
+    [ImplementedAs=onHeadersReceivedOptions] readonly attribute any OnHeadersReceivedOptions;
+    [ImplementedAs=onAuthRequiredOptions] readonly attribute any OnAuthRequiredOptions;
+    [ImplementedAs=onResponseStartedOptions] readonly attribute any OnResponseStartedOptions;
+    [ImplementedAs=onBeforeRedirectOptions] readonly attribute any OnBeforeRedirectOptions;
+    [ImplementedAs=onCompletedOptions] readonly attribute any OnCompletedOptions;
+    [ImplementedAs=onErrorOccurredOptions] readonly attribute any OnErrorOccurredOptions;
+    [ImplementedAs=resourceTypes] readonly attribute any ResourceType;
 
 };

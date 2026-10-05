@@ -223,12 +223,15 @@
 #include "WorkerGlobalScope.h"
 #include "WorkerOrWorkletScriptController.h"
 #include <JavaScriptCore/VM.h>
+#include <array>
+#include <cstdlib>
 #include <ranges>
 #include <wtf/Borrow.h>
 #include <wtf/FileSystem.h>
 #include <wtf/StdLibExtras.h>
 #include <wtf/SystemTracing.h>
 #include <wtf/TZoneMallocInlines.h>
+#include <wtf/WallTime.h>
 #include <wtf/text/Base64.h>
 #include <wtf/text/MakeString.h>
 #include <wtf/text/StringHash.h>
@@ -2353,6 +2356,97 @@ void Page::syncLocalFrameInfoToRemote()
     });
 }
 
+#if PLATFORM(HAIKU)
+class SummitPageUpdateTrace {
+public:
+    enum class Phase : uint8_t {
+        InitialLayout,
+        Restore,
+        Prepare,
+        Reveal,
+        Autofocus,
+        Resize,
+        Scroll,
+        MediaQuery,
+        Visibility,
+        Animations,
+        Fullscreen,
+        Immersive,
+        Video,
+        AnimationFrame,
+        Caret,
+        SecondLayout,
+        ResizeObservations,
+        ScrollTimelines,
+        Focus,
+        Relevancy,
+        ViewTransitions,
+        Intersections,
+        Images,
+        Validation,
+        SnapshottedScroll,
+        Finish,
+        FinalLayout,
+        AfterRendering,
+        Count,
+    };
+
+    SummitPageUpdateTrace()
+    {
+        static char mode = [] {
+            const char* value = std::getenv("SUMMIT_PAGE_UPDATE_TRACE");
+            return value && (value[0] == '1' || value[0] == '2' || value[0] == '3') && !value[1] ? value[0] : '\0';
+        }();
+        if (!mode)
+            return;
+        m_enabled = true;
+        m_verbose = mode == '3';
+        m_start = m_last = MonotonicTime::now();
+    }
+
+    void mark(Phase phase)
+    {
+        if (!m_enabled)
+            return;
+        auto now = MonotonicTime::now();
+        m_durations[static_cast<size_t>(phase)] += now - m_last;
+        m_last = now;
+    }
+
+    void report(const Page* page)
+    {
+        if (!m_enabled)
+            return;
+        auto total = MonotonicTime::now() - m_start;
+        if (total < (m_verbose ? 2_ms : 33_ms))
+            return;
+        auto milliseconds = [&](Phase phase) {
+            return m_durations[static_cast<size_t>(phase)].milliseconds();
+        };
+        WTFLogAlways("Summit page update: wall=%.3f page=%p total=%.1f initialLayout=%.1f restore=%.1f prepare=%.1f reveal=%.1f autofocus=%.1f resize=%.1f scroll=%.1f mediaQuery=%.1f visibility=%.1f animations=%.1f fullscreen=%.1f immersive=%.1f video=%.1f animationFrame=%.1f caret=%.1f secondLayout=%.1f resizeObservations=%.1f scrollTimelines=%.1f focus=%.1f relevancy=%.1f viewTransitions=%.1f intersections=%.1f images=%.1f validation=%.1f snapshottedScroll=%.1f finish=%.1f finalLayout=%.1f afterRendering=%.1f\n",
+            WallTime::now().secondsSinceEpoch().milliseconds(), page, total.milliseconds(), milliseconds(Phase::InitialLayout), milliseconds(Phase::Restore), milliseconds(Phase::Prepare),
+            milliseconds(Phase::Reveal), milliseconds(Phase::Autofocus), milliseconds(Phase::Resize), milliseconds(Phase::Scroll),
+            milliseconds(Phase::MediaQuery), milliseconds(Phase::Visibility), milliseconds(Phase::Animations), milliseconds(Phase::Fullscreen),
+            milliseconds(Phase::Immersive), milliseconds(Phase::Video), milliseconds(Phase::AnimationFrame), milliseconds(Phase::Caret),
+            milliseconds(Phase::SecondLayout), milliseconds(Phase::ResizeObservations), milliseconds(Phase::ScrollTimelines), milliseconds(Phase::Focus),
+            milliseconds(Phase::Relevancy), milliseconds(Phase::ViewTransitions), milliseconds(Phase::Intersections), milliseconds(Phase::Images),
+            milliseconds(Phase::Validation), milliseconds(Phase::SnapshottedScroll), milliseconds(Phase::Finish), milliseconds(Phase::FinalLayout),
+            milliseconds(Phase::AfterRendering));
+    }
+
+private:
+    bool m_enabled { false };
+    bool m_verbose { false };
+    MonotonicTime m_start;
+    MonotonicTime m_last;
+    std::array<Seconds, static_cast<size_t>(Phase::Count)> m_durations { };
+};
+
+#define SUMMIT_PAGE_UPDATE_TRACE_MARK(phase) pageUpdateTrace.mark(SummitPageUpdateTrace::Phase::phase)
+#else
+#define SUMMIT_PAGE_UPDATE_TRACE_MARK(phase)
+#endif
+
 // https://html.spec.whatwg.org/multipage/webappapis.html#update-the-rendering
 void Page::updateRendering()
 {
@@ -2371,6 +2465,9 @@ void Page::updateRendering()
         return;
     }
 
+#if PLATFORM(HAIKU)
+    SummitPageUpdateTrace pageUpdateTrace;
+#endif
     m_lastRenderingUpdateTimestamp = MonotonicTime::now();
     m_renderingUpdateIsScheduled = false;
 
@@ -2379,6 +2476,7 @@ void Page::updateRendering()
         tracePoint(RenderingUpdateStart);
 
     layoutIfNeeded();
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(InitialLayout);
 
     auto runProcessingStep = [&](RenderingUpdateStep step, NOESCAPE const Function<void(Document&)>& perDocumentFunction) {
         m_renderingUpdateRemainingSteps.last().remove(step);
@@ -2389,6 +2487,7 @@ void Page::updateRendering()
         if (RefPtr frame = document.frame())
             frame->loader().restoreScrollPositionAndViewStateNowIfNeeded();
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Restore);
 
 #if ENABLE(ASYNC_SCROLLING)
     if (RefPtr scrollingCoordinator = this->scrollingCoordinator())
@@ -2401,37 +2500,45 @@ void Page::updateRendering()
         protect(document.window())->freezeNowTimestamp();
         initialDocuments.append(document);
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Prepare);
 
     runProcessingStep(RenderingUpdateStep::Reveal, [] (Document& document) {
         // FIXME: Bug 278193 - Hidden docs should already be excluded.
         if (document.visibilityState() != VisibilityState::Hidden)
             document.reveal();
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Reveal);
 
     runProcessingStep(RenderingUpdateStep::FlushAutofocusCandidates, [] (Document& document) {
         if (document.isTopDocument())
             document.flushAutofocusCandidates();
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Autofocus);
 
     runProcessingStep(RenderingUpdateStep::Resize, [] (Document& document) {
         document.runResizeSteps();
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Resize);
 
     runProcessingStep(RenderingUpdateStep::Scroll, [] (Document& document) {
         document.runScrollSteps();
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Scroll);
 
     runProcessingStep(RenderingUpdateStep::MediaQueryEvaluation, [] (Document& document) {
         document.evaluateMediaQueriesAndReportChanges();
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(MediaQuery);
 
     runProcessingStep(RenderingUpdateStep::AdjustVisibility, [&] (auto& document) {
         m_elementTargetingController->adjustVisibilityInRepeatedlyTargetedRegions(document);
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Visibility);
 
     runProcessingStep(RenderingUpdateStep::Animations, [] (Document& document) {
         document.updateAnimationsAndSendEvents();
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Animations);
 
 #if ENABLE(FULLSCREEN_API)
     runProcessingStep(RenderingUpdateStep::Fullscreen, [] (Document& document) {
@@ -2440,35 +2547,42 @@ void Page::updateRendering()
 #else
     m_renderingUpdateRemainingSteps.last().remove(RenderingUpdateStep::Fullscreen);
 #endif
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Fullscreen);
 
 #if ENABLE(MODEL_ELEMENT_IMMERSIVE)
     runProcessingStep(RenderingUpdateStep::Immersive, [] (Document& document) {
         protect(document.immersive())->dispatchPendingEvents();
     });
 #endif
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Immersive);
 
     runProcessingStep(RenderingUpdateStep::VideoFrameCallbacks, [] (Document& document) {
         document.serviceRequestVideoFrameCallbacks();
     });
-
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Video);
     runProcessingStep(RenderingUpdateStep::AnimationFrameCallbacks, [] (Document& document) {
         document.serviceRequestAnimationFrameCallbacks();
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(AnimationFrame);
 
     runProcessingStep(RenderingUpdateStep::CaretAnimation, [] (Document& document) {
         document.serviceCaretAnimation();
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Caret);
 
     layoutIfNeeded();
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(SecondLayout);
 
     runProcessingStep(RenderingUpdateStep::ResizeObservations, [&] (Document& document) {
         document.updateResizeObservations(*this);
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(ResizeObservations);
 
     // https://drafts.csswg.org/scroll-animations-1/#event-loop
     forEachDocument([] (Document& document) {
         document.updateStaleScrollTimelines();
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(ScrollTimelines);
 
     runProcessingStep(RenderingUpdateStep::FocusFixup, [&] (Document& document) {
         if (RefPtr focusedElement = document.focusedElement()) {
@@ -2478,18 +2592,22 @@ void Page::updateRendering()
             }
         }
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Focus);
 
     runProcessingStep(RenderingUpdateStep::UpdateContentRelevancy, [] (Document& document) {
         document.updateRelevancyOfContentVisibilityElements();
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Relevancy);
 
     runProcessingStep(RenderingUpdateStep::PerformPendingViewTransitions, [] (Document& document) {
         document.performPendingViewTransitions();
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(ViewTransitions);
 
     runProcessingStep(RenderingUpdateStep::IntersectionObservations, [] (Document& document) {
         document.updateIntersectionObservers();
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Intersections);
 
     runProcessingStep(RenderingUpdateStep::Images, [] (Document& document) {
         for (auto& image : protect(document.cachedResourceLoader())->allCachedSVGImages()) {
@@ -2497,15 +2615,18 @@ void Page::updateRendering()
                 page->isolatedUpdateRendering();
         }
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Images);
 
     runProcessingStep(RenderingUpdateStep::UpdateValidationMessagePositions, [] (Document& document) {
         document.adjustValidationMessagePositions();
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Validation);
 
     runProcessingStep(RenderingUpdateStep::SnapshottedScrollOffsets, [&] (Document& document) {
         if (CheckedPtr renderView = document.renderView())
             Style::AnchorPositionEvaluator::updateScrollAdjustments(*renderView);
     });
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(SnapshottedScroll);
 
     for (auto& document : initialDocuments) {
         if (document && document->window())
@@ -2519,13 +2640,21 @@ void Page::updateRendering()
 
     if (m_isTrackingRenderingUpdates)
         ++m_renderingUpdateCount;
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(Finish);
 
     layoutIfNeeded(LayoutOptions::UpdateCompositingLayers);
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(FinalLayout);
     doAfterUpdateRendering();
 
     if (!isSVGImagePage)
         tracePoint(RenderingUpdateEnd);
+    SUMMIT_PAGE_UPDATE_TRACE_MARK(AfterRendering);
+#if PLATFORM(HAIKU)
+    pageUpdateTrace.report(this);
+#endif
 }
+
+#undef SUMMIT_PAGE_UPDATE_TRACE_MARK
 
 void Page::isolatedUpdateRendering()
 {

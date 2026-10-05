@@ -1,0 +1,22 @@
+# Copyright (C) 2026 KunanyiOS contributors. SPDX-License-Identifier: BSD-2-Clause
+
+#if USE(HAIKU_GRAPHICS)
+header: <WebCore/FontPlatformData.h>
+[CustomHeader] struct WebCore::FontPlatformSerializedData {
+    String family;
+    String style;
+    float shear;
+    float rotation;
+    float falseBoldWidth;
+    uint32_t flags;
+    uint16_t face;
+    uint8_t spacing;
+    uint8_t encoding;
+};
+
+[CustomHeader] struct WebCore::CustomFontCreationData {
+    Vector<uint8_t> fontFaceData;
+    String itemInCollection;
+    WebCore::FontPlatformSerializedData font;
+};
+#endif

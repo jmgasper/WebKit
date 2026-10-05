@@ -45,6 +45,13 @@
 #include "WebExtensionAPIObject.h"
 #include "WebExtensionAPIOffscreen.h"
 #include "WebExtensionAPIPermissions.h"
+#if PLATFORM(HAIKU)
+#include "WebExtensionAPIDownloads.h"
+#include "WebExtensionAPIIdle.h"
+#include "WebExtensionAPIManagement.h"
+#include "WebExtensionAPINotificationsHaiku.h"
+#include "WebExtensionAPIPrivacy.h"
+#endif
 #include "WebExtensionAPIRuntime.h"
 #include "WebExtensionAPIScripting.h"
 #include "WebExtensionAPISidePanel.h"
@@ -66,33 +73,38 @@ class WebExtensionAPINamespace : public WebExtensionAPIObject, public JSWebExten
 
 public:
     bool isPropertyAllowed(const ASCIILiteral& propertyName, WebPage*);
-#if PLATFORM(COCOA)
     WebExtensionAPIAction& action();
-#endif
     WebExtensionAPIAlarms& alarms();
-#if PLATFORM(COCOA)
-    WebExtensionAPIAction& browserAction() { return action(); }
     WebExtensionAPICommands& commands();
+    WebExtensionAPIAction& browserAction() { return action(); }
+    WebExtensionAPIAction& pageAction() { return action(); }
+    WebExtensionAPILocalization& i18n();
     WebExtensionAPICookies& cookies();
+    WebExtensionAPIMenus& menus();
     WebExtensionAPIMenus& contextMenus() { return menus(); }
+    WebExtensionAPIExtension& extension();
     WebExtensionAPIDeclarativeNetRequest& declarativeNetRequest();
+#if PLATFORM(COCOA)
 #if ENABLE(INSPECTOR_EXTENSIONS)
     WebExtensionAPIDevTools& devtools();
 #endif
     WebExtensionAPIDOM& dom();
-    WebExtensionAPIExtension& extension();
-    WebExtensionAPILocalization& i18n();
-    WebExtensionAPIMenus& menus();
     WebExtensionAPINotifications& notifications();
+#endif
 #if ENABLE(WK_WEB_EXTENSIONS_OFFSCREEN)
     WebExtensionAPIOffscreen& offscreen();
 #endif
-    WebExtensionAPIAction& pageAction() { return action(); }
     WebExtensionAPIPermissions& permissions();
+#if PLATFORM(HAIKU)
+    WebExtensionAPIDownloads& downloads();
+    WebExtensionAPIIdle& idle();
+    WebExtensionAPIManagement& management();
+    WebExtensionAPINotificationsHaiku& notificationsHaiku();
+    WebExtensionAPIPrivacy& privacy();
 #endif
     WebExtensionAPIRuntime& runtime() const final;
-#if PLATFORM(COCOA)
     WebExtensionAPIScripting& scripting();
+#if PLATFORM(COCOA)
 #if ENABLE(WK_WEB_EXTENSIONS_SIDEBAR)
     WebExtensionAPISidePanel& sidePanel();
     WebExtensionAPISidebarAction& sidebarAction();
@@ -100,15 +112,13 @@ public:
 #if ENABLE(WK_WEB_EXTENSIONS_BOOKMARKS)
     WebExtensionAPIBookmarks& bookmarks();
 #endif
-    WebExtensionAPIStorage& storage();
+#endif
     WebExtensionAPITabs& tabs();
-#endif
+    WebExtensionAPIStorage& storage();
     WebExtensionAPITest& test();
-#if PLATFORM(COCOA)
-    WebExtensionAPIWindows& windows();
-    WebExtensionAPIWebNavigation& webNavigation();
     WebExtensionAPIWebRequest& webRequest();
-#endif
+    WebExtensionAPIWebNavigation& webNavigation();
+    WebExtensionAPIWindows& windows();
 
 private:
     RefPtr<WebExtensionAPIAction> m_action;
@@ -128,6 +138,13 @@ private:
     RefPtr<WebExtensionAPIOffscreen> m_offscreen;
 #endif
     RefPtr<WebExtensionAPIPermissions> m_permissions;
+#if PLATFORM(HAIKU)
+    RefPtr<WebExtensionAPIDownloads> m_downloads;
+    RefPtr<WebExtensionAPIIdle> m_idle;
+    RefPtr<WebExtensionAPIManagement> m_management;
+    RefPtr<WebExtensionAPINotificationsHaiku> m_notificationsHaiku;
+    RefPtr<WebExtensionAPIPrivacy> m_privacy;
+#endif
     mutable RefPtr<WebExtensionAPIRuntime> m_runtime;
     RefPtr<WebExtensionAPIScripting> m_scripting;
 #if ENABLE(WK_WEB_EXTENSIONS_SIDEBAR)

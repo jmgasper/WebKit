@@ -405,7 +405,7 @@ void Coder<WebCore::CertificateInfo>::encodeForPersistence(Encoder& encoder, con
     auto& certificateChain = certificateInfo.certificateChain();
 
     encoder << certificateInfo.verificationError();
-    encoder << certificateChain.size();
+    encoder << (uint64_t)certificateChain.size();
     for (auto& certificate : certificateChain)
         encoder << certificate;
 }
@@ -417,7 +417,7 @@ std::optional<WebCore::CertificateInfo> Coder<WebCore::CertificateInfo>::decodeF
     if (!verificationError)
         return std::nullopt;
 
-    std::optional<size_t> numOfCerts;
+    std::optional<uint64_t> numOfCerts;
     decoder >> numOfCerts;
     if (!numOfCerts)
         return std::nullopt;
@@ -535,7 +535,7 @@ std::optional<WebCore::CertificateInfo> Coder<WebCore::CertificateInfo>::decodeF
     return certificateInfo;
 }
 
-#elif PLATFORM(WIN)
+#elif PLATFORM(WIN) || PLATFORM(HAIKU)
 
 void Coder<WebCore::CertificateInfo>::encodeForPersistence(Encoder&, const WebCore::CertificateInfo&)
 {

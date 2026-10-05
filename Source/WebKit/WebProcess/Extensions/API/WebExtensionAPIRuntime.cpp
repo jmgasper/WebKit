@@ -30,6 +30,8 @@
 
 #if ENABLE(WK_WEB_EXTENSIONS)
 
+#include "JSWebExtensionMessageReply.h"
+#include "JSWebExtensionTabParameters.h"
 #include "MessageSenderInlines.h"
 #include "WebExtensionAPIKeys.h"
 #include "WebExtensionAPINamespace.h"
@@ -43,8 +45,44 @@
 #include "WebPage.h"
 #include "WebProcess.h"
 #include <WebCore/LocalFrameInlines.h>
+#include <WebCore/SecurityOrigin.h>
+#include <wtf/Box.h>
+#include <wtf/RunLoop.h>
+#include <wtf/text/MakeString.h>
 
 namespace WebKit {
+
+JSValueRef toWebAPI(JSContextRef context, const WebExtensionMessageSenderParameters& parameters)
+{
+    Protected<JSObjectRef> result(JSContextGetGlobalContext(context), JSObjectMake(context, nullptr, nullptr));
+
+    if (parameters.extensionUniqueIdentifier)
+        JSObjectSetProperty(context, result.get(), toJSString("id"_s).get(), toJSValueRef(context, parameters.extensionUniqueIdentifier.value()), 0, nullptr);
+
+    if (parameters.tabParameters)
+        JSObjectSetProperty(context, result.get(), toJSString("tab"_s).get(), toWebAPI(context, parameters.tabParameters.value()), 0, nullptr);
+
+    // The frame identifier is only included when tab is included.
+    if (parameters.frameIdentifier && parameters.tabParameters)
+        JSObjectSetProperty(context, result.get(), toJSString("frameId"_s).get(), JSValueMakeNumber(context, toWebAPI(parameters.frameIdentifier.value())), 0, nullptr);
+
+    if (parameters.url.isValid()) {
+        JSObjectSetProperty(context, result.get(), toJSString("url"_s).get(), toJSValueRef(context, parameters.url.string()), 0, nullptr);
+        // Extension pages have hierarchical URLs, but their scheme may be opaque to SecurityOrigin
+        // in the receiving process. Report "scheme://host" as Chrome and Firefox do; extensions
+        // compare it with runtime.getURL("") to recognize their own pages (uBlock Origin does).
+        Ref origin = WebCore::SecurityOrigin::create(parameters.url);
+        auto originString = origin->isOpaque() && !parameters.url.host().isEmpty()
+            ? makeString(parameters.url.protocol(), "://"_s, parameters.url.hostAndPort())
+            : origin->toString();
+        JSObjectSetProperty(context, result.get(), toJSString("origin"_s).get(), toJSValueRef(context, originString), 0, nullptr);
+    }
+
+    if (parameters.documentIdentifier)
+        JSObjectSetProperty(context, result.get(), toJSString("documentId"_s).get(), toJSValueRef(context, parameters.documentIdentifier->toString()), 0, nullptr);
+
+    return result.get();
+}
 
 static inline JSValueRef makeErrorValue(JSGlobalContextRef contextRef, const String& errorMessage)
 {
@@ -154,12 +192,87 @@ String WebExtensionAPIRuntime::getVersion()
     return manifest ? manifest->getString(versionKey) : nullString();
 }
 
+// Chrome enum objects map UPPER_CASE names to the string values the API uses.
+static RefPtr<JSON::Object> enumObject(std::initializer_list<std::pair<ASCIILiteral, ASCIILiteral>> members)
+{
+    Ref object = JSON::Object::create();
+    for (auto& [name, value] : members)
+        object->setString(name, value);
+    return object;
+}
+
+RefPtr<JSON::Object> WebExtensionAPIRuntime::onInstalledReasons()
+{
+    // Documentation: https://developer.chrome.com/docs/extensions/reference/api/runtime#type-OnInstalledReason
+    return enumObject({ { "INSTALL"_s, "install"_s }, { "UPDATE"_s, "update"_s }, { "CHROME_UPDATE"_s, "chrome_update"_s }, { "SHARED_MODULE_UPDATE"_s, "shared_module_update"_s } });
+}
+
+RefPtr<JSON::Object> WebExtensionAPIRuntime::onRestartRequiredReasons()
+{
+    return enumObject({ { "APP_UPDATE"_s, "app_update"_s }, { "OS_UPDATE"_s, "os_update"_s }, { "PERIODIC"_s, "periodic"_s } });
+}
+
+RefPtr<JSON::Object> WebExtensionAPIRuntime::platformOperatingSystems()
+{
+    return enumObject({ { "MAC"_s, "mac"_s }, { "WIN"_s, "win"_s }, { "ANDROID"_s, "android"_s }, { "CROS"_s, "cros"_s }, { "LINUX"_s, "linux"_s }, { "OPENBSD"_s, "openbsd"_s }, { "FUCHSIA"_s, "fuchsia"_s } });
+}
+
+RefPtr<JSON::Object> WebExtensionAPIRuntime::platformArchitectures()
+{
+    return enumObject({ { "ARM"_s, "arm"_s }, { "ARM64"_s, "arm64"_s }, { "X86_32"_s, "x86-32"_s }, { "X86_64"_s, "x86-64"_s }, { "MIPS"_s, "mips"_s }, { "MIPS64"_s, "mips64"_s }, { "RISCV64"_s, "riscv64"_s } });
+}
+
+RefPtr<JSON::Object> WebExtensionAPIRuntime::contextTypes()
+{
+    // The values exist even though runtime.getContexts() does not; callers test for that function.
+    return enumObject({ { "TAB"_s, "TAB"_s }, { "POPUP"_s, "POPUP"_s }, { "BACKGROUND"_s, "BACKGROUND"_s }, { "OFFSCREEN_DOCUMENT"_s, "OFFSCREEN_DOCUMENT"_s }, { "SIDE_PANEL"_s, "SIDE_PANEL"_s }, { "DEVELOPER_TOOLS"_s, "DEVELOPER_TOOLS"_s } });
+}
+
 String WebExtensionAPIRuntime::runtimeIdentifier()
 {
     // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/runtime/id
 
     return extensionContext().uniqueIdentifier();
 }
+
+#if PLATFORM(HAIKU)
+void WebExtensionAPIRuntime::getBrowserInfo(Ref<WebExtensionCallbackHandler>&& callback)
+{
+    // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/runtime/getBrowserInfo
+    // Only Firefox defines this function, and its callers gate Gecko features on the result.
+    // Report the Gecko release whose WebExtensions behavior this implementation follows.
+    callback->call(JSValueMakeFromJSONString(callback->globalContext(),
+        toJSString("{\"name\":\"Firefox\",\"vendor\":\"Mozilla\",\"version\":\"140.0\",\"buildID\":\"20250623000000\"}"_s).get()));
+}
+
+void WebExtensionAPIRuntime::requestUpdateCheck(Ref<WebExtensionCallbackHandler>&& callback)
+{
+    // Documentation: https://developer.chrome.com/docs/extensions/reference/api/runtime#method-requestUpdateCheck
+    // Installed packages are only replaced through the extension manager.
+    callback->call(JSValueMakeFromJSONString(callback->globalContext(), toJSString("{\"status\":\"no_update\"}"_s).get()));
+}
+
+WebExtensionAPIEvent& WebExtensionAPIRuntime::onSuspend()
+{
+    if (!m_onSuspend)
+        m_onSuspend = WebExtensionAPIEvent::create(*this, WebExtensionEventListenerType::RuntimeOnSuspend);
+    return *m_onSuspend;
+}
+
+WebExtensionAPIEvent& WebExtensionAPIRuntime::onSuspendCanceled()
+{
+    if (!m_onSuspendCanceled)
+        m_onSuspendCanceled = WebExtensionAPIEvent::create(*this, WebExtensionEventListenerType::RuntimeOnSuspendCanceled);
+    return *m_onSuspendCanceled;
+}
+
+WebExtensionAPIEvent& WebExtensionAPIRuntime::onUpdateAvailable()
+{
+    if (!m_onUpdateAvailable)
+        m_onUpdateAvailable = WebExtensionAPIEvent::create(*this, WebExtensionEventListenerType::RuntimeOnUpdateAvailable);
+    return *m_onUpdateAvailable;
+}
+#endif
 
 void WebExtensionAPIRuntime::getPlatformInfo(Ref<WebExtensionCallbackHandler>&& callback)
 {
@@ -169,6 +282,10 @@ void WebExtensionAPIRuntime::getPlatformInfo(Ref<WebExtensionCallbackHandler>&& 
     static constexpr auto osValue = "mac"_s;
 #elif PLATFORM(IOS_FAMILY)
     static constexpr auto osValue = "ios"_s;
+#elif PLATFORM(HAIKU)
+    // The API defines a closed set of values. Extensions use it to choose keyboard
+    // and path conventions, and "linux" is the closest member of that set.
+    static constexpr auto osValue = "linux"_s;
 #else
     static constexpr auto osValue = "unknown"_s;
 #endif
@@ -198,7 +315,6 @@ void WebExtensionAPIRuntime::getBackgroundPage(Ref<WebExtensionCallbackHandler>&
         return;
     }
 
-#if PLATFORM(COCOA)
     WebProcess::singleton().sendWithAsyncReply(Messages::WebExtensionContext::RuntimeGetBackgroundPage(), [protectedThis = Ref { *this }, callback = WTF::move(callback)](std::expected<std::optional<WebCore::PageIdentifier>, WebExtensionError>&& result) {
         if (!result) {
             callback->reportError(result.error());
@@ -218,7 +334,6 @@ void WebExtensionAPIRuntime::getBackgroundPage(Ref<WebExtensionCallbackHandler>&
 
         callback->call(toWindowObject(callback->globalContext(), *page));
     }, extensionContext().identifier());
-#endif
 }
 
 double WebExtensionAPIRuntime::getFrameId(JSContextRef context, JSValueRef target)
@@ -283,9 +398,7 @@ void WebExtensionAPIRuntime::reload()
 {
     // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/runtime/reload
 
-#if PLATFORM(COCOA)
     WebProcess::singleton().send(Messages::WebExtensionContext::RuntimeReload(), extensionContext().identifier());
-#endif
 }
 
 JSValueRef WebExtensionAPIRuntime::lastError()
@@ -324,7 +437,6 @@ void WebExtensionAPIRuntime::sendMessage(WebPageProxyIdentifier webPageProxyIden
         documentIdentifier.value(),
     };
 
-#if PLATFORM(COCOA)
     bool userGesture = WebCore::UserGestureIndicator::processingUserGesture();
     WebProcess::singleton().sendWithAsyncReply(Messages::WebExtensionContext::RuntimeSendMessage(extensionID, messageJSON, senderParameters, userGesture), [protectedThis = Ref { *this }, callback = WTF::move(callback)](std::expected<String, WebExtensionError>&& result) {
         if (!result) {
@@ -334,7 +446,6 @@ void WebExtensionAPIRuntime::sendMessage(WebPageProxyIdentifier webPageProxyIden
 
         callback->call(fromJSON(callback->globalContext(), JSON::Value::parseJSON(result.value())));
     }, extensionContext().identifier());
-#endif
 }
 
 RefPtr<WebExtensionAPIPort> WebExtensionAPIRuntime::connect(WebPageProxyIdentifier webPageProxyIdentifier, WebFrame& frame, JSContextRef context, const String& extensionID, RefPtr<JSON::Value> options, String& outExceptionString)
@@ -365,7 +476,6 @@ RefPtr<WebExtensionAPIPort> WebExtensionAPIRuntime::connect(WebPageProxyIdentifi
 
     Ref port = WebExtensionAPIPort::create(*this, webPageProxyIdentifier, WebExtensionContentWorldType::Main, resolvedName);
 
-#if PLATFORM(COCOA)
     bool userGesture = WebCore::UserGestureIndicator::processingUserGesture();
     WebProcess::singleton().sendWithAsyncReply(Messages::WebExtensionContext::RuntimeConnect(extensionID, port->channelIdentifier(), resolvedName, senderParameters, userGesture), [=, this, protectedThis = Ref { *this }, globalContext = JSRetainPtr { JSContextGetGlobalContext(context) }](std::expected<void, WebExtensionError>&& result) {
         if (result)
@@ -374,7 +484,6 @@ RefPtr<WebExtensionAPIPort> WebExtensionAPIRuntime::connect(WebPageProxyIdentifi
         port->setError(globalContext.get(), protect(runtime())->reportError(result.error(), globalContext.get()));
         port->disconnect();
     }, extensionContext().identifier());
-#endif
 
     return port;
 }
@@ -383,7 +492,7 @@ void WebExtensionAPIRuntime::sendNativeMessage(WebFrame& frame, const String& ap
 {
     // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/runtime/sendNativeMessage
 
-#if PLATFORM(COCOA)
+#if PLATFORM(COCOA) || PLATFORM(HAIKU)
     WebProcess::singleton().sendWithAsyncReply(Messages::WebExtensionContext::RuntimeSendNativeMessage(applicationID, messageJSON), [protectedThis = Ref { *this }, callback = WTF::move(callback)](std::expected<String, WebExtensionError>&& result) {
         if (!result) {
             callback->reportError(result.error());
@@ -392,6 +501,12 @@ void WebExtensionAPIRuntime::sendNativeMessage(WebFrame& frame, const String& ap
 
         callback->call(fromJSON(callback->globalContext(), JSON::Value::parseJSON(result.value())));
     }, extensionContext().identifier());
+#else
+    // No native messaging hosts can be registered on this platform yet. Settle the
+    // request so that callers can fall back instead of waiting forever.
+    UNUSED_PARAM(frame);
+    UNUSED_PARAM(messageJSON);
+    callback->reportError(makeString("Specified native messaging host '"_s, applicationID, "' not found."_s));
 #endif
 }
 
@@ -401,7 +516,9 @@ RefPtr<WebExtensionAPIPort> WebExtensionAPIRuntime::connectNative(WebPageProxyId
 
     Ref port = WebExtensionAPIPort::create(*this, webPageProxyIdentifier, WebExtensionContentWorldType::Native, applicationID);
 
-#if PLATFORM(COCOA)
+    // On Haiku the UI process accepts the port and then disconnects it with
+    // the reason, so onDisconnect listeners observe runtime.lastError.
+#if PLATFORM(COCOA) || PLATFORM(HAIKU)
     WebProcess::singleton().sendWithAsyncReply(Messages::WebExtensionContext::RuntimeConnectNative(applicationID, port->channelIdentifier(), webPageProxyIdentifier), [=, this, protectedThis = Ref { *this }, globalContext = JSRetainPtr { JSContextGetGlobalContext(context) }](std::expected<void, WebExtensionError>&& result) {
         if (result)
             return;
@@ -409,6 +526,12 @@ RefPtr<WebExtensionAPIPort> WebExtensionAPIRuntime::connectNative(WebPageProxyId
         port->setError(globalContext.get(), protect(runtime())->reportError(result.error(), globalContext.get()));
         port->disconnect();
     }, extensionContext().identifier());
+#else
+    // Disconnect on a later turn, after the caller has attached its onDisconnect listener.
+    RunLoop::mainSingleton().dispatch([port, protectedThis = Ref { *this }, applicationID = applicationID.isolatedCopy(), globalContext = JSRetainPtr { JSContextGetGlobalContext(context) }] {
+        port->setError(globalContext.get(), protect(protectedThis->runtime())->reportError(makeString("Specified native messaging host '"_s, applicationID, "' not found."_s), globalContext.get()));
+        port->disconnect();
+    });
 #endif
 
     return port;
@@ -449,7 +572,6 @@ void WebExtensionAPIWebPageRuntime::sendMessage(WebPage& page, WebFrame& frame, 
         return;
     }
 
-#if PLATFORM(COCOA)
     WebProcess::singleton().sendWithAsyncReply(Messages::WebExtensionContext::RuntimeWebPageSendMessage(extensionID, messageJSON, senderParameters), [protectedThis = Ref { *this }, callback = WTF::move(callback)](std::expected<String, WebExtensionError>&& result) {
         if (!result) {
             callback->call();
@@ -458,7 +580,6 @@ void WebExtensionAPIWebPageRuntime::sendMessage(WebPage& page, WebFrame& frame, 
 
         callback->call(fromJSON(callback->globalContext(), JSON::Value::parseJSON(result.value())));
     }, destinationExtensionContext->identifier());
-#endif
 }
 
 RefPtr<WebExtensionAPIPort> WebExtensionAPIWebPageRuntime::connect(WebPage& page, WebFrame& frame, JSContextRef context, const String& extensionID, RefPtr<JSON::Value> options, String& outExceptionString)
@@ -493,9 +614,7 @@ RefPtr<WebExtensionAPIPort> WebExtensionAPIWebPageRuntime::connect(WebPage& page
         Ref port = WebExtensionAPIPort::create(*this, resolvedName);
 
         callAfterRandomDelay([=]() {
-#if PLATFORM(COCOA)
             port->disconnect();
-#endif
         });
 
         return port;
@@ -503,7 +622,6 @@ RefPtr<WebExtensionAPIPort> WebExtensionAPIWebPageRuntime::connect(WebPage& page
 
     Ref port = WebExtensionAPIPort::create(contentWorldType(), protect(runtime()), *destinationExtensionContext, page.webPageProxyIdentifier(), WebExtensionContentWorldType::Main, resolvedName);
 
-#if PLATFORM(COCOA)
     WebProcess::singleton().sendWithAsyncReply(Messages::WebExtensionContext::RuntimeWebPageConnect(extensionID, port->channelIdentifier(), resolvedName, senderParameters), [=, this, protectedThis = Ref { *this }, globalContext = JSRetainPtr { JSContextGetGlobalContext(context) }](std::expected<void, WebExtensionError>&& result) {
         if (result)
             return;
@@ -511,7 +629,6 @@ RefPtr<WebExtensionAPIPort> WebExtensionAPIWebPageRuntime::connect(WebPage& page
         port->setError(globalContext.get(), protect(runtime())->reportError(result.error(), globalContext.get()));
         port->disconnect();
     }, destinationExtensionContext->identifier());
-#endif
 
     return port;
 }
@@ -601,6 +718,89 @@ bool WebExtensionContextProxy::matchesTarget(WebFrame& frame, const std::optiona
 
     return true;
 }
+
+void WebExtensionContextProxy::internalDispatchRuntimeMessageEvent(WebExtensionContentWorldType contentWorldType, const String& messageJSON, const std::optional<WebExtensionMessageTargetParameters>& targetParameters, const WebExtensionMessageSenderParameters& senderParameters, bool userGesture, CompletionHandler<void(String&& replyJSON)>&& completionHandler, bool* hadListener)
+{
+    if (!hasDOMWrapperWorld(contentWorldType)) {
+        // A null reply to the completionHandler means no listeners replied.
+        completionHandler({ });
+        return;
+    }
+
+    auto sourceContentWorldType = senderParameters.contentWorldType;
+    auto callbackAggregator = createWebExtensionMessageReply(WTF::move(completionHandler));
+
+    bool anyListenerHandledMessage = false;
+    enumerateFramesAndNamespaceObjects([&](WebFrame& frame, WebExtensionAPINamespace& namespaceObject) {
+        // Don't send the message to any listeners in the sender's page.
+        if (senderParameters.pageProxyIdentifier == frame.page()->webPageProxyIdentifier())
+            return;
+
+        // Skip all frames that don't match the target parameters.
+        if (!matchesTarget(frame, targetParameters))
+            return;
+
+        WebExtensionAPIEvent::ListenerVector listeners;
+        if (sourceContentWorldType == WebExtensionContentWorldType::WebPage)
+            listeners = protect(namespaceObject.runtime())->onMessageExternal().listeners();
+        else
+            listeners = protect(namespaceObject.runtime())->onMessage().listeners();
+
+        if (listeners.isEmpty())
+            return;
+
+        if (hadListener)
+            *hadListener = true;
+
+        std::optional<WebCore::UserGestureIndicator> gestureIndicator;
+        if (userGesture) {
+            RefPtr coreFrame = frame.coreLocalFrame();
+            gestureIndicator.emplace(WebCore::IsProcessingUserGesture::Yes, protect(coreFrame ? coreFrame->document() : nullptr));
+        }
+
+        for (auto& listener : listeners) {
+            auto context = listener->globalContext();
+            Protected<JSValueRef> senderInfo(context, toWebAPI(context, senderParameters));
+            Protected<JSValueRef> replyFunction(context, createWebExtensionMessageReplyFunction(context, callbackAggregator.copyRef()));
+            Protected<JSValueRef> returnValue(context, listener->call(deserializeJSONString(context, messageJSON), senderInfo.get(), replyFunction.get()));
+
+            if (JSValueIsBoolean(context, returnValue.get()) && JSValueToBoolean(context, returnValue.get())) {
+                anyListenerHandledMessage = true;
+                continue;
+            }
+
+            if (!isThenable(context, returnValue.get()))
+                continue;
+
+            anyListenerHandledMessage = true;
+
+            JSValueRef exception = nullptr;
+            invokeWebExtensionMessageReplyThenable(context, returnValue.get(), callbackAggregator.copyRef(), exception);
+
+            if (exception) {
+                auto* globalObject = toJS(context);
+                JSC::JSLockHolder lock(globalObject->vm());
+                WebCore::reportException(globalObject, toJS(globalObject, exception));
+            }
+        }
+    }, toDOMWrapperWorld(contentWorldType));
+
+    if (!anyListenerHandledMessage)
+        callbackAggregator.get()(nullptr, nullptr);
+}
+
+#if PLATFORM(HAIKU)
+void WebExtensionContextProxy::dispatchTabsMessageEvent(WebExtensionContentWorldType contentWorldType, const String& messageJSON, const WebExtensionMessageTargetParameters& targetParameters, const WebExtensionMessageSenderParameters& senderParameters, bool userGesture, CompletionHandler<void(String&& replyJSON, bool hadListener)>&& completionHandler)
+{
+    auto hadListener = Box<bool>::create(false);
+    // Frame enumeration is synchronous. The box also survives asynchronous
+    // sendResponse/Promise callbacks so delivery and response stay distinct.
+    internalDispatchRuntimeMessageEvent(contentWorldType, messageJSON, targetParameters, senderParameters, userGesture,
+        [hadListener, completionHandler = WTF::move(completionHandler)](String&& reply) mutable {
+            completionHandler(WTF::move(reply), *hadListener);
+        }, hadListener.get());
+}
+#endif
 
 void WebExtensionContextProxy::dispatchRuntimeMessageEvent(WebExtensionContentWorldType contentWorldType, const String& messageJSON, const std::optional<WebExtensionMessageTargetParameters>& targetParameters, const WebExtensionMessageSenderParameters& senderParameters, bool userGesture, CompletionHandler<void(String&& replyJSON)>&& completionHandler)
 {
@@ -718,7 +918,7 @@ void WebExtensionContextProxy::dispatchRuntimeInstalledEvent(WebExtensionContext
 
     details->setString(reasonKey, toWebAPI(installReason));
 
-    if (installReason == WebExtensionContext::InstallReason::ExtensionUpdate)
+    if (installReason == WebExtensionContext::InstallReason::ExtensionUpdate && !previousVersion.isEmpty())
         details->setString(previousVersionKey, previousVersion);
 
     enumerateNamespaceObjects([&](auto& namespaceObject) {

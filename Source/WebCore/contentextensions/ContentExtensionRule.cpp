@@ -100,12 +100,12 @@ size_t DeserializedAction::serializedLength(std::span<const uint8_t> serializedA
 
 Trigger Trigger::isolatedCopy() const &
 {
-    return { urlFilter.isolatedCopy(), urlFilterIsCaseSensitive, topURLFilterIsCaseSensitive, frameURLFilterIsCaseSensitive, flags, crossThreadCopy(conditions) };
+    return { urlFilter.isolatedCopy(), urlFilterIsCaseSensitive, topURLFilterIsCaseSensitive, frameURLFilterIsCaseSensitive, flags, crossThreadCopy(conditions), crossThreadCopy(urlFilterAlternatives), crossThreadCopy(urlConditionGroups) };
 }
 
 Trigger Trigger::isolatedCopy() &&
 {
-    return { WTF::move(urlFilter).isolatedCopy(), urlFilterIsCaseSensitive, topURLFilterIsCaseSensitive, frameURLFilterIsCaseSensitive, flags, crossThreadCopy(WTF::move(conditions)) };
+    return { WTF::move(urlFilter).isolatedCopy(), urlFilterIsCaseSensitive, topURLFilterIsCaseSensitive, frameURLFilterIsCaseSensitive, flags, crossThreadCopy(WTF::move(conditions)), crossThreadCopy(WTF::move(urlFilterAlternatives)), crossThreadCopy(WTF::move(urlConditionGroups)) };
 }
 
 Action Action::isolatedCopy() const &

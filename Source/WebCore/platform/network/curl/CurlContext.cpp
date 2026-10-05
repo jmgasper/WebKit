@@ -27,6 +27,9 @@
 #include "config.h"
 #include "CurlContext.h"
 
+#include <cstdlib>
+#include <cstring>
+
 #if USE(CURL)
 #include "CertificateInfo.h"
 #include "CurlRequestScheduler.h"
@@ -562,6 +565,21 @@ void CurlHandle::enableAltSvc()
 
     if (CurlContext::singleton().alternativeServicesStorageFile().isEmpty())
         return;
+
+#if OS(HAIKU)
+    // CURLOPT_ALTSVC makes libcurl read the cache file when the option is set
+    // and write it back when the handle is cleaned up: two file operations on
+    // BFS for every request, on the transfer thread, which is what kept new
+    // requests waiting behind a queue of set-up tasks (10-15 ms each). The
+    // cache only pays off for HTTP/3 discovery (h2 comes from ALPN), and this
+    // libcurl has no HTTP/3, so it is left off unless SUMMIT_CURL_ALTSVC=1.
+    static const bool wanted = [] {
+        const char* value = getenv("SUMMIT_CURL_ALTSVC");
+        return value && !strcmp(value, "1");
+    }();
+    if (!CurlContext::singleton().isHttp3Enabled() && !wanted)
+        return;
+#endif
 
     long altSvcCtrl = CURLALTSVC_H1;
     altSvcCtrl |= CurlContext::singleton().isHttp2Enabled() ? CURLALTSVC_H2 : 0;

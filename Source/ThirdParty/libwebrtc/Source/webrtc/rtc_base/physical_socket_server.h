@@ -27,7 +27,9 @@
 #include <sys/epoll.h>
 
 #define WEBRTC_USE_EPOLL 1
-#elif defined(WEBRTC_FUCHSIA) || (defined(WEBRTC_MAC) && !defined(WEBRTC_WEBKIT_BUILD))
+#elif defined(WEBRTC_FUCHSIA) || (defined(WEBRTC_MAC) && !defined(WEBRTC_WEBKIT_BUILD)) || defined(__HAIKU__)
+// WEBRTC_WEBKIT_BUILD change: Haiku uses poll(), select() is limited to
+// descriptors below FD_SETSIZE and WebKit processes have more.
 // Fuchsia implements select and poll but not epoll, and testing shows that poll
 // is faster than select.
 #include <poll.h>

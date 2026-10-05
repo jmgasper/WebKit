@@ -69,8 +69,19 @@
 #include "UserContentController.h"
 #include "UserContentURLPattern.h"
 #include "UserStyleSheet.h"
+#include <cstdlib>
 #include <wtf/SetForScope.h>
 #include <wtf/TZoneMallocInlines.h>
+
+#if PLATFORM(HAIKU)
+namespace WebCore {
+bool summitInvalidateElementsWithMissingStyleHaiku(Document&);
+void summitVerifyStyleInvalidationHaiku(Document&);
+namespace Style {
+bool summitSheetsAvoidFullInvalidationHaiku(const Vector<Ref<StyleSheetContents>>&);
+}
+}
+#endif
 
 namespace WebCore {
 
@@ -585,6 +596,8 @@ void Scope::updateActiveStyleSheets(UpdateType updateType)
     auto styleSheetChange = StyleSheetChange { ResolverUpdateType::Reconstruct };
     if (updateType == UpdateType::ActiveSet)
         styleSheetChange = analyzeStyleSheetChange(activeCSSStyleSheets);
+    else if (updateType == UpdateType::SimpleRuleInsertion && m_resolver)
+        styleSheetChange.resolverUpdateType = ResolverUpdateType::PreserveMutatingRules;
 
     updateResolver(activeCSSStyleSheets, styleSheetChange.resolverUpdateType);
 
@@ -612,14 +625,30 @@ void Scope::invalidateStyleAfterStyleSheetChange(const StyleSheetChange& styleSh
 
     // If we are already parsing the body and so may have significant amount of elements, put some effort into trying to avoid style recalcs.
     bool invalidateAll = !m_document->bodyOrFrameset() || m_document->hasNodesWithMissingStyle();
+#if PLATFORM(HAIKU)
+    // Elements left without style are invalidated alone (StyleTreeResolver.cpp).
+    if (invalidateAll && m_document->bodyOrFrameset()
+        && (styleSheetChange.resolverUpdateType == ResolverUpdateType::Reset || styleSheetChange.resolverUpdateType == ResolverUpdateType::Additive)
+        && summitInvalidateElementsWithMissingStyleHaiku(document()))
+        invalidateAll = false;
+#endif
 
-    if (styleSheetChange.resolverUpdateType == ResolverUpdateType::Reconstruct || invalidateAll) {
+    if (styleSheetChange.resolverUpdateType == ResolverUpdateType::Reconstruct
+        || styleSheetChange.resolverUpdateType == ResolverUpdateType::PreserveMutatingRules || invalidateAll) {
         Invalidator::invalidateAllStyle(*this);
         return;
     }
 
     Invalidator invalidator(styleSheetChange.addedSheets, m_resolver->mediaQueryEvaluator());
     invalidator.invalidateStyle(*this);
+#if PLATFORM(HAIKU)
+    static bool verify = [] {
+        const char* value = getenv("SUMMIT_STYLE_SHEET_INVALIDATION");
+        return value && !strcmp(value, "verify");
+    }();
+    if (verify && summitSheetsAvoidFullInvalidationHaiku(styleSheetChange.addedSheets))
+        summitVerifyStyleInvalidationHaiku(document());
+#endif
 }
 
 void Scope::updateResolver(std::span<const Ref<CSSStyleSheet>> activeStyleSheets, ResolverUpdateType updateType)
@@ -633,6 +662,15 @@ void Scope::updateResolver(std::span<const Ref<CSSStyleSheet>> activeStyleSheets
         unshareShadowTreeResolverBeforeMutation();
 
     SetForScope isUpdatingStyleResolver { m_isUpdatingStyleResolver, true };
+
+    if (updateType == ResolverUpdateType::PreserveMutatingRules) {
+        // The pending insertions only added ordinary style rules. Rebuild their
+        // cascade order once without registering unchanged font rules again.
+        m_resolver->ruleSets().resetAuthorStyle();
+        protect(m_resolver)->appendAuthorStyleSheets(activeStyleSheets, true);
+        m_resolver->invalidateMatchedDeclarationsCache();
+        return;
+    }
 
     if (updateType == ResolverUpdateType::Reset) {
         customPropertyRegistry().clearRegisteredFromStylesheets();
@@ -749,12 +787,30 @@ void Scope::scheduleUpdate(UpdateType update)
 
 void Scope::didChangeActiveStyleSheetCandidates()
 {
-    scheduleUpdate(UpdateType::ActiveSet);
+    scheduleUpdate(m_pendingUpdate == UpdateType::SimpleRuleInsertion ? UpdateType::ContentsOrInterpretation : UpdateType::ActiveSet);
 }
 
 void Scope::didChangeStyleSheetContents()
 {
     scheduleUpdate(UpdateType::ContentsOrInterpretation);
+}
+
+bool Scope::tryUpdateForSimpleStyleRuleInsertion(CSSStyleSheet& sheet)
+{
+    static const bool disabledForDiagnosis = std::getenv("SUMMIT_DISABLE_SIMPLE_CSS_INSERT");
+    if (disabledForDiagnosis)
+        return false;
+
+    if (m_shadowRoot || (m_pendingUpdate && *m_pendingUpdate != UpdateType::SimpleRuleInsertion)
+        || m_document->inStyleRecalc() || m_document->inRenderTreeUpdate()
+        || !m_resolver || m_resolver->isSharedBetweenShadowTrees() || !activeStyleSheetsContains(sheet) || sheet.disabled())
+        return false;
+
+    // The inserted rule cannot change @font-face, @property, keyframes, or other
+    // resolver registrations. Coalesce consecutive insertions before rebuilding
+    // the author rule set so CSS-in-JS callers do not repeatedly pay that cost.
+    scheduleUpdate(UpdateType::SimpleRuleInsertion);
+    return true;
 }
 
 void Scope::didChangeViewportSize()

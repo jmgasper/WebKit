@@ -32,6 +32,10 @@
 #include "BitmapTexturePool.h"
 #include "CoordinatedPlatformLayer.h"
 #include "CoordinatedPlatformLayerBufferRGB.h"
+#if PLATFORM(HAIKU)
+#include "CoordinatedPlatformLayerBufferNativeImage.h"
+#include "NativeImage.h"
+#endif
 #include "CoordinatedPlatformLayerBufferSkiaDeferredImage.h"
 #include "FontRenderOptions.h"
 #include "GLContext.h"
@@ -67,6 +71,9 @@ void ScrollerCoordinated::setScrollerImp(ScrollerImpAdwaita* scrollerImp)
     Locker locker { m_lock };
     m_scrollerImp = scrollerImp;
     m_needsUpdate = true;
+#if PLATFORM(HAIKU)
+    m_paintedState = std::nullopt;
+#endif
 }
 
 void ScrollerCoordinated::setHostLayer(CoordinatedPlatformLayer* layer)
@@ -74,6 +81,9 @@ void ScrollerCoordinated::setHostLayer(CoordinatedPlatformLayer* layer)
     Locker locker { m_lock };
     m_hostLayer = layer;
     m_needsUpdate = true;
+#if PLATFORM(HAIKU)
+    m_paintedState = std::nullopt;
+#endif
 }
 
 void ScrollerCoordinated::updateValues()
@@ -90,6 +100,12 @@ void ScrollerCoordinated::updateValues()
         return;
 
     if (!scrollerImp) {
+#if PLATFORM(HAIKU)
+        {
+            Locker locker { m_lock };
+            m_paintedState = std::nullopt;
+        }
+#endif
         // Custom scrollbars are painted by RenderScrollbar
         Locker layerLocker { hostLayer->lock() };
         hostLayer->setContentsBuffer(nullptr);
@@ -137,7 +153,48 @@ void ScrollerCoordinated::updateValues()
     auto frameRect = enclosingIntRect(FloatRect(state.frameRect.x() * contentsScale, state.frameRect.y() * contentsScale,
         state.frameRect.width() * contentsScale, state.frameRect.height() * contentsScale));
 
+#if PLATFORM(HAIKU)
+    {
+        // The values move without the scrollbar moving by a pixel on a page
+        // whose height an animated ad nudges every frame. Each repaint
+        // replaced the layer's buffer and damaged the whole strip, which with
+        // the ad at the other side of the page made every frame read back
+        // almost all of its 7 Mpx at 200%.
+        auto same = [](const AdwaitaScrollbarPainter::State& a, const AdwaitaScrollbarPainter::State& b) {
+            return a.enabled == b.enabled && a.useDarkAppearanceForScrollbars == b.useDarkAppearanceForScrollbars
+                && a.shouldPlaceVerticalScrollbarOnLeft == b.shouldPlaceVerticalScrollbarOnLeft
+                && a.usesOverlayScrollbars == b.usesOverlayScrollbars && a.orientation == b.orientation
+                && a.hoveredPart == b.hoveredPart && a.pressedPart == b.pressedPart
+                && a.thumbPosition == b.thumbPosition && a.thumbLength == b.thumbLength
+                && a.frameRect == b.frameRect && a.opacity == b.opacity && a.scrollbarColor == b.scrollbarColor;
+        };
+        Locker locker { m_lock };
+        if (m_paintedState && m_paintedLayer == hostLayer.get() && m_paintedScale == contentsScale && same(*m_paintedState, state))
+            return;
+        m_paintedState = state;
+        m_paintedScale = contentsScale;
+        m_paintedLayer = hostLayer.get();
+    }
+#endif
+
 #if USE(TEXTURE_MAPPER)
+#if PLATFORM(HAIKU)
+    auto surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(frameRect.width(), frameRect.height()));
+    if (!surface)
+        return;
+
+    surface->getCanvas()->clear(SK_ColorTRANSPARENT);
+    {
+        GraphicsContextSkia context(*surface->getCanvas(), RenderingMode::Unaccelerated, RenderingPurpose::DOM);
+        context.scale(contentsScale);
+        scrollerImp->paint(context, state.frameRect, state);
+    }
+
+    auto image = NativeImage::create(surface->makeImageSnapshot());
+    if (!image)
+        return;
+    auto buffer = CoordinatedPlatformLayerBufferNativeImage::create(image.releaseNonNull(), nullptr);
+#else
     auto& display = PlatformDisplay::sharedDisplay();
     auto* glContext = display.skiaGLContext();
     if (!glContext)
@@ -164,6 +221,7 @@ void ScrollerCoordinated::updateValues()
 
     grContext->flushAndSubmit(surface.get(), GLFence::isSupported(display.glDisplay()) ? GrSyncCpu::kNo : GrSyncCpu::kYes);
     auto buffer = CoordinatedPlatformLayerBufferRGB::create(WTF::move(texture), { TextureMapperFlags::ShouldBlend }, GLFence::create(display.glDisplay()));
+#endif
 #else
     const auto& threadSafeGrContext = hostLayer->threadSafeGrContext();
     if (!threadSafeGrContext)

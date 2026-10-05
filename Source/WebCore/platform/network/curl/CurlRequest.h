@@ -32,16 +32,21 @@
 #include "CurlResponse.h"
 #include "ProtectionSpace.h"
 #include "ResourceRequest.h"
+
+#include <wtf/FileSystem.h>
 #include <wtf/MonotonicTime.h>
 #include <wtf/Noncopyable.h>
 #include <wtf/TZoneMalloc.h>
 
 namespace WebCore {
 
+#if PLATFORM(HAIKU)
+class ContentDecoderHaiku;
+#endif
+
 class CurlRequestClient;
 class NetworkLoadMetrics;
 class ResourceError;
-class FragmentedSharedBuffer;
 
 class CurlRequest final : public ThreadSafeRefCounted<CurlRequest>, public CurlRequestSchedulerClient, public CurlMultipartHandleClient, public CanMakeThreadSafeCheckedPtr<CurlRequest> {
     WTF_MAKE_TZONE_ALLOCATED(CurlRequest);
@@ -58,7 +63,7 @@ public:
         return adoptRef(*new CurlRequest(request, &client, captureMetrics));
     }
 
-    ~CurlRequest() = default;
+    WEBCORE_EXPORT ~CurlRequest();
 
     WEBCORE_EXPORT void invalidateClient();
     WEBCORE_EXPORT void setAuthenticationScheme(ProtectionSpace::AuthenticationScheme);
@@ -67,8 +72,10 @@ public:
     void disableServerTrustEvaluation() { m_shouldDisableServerTrustEvaluation = true; }
     void enableLocalhostAlias() { m_localhostAlias = CurlHandle::LocalhostAlias::Enable; }
 
-    WEBCORE_EXPORT void resume();
+    WEBCORE_EXPORT void start();
     WEBCORE_EXPORT void cancel();
+    WEBCORE_EXPORT void suspend();
+    WEBCORE_EXPORT void resume();
 
     const ResourceRequest& resourceRequest() const LIFETIME_BOUND { return m_request; }
     bool isCancelled();
@@ -80,6 +87,23 @@ public:
 
     // Processing for DidReceiveResponse
     WEBCORE_EXPORT void completeDidReceiveResponse();
+
+#if PLATFORM(HAIKU)
+    // Connects (DNS, TCP, TLS) and stops before sending the request: libcurl
+    // keeps an HTTP/2 connection stopped that way in its pool for the loads
+    // that follow. Completes without a response.
+    void setPreconnectOnly() { m_preconnectOnlyHaiku = true; }
+    // Whether connecting ahead of a load to this URL's server can help: it
+    // uses https, and its connections have not been seen to be HTTP/1.1 (a
+    // transfer that stops before its request leaves libcurl no choice but to
+    // close those).
+    WEBCORE_EXPORT static bool canPreconnectHaiku(const URL&);
+#endif
+
+    // Download
+    void enableDownloadToFile();
+    const String& getDownloadedFilePath();
+    void setDownloadedFilePath(const String& path) { m_downloadFilePath = path; }
 
 private:
     WEBCORE_EXPORT CurlRequest(const ResourceRequest&, CurlRequestClient*, CaptureNetworkLoadMetrics);
@@ -113,6 +137,7 @@ private:
     void didCompleteTransfer(CURLcode) override;
     void didCancelTransfer() override;
     void finalizeTransfer();
+    void invokeCancel();
 
     int didReceiveDebugInfo(curl_infotype, std::span<const char>);
 
@@ -126,15 +151,29 @@ private:
     bool needToInvokeDidCancelTransfer() const { return m_didNotifyResponse && !m_didReturnFromNotify && m_mustInvokeCancelTransfer; }
     void invokeDidReceiveResponseForFile(const URL&);
     void invokeDidReceiveResponse(const CurlResponse&, Function<void()>&& completionHandler = { });
+    void setRequestPaused(bool);
+    void setCallbackPaused(bool);
+    void pausedStatusChanged();
+    bool shouldBePaused() const { return m_isPausedOfRequest || m_isPausedOfCallback; };
+    void updateHandlePauseState(bool);
+    bool isHandlePaused() const;
 
     NetworkLoadMetrics networkLoadMetrics();
     std::optional<long long> getContentLength();
+
+    // Download
+    void writeDataToDownloadFileIfEnabled(std::span<const unsigned char>);
+    void closeDownloadFile();
+    void cleanupDownloadFile();
 
     // Callback functions for curl
     static size_t willSendDataCallback(char*, size_t, size_t, void*);
     static size_t didReceiveHeaderCallback(char*, size_t, size_t, void*);
     static size_t didReceiveDataCallback(char*, size_t, size_t, void*);
     static int didReceiveDebugInfoCallback(CURL*, curl_infotype, char*, size_t, void*);
+#if PLATFORM(HAIKU)
+    static int willSendRequestCallbackHaiku(void*, char*, char*, int, int);
+#endif
 
 
     CurlRequestClient* m_client { };
@@ -149,23 +188,54 @@ private:
     bool m_shouldDisableServerTrustEvaluation { false };
     CurlHandle::LocalhostAlias m_localhostAlias { CurlHandle::LocalhostAlias::Disable };
 
+    enum class StartState : uint8_t { StartSuspended, WaitingForStart, DidStart };
+    StartState m_startState;
+    
     std::unique_ptr<CurlHandle> m_curlHandle;
     CurlFormDataStream m_formDataStream;
     std::unique_ptr<CurlMultipartHandle> m_multipartHandle;
 
     CurlResponse m_response;
-    bool m_didStartTransfer { false };
     bool m_didReceiveResponse { false };
     bool m_didNotifyResponse { false };
     bool m_didReturnFromNotify { false };
     bool m_mustInvokeCancelTransfer { false };
     Function<void()> m_responseCompletionHandler;
 
+    bool m_isPausedOfRequest { false };
+    bool m_isPausedOfCallback { false };
+    Lock m_pauseStateMutex;
+    // Following `m_isHandlePaused` is actual paused state of CurlHandle. It's required because pause
+    // request coming from main thread has a time lag until it invokes and receive callback can
+    // change the state by returning a special value. So that is must be managed by this flag.
+    // Unfortunately libcurl doesn't have an interface to check the state.
+    // There's also no need to protect this flag by the mutex because it is and MUST BE accessed only
+    // within worker thread. The access must be using accessor to detect irregular usage.
+    // [TODO] When libcurl is updated to fetch paused state, remove this state variable and
+    // setter/getter above.
+    bool m_isHandlePaused { false };
+
+    Lock m_downloadMutex;
+    bool m_isEnabledDownloadToFile { false };
+    String m_downloadFilePath;
+    FileSystem::FileHandle m_downloadFileHandle;
+
     bool m_captureExtraMetrics;
     size_t m_requestHeaderSize { 0 };
     HTTPHeaderMap m_requestHeaders;
     MonotonicTime m_performStartTime;
     size_t m_totalReceivedSize { 0 };
+#if PLATFORM(HAIKU)
+    MonotonicTime m_netTraceQueuedAtHaiku;
+    bool m_preconnectOnlyHaiku { false };
+    // The response's Content-Encoding, undone here: libcurl decodes only
+    // gzip and deflate, and the system's libcurl has no brotli or zstd.
+    bool m_decodesContentHaiku { false };
+    std::unique_ptr<ContentDecoderHaiku> m_contentDecoderHaiku;
+    // Set on the worker thread when the connection is up (preconnects).
+    bool m_preconnectedHaiku { false };
+    bool m_preconnectedMultiplexedHaiku { false };
+#endif
 };
 
 } // namespace WebCore

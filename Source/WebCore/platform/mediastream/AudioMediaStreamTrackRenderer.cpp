@@ -35,6 +35,10 @@
 #include "AudioMediaStreamTrackRendererCocoa.h"
 #endif
 
+#if PLATFORM(HAIKU)
+#include "AudioMediaStreamTrackRendererHaiku.h"
+#endif
+
 #if USE(LIBWEBRTC)
 #include "LibWebRTCAudioModule.h"
 #endif
@@ -51,6 +55,8 @@ RefPtr<AudioMediaStreamTrackRenderer> AudioMediaStreamTrackRenderer::create(Init
 {
 #if PLATFORM(COCOA)
     return AudioMediaStreamTrackRendererCocoa::create(WTF::move(init));
+#elif PLATFORM(HAIKU)
+    return AudioMediaStreamTrackRendererHaiku::create(WTF::move(init));
 #else
     UNUSED_PARAM(init);
     return nullptr;

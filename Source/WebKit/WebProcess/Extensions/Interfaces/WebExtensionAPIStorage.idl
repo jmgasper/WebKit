@@ -25,12 +25,15 @@
 
 [
     Conditional=WK_WEB_EXTENSIONS,
+    UseCPPAPI,
     ReturnsPromiseWhenCallbackIsOmitted,
 ] interface WebExtensionAPIStorage {
 
     [Dynamic] readonly attribute WebExtensionAPIStorageArea local;
     [Dynamic] readonly attribute WebExtensionAPIStorageArea session;
     [Dynamic] readonly attribute WebExtensionAPIStorageArea sync;
+    // No enterprise policy source: an empty, read-only area, as in a browser without policies.
+    [Dynamic] readonly attribute WebExtensionAPIStorageArea managed;
 
     readonly attribute WebExtensionAPIEvent onChanged;
 };

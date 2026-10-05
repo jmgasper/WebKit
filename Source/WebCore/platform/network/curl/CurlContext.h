@@ -49,8 +49,22 @@ namespace WebCore {
 
 // Values taken from http://www.browserscope.org/ following
 // the rule "Do What Every Other Modern Browser Is Doing".
+#if PLATFORM(HAIKU)
+// libcurl's default sizes its connection cache at four per transfer in progress, so a
+// page that pauses between bursts loses its HTTP/2 connections and pays for new
+// TLS handshakes (The Verge: 203 handshakes for 141 hosts, 129 with this).
+const long CurlDefaultMaxConnects { 128 };
+#else
 const long CurlDefaultMaxConnects { -1 }; // -1 : Does not set CURLMOPT_MAXCONNECTS
+#endif
+#if PLATFORM(HAIKU)
+// Seventeen connections for the whole browser made a restored session of many
+// tabs, or a page with assets on twenty hosts, wait for sockets. Browsers on
+// desktops allow hundreds (Chrome 256); six per host still applies.
+const long CurlDefaultMaxTotalConnections { 256 };
+#else
 const long CurlDefaultMaxTotalConnections { 17 };
+#endif
 const long CurlDefaultMaxHostConnections { 6 };
 
 // CurlGlobal --------------------------------------------

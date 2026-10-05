@@ -25,6 +25,8 @@
 
 #pragma once
 
+#include "CertificateInfo.h"
+
 #include <WebCore/FloatSize.h>
 #include <WebCore/FrameIdentifier.h>
 #include <WebCore/FrameLoaderTypes.h>
@@ -35,6 +37,7 @@
 
 namespace WebCore {
 
+class DocumentLoader;
 class FormState;
 class Frame;
 class HitTestResult;
@@ -52,6 +55,7 @@ using SandboxFlags = OptionSet<SandboxFlag>;
 class FrameLoaderClient : public WebCore::FrameTreeSyncClient {
 public:
     virtual void dispatchDecidePolicyForNavigationAction(const NavigationAction&, const ResourceRequest&, const ResourceResponse& redirectResponse, FormState*, const String& clientRedirectSourceForHistory, std::optional<NavigationIdentifier>, std::optional<HitTestResult>&&, bool hasOpener, NavigationUpgradeToHTTPSBehavior, SandboxFlags, PolicyDecisionMode, FramePolicyFunction&&) = 0;
+    virtual bool dispatchDidReceiveInvalidCertificate(DocumentLoader*, const CertificateInfo&, const char*) { return false; }
     virtual void updateSandboxFlags(SandboxFlags) = 0;
     virtual void updateOpener(std::optional<FrameIdentifier>) = 0;
     virtual void setPrinting(bool printing, FloatSize pageSize, FloatSize originalPageSize, float maximumShrinkRatio, AdjustViewSize) = 0;

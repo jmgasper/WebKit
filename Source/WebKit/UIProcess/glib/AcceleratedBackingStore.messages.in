@@ -26,7 +26,10 @@
     ExceptionForEnabledBy
 ]
 messages -> AcceleratedBackingStore {
+#if USE(GBM)
     DidCreateDMABufBuffer(uint64_t id, WebCore::DMABufBufferAttributes dmaBufAttributes, WebKit::RendererBufferFormat::Usage usage)
+#endif
+
     DidCreateSHMBuffer(uint64_t id, WebCore::ShareableBitmapHandle handle)
 
 #if OS(ANDROID)
@@ -35,6 +38,9 @@ messages -> AcceleratedBackingStore {
 
     DidDestroyBuffer(uint64_t id)
     Frame(uint64_t id, Vector<WebCore::IntRect, 1> damage, UnixFileDescriptor syncFD)
+#if PLATFORM(HAIKU)
+    DirectFrame(uint64_t id)
+#endif
 
 #if ENABLE(WPE_PLATFORM)
     DidChangeBufferConfiguration(uint32_t bufferCount);

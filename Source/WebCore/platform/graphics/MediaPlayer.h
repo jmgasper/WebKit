@@ -109,7 +109,7 @@ class TextTrackRepresentation;
 class VideoFrame;
 class VideoTrackPrivate;
 
-#if USE(GSTREAMER) && USE(COORDINATED_GRAPHICS)
+#if (USE(GSTREAMER) || PLATFORM(HAIKU)) && USE(COORDINATED_GRAPHICS)
 class CoordinatedPlatformLayerBufferProxy;
 #endif
 
@@ -166,6 +166,7 @@ enum class MediaPlatformType {
     Mock,
     AVFObjC,
     GStreamer,
+    Haiku,
     Remote
 };
 
@@ -180,6 +181,9 @@ enum class MediaPlayerType {
     CocoaWebM,
     GStreamer,
     GStreamerMSE,
+    Haiku,
+    HaikuMSE,
+    HaikuMediaStream,
     HolePunch,
     WirelessPlayback,
     Remote
@@ -688,10 +692,10 @@ public:
 #if USE(GSTREAMER)
     void simulateAudioInterruption();
     bool isGStreamerHolePunchingEnabled();
-#if USE(COORDINATED_GRAPHICS)
+#endif
+#if (USE(GSTREAMER) || PLATFORM(HAIKU)) && USE(COORDINATED_GRAPHICS)
     void setPlatformLayerBufferProxy(Ref<CoordinatedPlatformLayerBufferProxy>&&);
     RefPtr<CoordinatedPlatformLayerBufferProxy> platformLayerBufferProxy() const;
-#endif
 #endif
 
     String languageOfPrimaryAudioTrack() const;

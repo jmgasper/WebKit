@@ -14,7 +14,7 @@ set(WebKitLegacy_SOURCES
     WebCoreSupport/NetworkStorageSessionMap.cpp
     WebCoreSupport/WebBroadcastChannelRegistry.cpp
     WebCoreSupport/WebResourceLoadScheduler.cpp
-    WebCoreSupport/WebViewGroup.mm
+    WebCoreSupport/WebViewGroup.cpp
 )
 
 set(WebKitLegacy_PRIVATE_INCLUDE_DIRECTORIES
@@ -52,3 +52,9 @@ WEBKIT_COPY_FILES(WebKitLegacy_CopyHeaders
     FILES ${WebKitLegacy_PUBLIC_FRAMEWORK_HEADERS}
     FLATTENED
 )
+
+if (HAIKU)
+	WEBKIT_POPULATE_LIBRARY_VERSION(WEBKIT)
+	set_target_properties(WebKitLegacy PROPERTIES VERSION ${WEBKIT_VERSION} SOVERSION ${WEBKIT_VERSION_MAJOR})
+	install(TARGETS WebKitLegacy DESTINATION "${LIB_INSTALL_DIR}")
+endif ()

@@ -28,10 +28,13 @@
 #include <WebCore/CookieStorageSession.h>
 #include <pal/SessionID.h>
 #include <wtf/MainThread.h>
+#include <wtf/NeverDestroyed.h>
 #include <wtf/ProcessID.h>
 #include <wtf/ProcessPrivilege.h>
 #include <wtf/UUID.h>
 #include <wtf/text/MakeString.h>
+
+#include <memory>
 
 static std::unique_ptr<WebCore::CookieStorageSession>& defaultNetworkStorageSession()
 {
@@ -100,6 +103,10 @@ void NetworkStorageSessionMap::ensureSession(PAL::SessionID sessionID, const Str
     }
 
     addResult.iterator->value = makeUnique<WebCore::CookieStorageSession>(sessionID, WTF::move(storageSession), WTF::move(cookieStorage));
+#elif PLATFORM(HAIKU) && USE(CURL)
+    globalSessionMap().ensure(sessionID, [sessionID] {
+        return makeUnique<WebCore::CookieStorageSession>(sessionID);
+    });
 #endif
 }
 

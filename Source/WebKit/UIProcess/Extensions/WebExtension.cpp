@@ -48,6 +48,10 @@
 #include <wtf/text/StringToIntegerConversion.h>
 #include <wtf/text/WTFString.h>
 
+#if PLATFORM(HAIKU)
+#include "haiku/WebExtensionResourcePathsHaiku.h"
+#endif
+
 namespace WebKit {
 
 using namespace WebCore;
@@ -189,6 +193,9 @@ WebExtension::WebExtension(const JSON::Value& manifest, Resources&& resources)
     RELEASE_ASSERT(manifestString);
 
     m_stringResources.set("manifest.json"_s, manifestString);
+#if PLATFORM(HAIKU)
+    initializeNativeResourceSnapshot();
+#endif
 }
 
 WebExtension::WebExtension(Resources&& resources)
@@ -196,12 +203,23 @@ WebExtension::WebExtension(Resources&& resources)
     , m_dataResources(toDataResources(resources))
     , m_stringResources(toStringResources(resources))
 {
+#if PLATFORM(HAIKU)
+    initializeNativeResourceSnapshot();
+#endif
 }
 
 WebExtension::~WebExtension()
 {
-    if (m_resourcesAreTemporary && !m_resourceBaseURL.isEmpty())
-        FileSystem::deleteNonEmptyDirectory(m_resourceBaseURL.fileSystemPath());
+    if (m_resourcesAreTemporary && !m_resourceBaseURL.isEmpty()) {
+        auto path = m_resourceBaseURL.fileSystemPath();
+#if PLATFORM(HAIKU)
+        // A resource base URL needs a final slash for relative URL resolution.
+        // Haiku's std::filesystem::remove_all removes its children but rejects
+        // the directory itself when that slash is passed through to removal.
+        FileSystem::removeTrailingSlash(path);
+#endif
+        FileSystem::deleteNonEmptyDirectory(path);
+    }
 }
 
 static String convertChromeExtensionToTemporaryZipFile(const String& inputFilePath)
@@ -315,6 +333,16 @@ bool WebExtension::parseManifest(StringView manifestString)
         } else
             recordError(createError(Error::InvalidDefaultLocale));
     }
+#if PLATFORM(HAIKU)
+    // Safari packages built for Xcode's converter can ship _locales without
+    // default_locale (Obsidian Web Clipper); without one no message resolves
+    // and every __MSG__ and i18n.getMessage() string is empty. Use the best
+    // match for the system language, else English, else the first locale.
+    else if (auto& locales = supportedLocales(); !locales.isEmpty()) {
+        auto best = bestMatchLocale();
+        m_defaultLocale = !best.isEmpty() ? best : locales.contains("en"_s) ? "en"_s : locales.first();
+    }
+#endif
 
     Ref localization = WebExtensionLocalization::create(*this);
     m_localization = localization.copyRef();
@@ -527,6 +555,9 @@ URL WebExtension::resourceFileURLForPath(const String& originalPath)
 {
     ASSERT(originalPath);
 
+#if PLATFORM(HAIKU)
+    return resolveWebExtensionResourceURLHaiku(m_resourceBaseURL, originalPath);
+#else
     String path = originalPath;
     if (path.startsWith('/'))
         path = path.substring(1);
@@ -541,19 +572,20 @@ URL WebExtension::resourceFileURLForPath(const String& originalPath)
     // Don't allow escaping the base URL with "../".
     auto basePath = FileSystem::realPath(m_resourceBaseURL.fileSystemPath());
     auto resourcePath = FileSystem::realPath(result.fileSystemPath());
-    if (!resourcePath.startsWith(basePath)) {
+    if (!FileSystem::isAncestor(basePath, resourcePath)) {
         RELEASE_LOG_ERROR(Extensions, "Resource URL path escape attempt: %s", resourcePath.utf8().legacyCStringPointer());
         return { };
     }
 
     return result;
+#endif
 }
 
 String WebExtension::resourceMIMETypeForPath(const String& path)
 {
     auto dataPrefix = "data:"_s;
     if (path.startsWith(dataPrefix)) {
-        auto mimeTypePosition = path.find(';');
+        auto mimeTypePosition = std::min(path.find(';'), path.find(','));
         if (mimeTypePosition != notFound)
             return path.substring(dataPrefix.length(), mimeTypePosition - dataPrefix.length());
         return defaultMIMEType();
@@ -1642,6 +1674,11 @@ const WebExtension::PermissionsSet& WebExtension::supportedPermissions()
         WebExtensionPermission::contextMenus(), WebExtensionPermission::cookies(), WebExtensionPermission::declarativeNetRequest(), WebExtensionPermission::declarativeNetRequestFeedback(),
         WebExtensionPermission::declarativeNetRequestWithHostAccess(), WebExtensionPermission::menus(), WebExtensionPermission::nativeMessaging(), WebExtensionPermission::notifications(), WebExtensionPermission::scripting(),
         WebExtensionPermission::storage(), WebExtensionPermission::tabs(), WebExtensionPermission::unlimitedStorage(), WebExtensionPermission::webNavigation(), WebExtensionPermission::webRequest(),
+#if PLATFORM(HAIKU)
+        WebExtensionPermission::privacy(), WebExtensionPermission::downloads(), "idle"_s, "management"_s, "webRequestBlocking"_s,
+        // MV3's permission for answering onAuthRequired (Bitwarden, LastPass).
+        "webRequestAuthProvider"_s,
+#endif
 #if ENABLE(WK_WEB_EXTENSIONS_SIDEBAR)
         WebExtensionPermission::sidePanel(),
 #endif
@@ -2216,6 +2253,12 @@ using ModifierFlags = WebExtension::ModifierFlags;
 
 static bool parseCommandShortcut(const String& shortcut, OptionSet<ModifierFlags>& modifierFlags, String& key)
 {
+#if PLATFORM(HAIKU)
+    auto parsed = parseWebExtensionCommandShortcut(shortcut);
+    modifierFlags = parsed ? parsed->modifiers : OptionSet<ModifierFlags> { };
+    key = parsed ? parsed->activationKey : emptyString();
+    return parsed.has_value();
+#else
     modifierFlags = { };
     key = emptyString();
 
@@ -2300,6 +2343,7 @@ static bool parseCommandShortcut(const String& shortcut, OptionSet<ModifierFlags
         return false;
 
     return true;
+#endif
 }
 
 void WebExtension::populateCommandsIfNeeded()
@@ -2355,6 +2399,13 @@ void WebExtension::populateCommandsIfNeeded()
 
             // Descriptions are required for standard commands, but are optional for action commands.
             auto description = commandObject->getString(commandsDescriptionKeyManifestKey);
+#if PLATFORM(HAIKU)
+            // Firefox keeps a command without a description (Multi-Account
+            // Containers names messages its locales lack); dropping it breaks
+            // the extension's commands.update() calls.
+            if (description.isEmpty() && !isActionCommand)
+                description = commandIdentifier;
+#endif
             if (description.isEmpty() && !isActionCommand) {
                 error = WEB_UI_STRING("Empty or invalid `description` in the `commands` manifest entry.", "WKWebExtensionErrorInvalidManifestEntry description for invalid command description");
                 continue;
@@ -2368,7 +2419,25 @@ void WebExtension::populateCommandsIfNeeded()
 
             commandData.description = description;
 
+#if PLATFORM(HAIKU)
+            RefPtr suggestedKeyValue = commandObject->getValue(commandsSuggestedKeyManifestKey);
+            RefPtr suggestedKeyObject = commandObject->getObject(commandsSuggestedKeyManifestKey);
+            if (suggestedKeyValue && !suggestedKeyObject) {
+                if (suggestedKeyValue->type() != JSON::Value::Type::String) {
+                    error = WEB_UI_STRING("Invalid `suggested_key` in the `commands` manifest entry.", "WKWebExtensionErrorInvalidManifestEntry description for invalid command shortcut");
+                    continue;
+                }
+                suggestedKeyObject = JSON::Object::create();
+                suggestedKeyObject->setString("default"_s, suggestedKeyValue->asString());
+            }
+            if (suggestedKeyObject) {
+                if (RefPtr value = suggestedKeyObject->getValue("default"_s); value && value->type() != JSON::Value::Type::String) {
+                    error = WEB_UI_STRING("Invalid `suggested_key` in the `commands` manifest entry.", "WKWebExtensionErrorInvalidManifestEntry description for invalid command shortcut");
+                    continue;
+                }
+#else
             if (RefPtr suggestedKeyObject = commandObject->getObject(commandsSuggestedKeyManifestKey)) {
+#endif
 #if PLATFORM(MAC) || PLATFORM(IOS_FAMILY)
                 const auto macPlatform = "mac"_s;
                 const auto iosPlatform = "ios"_s;

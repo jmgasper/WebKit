@@ -49,15 +49,50 @@ class WebExtensionAPITabs : public WebExtensionAPIObject, public JSWebExtensionW
     WEB_EXTENSION_DECLARE_JS_WRAPPER_CLASS(WebExtensionAPITabs, tabs, tabs);
 
 public:
-#if PLATFORM(COCOA)
+    void getCurrent(WebPageProxyIdentifier, Ref<WebExtensionCallbackHandler>&&);
+    double tabIdentifierNone() const { return -1; }
+
+    WebExtensionAPIEvent& onActivated();
+    WebExtensionAPIEvent& onAttached();
+    WebExtensionAPIEvent& onCreated();
+    WebExtensionAPIEvent& onDetached();
+    WebExtensionAPIEvent& onHighlighted();
+    WebExtensionAPIEvent& onMoved();
+    WebExtensionAPIEvent& onRemoved();
+    WebExtensionAPIEvent& onReplaced();
+    WebExtensionAPIEvent& onUpdated();
+
+    void query(WebPageProxyIdentifier page, RefPtr<JSON::Value> info, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    void get(double tabID, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    void sendMessage(WebFrame& frame, double tabID, const String& message, RefPtr<JSON::Value> options, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    void executeScript(WebPageProxyIdentifier page, double tabID, RefPtr<JSON::Value> options, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
     bool isPropertyAllowed(const ASCIILiteral& propertyName, WebPage*);
+    void createTab(WebPageProxyIdentifier page, RefPtr<JSON::Value> properties, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    void update(WebPageProxyIdentifier page, double tabID, RefPtr<JSON::Value> properties, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    // A tab identifier or an array of them: not a dictionary, so the binding passes the value through.
+    void remove(JSContextRef, JSValueRef tabIDs, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    void reload(WebPageProxyIdentifier page, double tabID, RefPtr<JSON::Value> properties, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    void goBack(WebPageProxyIdentifier page, double tabID, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    void goForward(WebPageProxyIdentifier page, double tabID, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    RefPtr<WebExtensionAPIPort> connect(WebFrame& frame, JSContextRef context, double tabID, RefPtr<JSON::Value> options, String& exception);
+    void insertCSS(WebPageProxyIdentifier page, double tabID, RefPtr<JSON::Value> options, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    void removeCSS(WebPageProxyIdentifier page, double tabID, RefPtr<JSON::Value> options, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    void captureVisibleTab(WebPageProxyIdentifier page, double windowID, RefPtr<JSON::Value> options, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    void move(JSContextRef, JSValueRef tabIDs, RefPtr<JSON::Value> properties, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+#if PLATFORM(COCOA)
+    void getSelected(WebPageProxyIdentifier page, double windowID, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    void duplicate(double tabID, RefPtr<JSON::Value> properties, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    void getZoom(WebPageProxyIdentifier page, double tabID, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    void setZoom(WebPageProxyIdentifier page, double tabID, double zoomFactor, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    void detectLanguage(WebPageProxyIdentifier page, double tabID, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+    void toggleReaderMode(WebPageProxyIdentifier page, double tabID, Ref<WebExtensionCallbackHandler>&& callback, String& exception);
+
 
     void createTab(WebPageProxyIdentifier, NSDictionary *properties, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
 
     void query(WebPageProxyIdentifier, NSDictionary *info, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
 
     void get(double tabID, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
-    void getCurrent(WebPageProxyIdentifier, Ref<WebExtensionCallbackHandler>&&);
     void getSelected(WebPageProxyIdentifier, double windowID, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
 
     void duplicate(double tabID, NSDictionary *properties, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
@@ -83,17 +118,6 @@ public:
     void insertCSS(WebPageProxyIdentifier, double tabID, NSDictionary *options, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
     void removeCSS(WebPageProxyIdentifier, double tabID, NSDictionary *options, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
 
-    double tabIdentifierNone() const { return -1; }
-
-    WebExtensionAPIEvent& onActivated();
-    WebExtensionAPIEvent& onAttached();
-    WebExtensionAPIEvent& onCreated();
-    WebExtensionAPIEvent& onDetached();
-    WebExtensionAPIEvent& onHighlighted();
-    WebExtensionAPIEvent& onMoved();
-    WebExtensionAPIEvent& onRemoved();
-    WebExtensionAPIEvent& onReplaced();
-    WebExtensionAPIEvent& onUpdated();
 
 private:
     bool parseTabCreateOptions(NSDictionary *, WebExtensionTabParameters&, NSString *sourceKey, NSString **outExceptionString);
@@ -105,6 +129,9 @@ private:
     static bool parseConnectOptions(NSDictionary *, std::optional<String>& name, WebExtensionMessageTargetParameters&, NSString *sourceKey, NSString **outExceptionString);
     static bool parseScriptOptions(NSDictionary *, WebExtensionScriptInjectionParameters&, NSString **outExceptionString);
 
+
+#endif
+private:
     RefPtr<WebExtensionAPIEvent> m_onActivated;
     RefPtr<WebExtensionAPIEvent> m_onAttached;
     RefPtr<WebExtensionAPIEvent> m_onCreated;
@@ -114,7 +141,6 @@ private:
     RefPtr<WebExtensionAPIEvent> m_onRemoved;
     RefPtr<WebExtensionAPIEvent> m_onReplaced;
     RefPtr<WebExtensionAPIEvent> m_onUpdated;
-#endif
 };
 
 bool isValid(std::optional<WebExtensionTabIdentifier>, NSString **outExceptionString);

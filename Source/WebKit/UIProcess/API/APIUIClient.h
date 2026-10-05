@@ -106,6 +106,10 @@ public:
     virtual void didExitFullscreen(WebKit::WebPageProxy*) { }
     virtual void hasVideoInPictureInPictureDidChange(WebKit::WebPageProxy*, bool) { }
     virtual void close(WebKit::WebPageProxy*) { }
+    // The asynchronous tryClose request finished with an explicit refusal.
+    virtual void didCancelClose(WebKit::WebPageProxy*) { }
+    // Main-frame document.open replaced the active document without navigation.
+    virtual void didExplicitOpen(WebKit::WebPageProxy*) { }
 
     virtual bool takeFocus(WebKit::WebPageProxy*, WKFocusDirection) { return false; }
     virtual void focus(WebKit::WebPageProxy*) { }

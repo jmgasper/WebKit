@@ -29,10 +29,16 @@
 
 #include "WebURLSchemeHandler.h"
 #include <wtf/Forward.h>
+#if PLATFORM(COCOA)
 #include <wtf/RetainPtr.h>
+#else
+#include <wtf/HashSet.h>
+#endif
 #include <wtf/WeakPtr.h>
 
+#if PLATFORM(COCOA)
 OBJC_CLASS NSBlockOperation;
+#endif
 
 namespace WebKit {
 
@@ -53,7 +59,11 @@ private:
     void platformTaskCompleted(WebURLSchemeTask&) final;
 
     WeakPtr<WebExtensionController> m_webExtensionController;
+#if PLATFORM(COCOA)
     HashMap<Ref<WebURLSchemeTask>, RetainPtr<NSBlockOperation>> m_operations;
+#else
+    HashSet<Ref<WebURLSchemeTask>> m_pendingTasks;
+#endif
 }; // class WebExtensionURLSchemeHandler
 
 } // namespace WebKit

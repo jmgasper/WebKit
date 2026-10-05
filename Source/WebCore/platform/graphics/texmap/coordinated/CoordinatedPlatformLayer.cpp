@@ -906,6 +906,22 @@ void CoordinatedPlatformLayer::updateBackingStore()
         backingStoreProxy = m_backingStoreProxy;
     }
 
+#if PLATFORM(HAIKU)
+    // SUMMIT_TILE_UPDATE_TRACE=1: which layer is repainted, and how much of it.
+    static const bool traceTileUpdates = [] {
+        const char* value = getenv("SUMMIT_TILE_UPDATE_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    if (traceTileUpdates) {
+        IntRect dirty;
+        for (auto& rect : m_dirtyRegion)
+            dirty.unite(rect);
+        auto name = m_owner ? m_owner->name().utf8() : CString();
+        fprintf(stderr, "Summit tile update: layer=%p \"%s\" size=%.0fx%.0f scale=%.2f dirty=%zu rects, bounds %d,%d %dx%d tilesUpdate=%d pendingCreation=%d opaque=%d\n",
+            static_cast<void*>(this), name.data() ? reinterpret_cast<const char*>(name.data()) : "", size.width(), size.height(), contentsScale, m_dirtyRegion.size(),
+            dirty.x(), dirty.y(), dirty.width(), dirty.height(), m_needsTilesUpdate, m_pendingTilesCreation, contentsOpaque);
+    }
+#endif
     Damage damage(size, Damage::Mode::Rectangles);
     auto updateResult = backingStoreProxy->updateIfNeeded(m_transformedVisibleRect, size, m_visibleRect, contentsScale, contentsOpaque, m_pendingTilesCreation || m_needsTilesUpdate, m_dirtyRegion, damage, *this);
     m_dirtyRegion.clear();
@@ -1149,6 +1165,8 @@ void CoordinatedPlatformLayer::flushCompositingStateOnTarget(const OptionSet<Com
         }
 
         if (m_pendingChanges.contains(Change::BackgroundColor)) {
+            // On Haiku a layer keeps its background color with tiles, and
+            // TextureMapperLayer::paintSelf() draws it under them.
             layer.setBackgroundColor(m_backgroundColor);
             m_pendingChanges.remove(Change::BackgroundColor);
         }
@@ -1163,7 +1181,9 @@ void CoordinatedPlatformLayer::flushCompositingStateOnTarget(const OptionSet<Com
                 if (!m_backingStore)
                     m_backingStore = CoordinatedBackingStore::create();
                 layer.setBackingStore(m_backingStore.get());
+#if !PLATFORM(HAIKU)
                 layer.setBackgroundColor({ });
+#endif
 
                 if (auto* animatedBackingStoreClient = m_backingStoreProxy->animatedBackingStoreClient())
                     layer.setAnimatedBackingStoreClient(animatedBackingStoreClient);
@@ -1171,6 +1191,10 @@ void CoordinatedPlatformLayer::flushCompositingStateOnTarget(const OptionSet<Com
                 layer.setBackingStore(nullptr);
                 layer.setAnimatedBackingStoreClient(nullptr);
                 m_backingStore = nullptr;
+#if PLATFORM(HAIKU)
+                // Without tiles, the background color is what the layer shows.
+                layer.setBackgroundColor(m_backgroundColor);
+#endif
             }
             m_pendingChanges.remove(Change::BackingStore);
         }
@@ -1286,6 +1310,14 @@ void CoordinatedPlatformLayer::flushCompositingStateOnTarget(const OptionSet<Com
             m_contentsBuffer.committed = WTF::move(m_contentsBuffer.pending);
             m_contentsBuffer.hasCommitted = !!m_contentsBuffer.committed;
             m_pendingChanges.remove(Change::ContentsBuffer);
+#if PLATFORM(HAIKU) && ENABLE(DAMAGE_TRACKING)
+            // The damage recorded with a new buffer is handed to the layer
+            // above, by rendering updates and scrolls only. A video frame
+            // comes on its own: without damage of its own the compositor
+            // drew it and nothing read it back, and the picture on screen
+            // stood still until the page around it changed.
+            layer.setDamage(Damage { m_size, Damage::Mode::Full });
+#endif
         }
 
         if (m_contentsBuffer.committed)

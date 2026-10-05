@@ -55,30 +55,24 @@ namespace CookieUtil {
 
 bool isIPAddress(const String& hostname)
 {
+    if (hostname.startsWith('[') && hostname.endsWith(']'))
+        return URL::hostIsIPAddress(StringView(hostname).substring(1, hostname.length() - 2));
     return URL::hostIsIPAddress(hostname);
 }
 
 bool domainMatch(const String& cookieDomain, const String& host)
 {
-    size_t index = host.find(cookieDomain);
-
-    bool tailMatch = (index != notFound && index + cookieDomain.length() == host.length());
-
-    // Check if host equals cookie domain.
-    if (tailMatch && !index)
+    if (cookieDomain.isEmpty() || host.isEmpty())
+        return false;
+    if (cookieDomain == host)
         return true;
 
-    // Check if host is a subdomain of the domain in the cookie.
-    // Curl uses a '.' in front of domains to indicate it's valid on subdomains.
-    if (tailMatch && index > 0 && host[index] == '.')
-        return true;
-
-    // Check the special case where host equals the cookie domain, except for a leading '.' in the cookie domain.
-    // E.g. cookie domain is .apple.com and host is apple.com.
-    if (cookieDomain[0] == '.' && cookieDomain.find(host) == 1)
-        return true;
-
-    return false;
+    // Curl stores domain cookies with a leading dot; host-only cookies must
+    // match exactly. Both domain cases must consume the complete suffix.
+    if (!cookieDomain.startsWith('.'))
+        return false;
+    return host == cookieDomain.substring(1)
+        || (host.length() > cookieDomain.length() && host.endsWith(cookieDomain) && !isIPAddress(host));
 }
 
 static std::optional<double> parseExpiresMS(std::span<const Latin1Character> expires)
@@ -107,7 +101,14 @@ static void parseCookieAttributes(const String& attribute, bool& hasMaxAge, Cook
         result.httpOnly = true;
     else if (equalLettersIgnoringASCIICase(attributeName, "secure"_s))
         result.secure = true;
-    else if (equalLettersIgnoringASCIICase(attributeName, "domain"_s)) {
+    else if (equalLettersIgnoringASCIICase(attributeName, "samesite"_s)) {
+        if (equalLettersIgnoringASCIICase(attributeValue, "lax"_s))
+            result.sameSite = Cookie::SameSitePolicy::Lax;
+        else if (equalLettersIgnoringASCIICase(attributeValue, "strict"_s))
+            result.sameSite = Cookie::SameSitePolicy::Strict;
+        else
+            result.sameSite = Cookie::SameSitePolicy::None;
+    } else if (equalLettersIgnoringASCIICase(attributeName, "domain"_s)) {
         if (attributeValue.isEmpty())
             return;
 
@@ -177,8 +178,10 @@ std::optional<Cookie> parseCookieHeader(const String& cookieLine)
     bool hasMaxAge = false;
     cookie.session = true;
 
-    for (auto attribute : cookieLine.splitAllowingEmptyEntries(';'))
-        parseCookieAttributes(attribute, hasMaxAge, cookie);
+    if (separatorPosition != notFound) {
+        for (auto attribute : cookieLine.substring(separatorPosition + 1).splitAllowingEmptyEntries(';'))
+            parseCookieAttributes(attribute, hasMaxAge, cookie);
+    }
 
     return cookie;
 }

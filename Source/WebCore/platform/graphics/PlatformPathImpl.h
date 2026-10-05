@@ -29,6 +29,8 @@
 #include <WebCore/PathCG.h>
 #elif USE(CAIRO)
 #include <WebCore/PathCairo.h>
+#elif USE(HAIKU_GRAPHICS)
+#include <WebCore/PathHaiku.h>
 #elif USE(SKIA)
 #include <WebCore/PathSkia.h>
 #endif

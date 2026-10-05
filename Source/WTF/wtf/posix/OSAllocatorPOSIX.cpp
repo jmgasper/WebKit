@@ -27,6 +27,8 @@
 #include <wtf/OSAllocator.h>
 
 #include <errno.h>
+#include <stdlib.h>
+#include <string.h>
 #include <mutex>
 #include <sys/mman.h>
 #include <wtf/Assertions.h>
@@ -260,7 +262,17 @@ void OSAllocator::commit(void* address, size_t bytes, bool writable, bool execut
 
 void OSAllocator::decommit(void* address, size_t bytes)
 {
-#if OS(LINUX) || OS(HAIKU)
+#if OS(HAIKU)
+    // Haiku accepts MADV_DONTNEED and does nothing with it (the kernel leaves
+    // it a TODO), so decommitted memory never left the process. MADV_FREE
+    // discards the pages at once, as MADV_DONTNEED does on Linux.
+    // SUMMIT_DECOMMIT=0 keeps the pages, as before.
+    static const int advice = [] {
+        const char* value = getenv("SUMMIT_DECOMMIT");
+        return value && !strcmp(value, "0") ? MADV_DONTNEED : MADV_FREE;
+    }();
+    while (madvise(address, bytes, advice) == -1 && errno == EAGAIN) { }
+#elif OS(LINUX)
     while (madvise(address, bytes, MADV_DONTNEED) == -1 && errno == EAGAIN) { }
 #elif HAVE(MADV_FREE_REUSE)
     while (madvise(address, bytes, MADV_FREE_REUSABLE) == -1 && errno == EAGAIN) { }
@@ -276,7 +288,14 @@ void OSAllocator::decommit(void* address, size_t bytes)
 
 void OSAllocator::hintMemoryNotNeededSoon(void* address, size_t bytes)
 {
-#if HAVE(MADV_DONTNEED)
+#if OS(HAIKU)
+    // See decommit(): only MADV_FREE releases anything on Haiku.
+    static const int advice = [] {
+        const char* value = getenv("SUMMIT_DECOMMIT");
+        return value && !strcmp(value, "0") ? MADV_DONTNEED : MADV_FREE;
+    }();
+    while (madvise(address, bytes, advice) == -1 && errno == EAGAIN) { }
+#elif HAVE(MADV_DONTNEED)
     while (madvise(address, bytes, MADV_DONTNEED) == -1 && errno == EAGAIN) { }
 #else
     UNUSED_PARAM(address);

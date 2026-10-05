@@ -243,13 +243,6 @@ void WebExtensionContext::cookiesGetAllCookieStores(CompletionHandler<void(std::
     completionHandler(WTF::move(stores));
 }
 
-void WebExtensionContext::fireCookiesChangedEventIfNeeded()
-{
-    constexpr auto type = WebExtensionEventListenerType::CookiesOnChanged;
-    wakeUpBackgroundContentIfNecessaryToFireEvents({ type }, [=, this, protectedThis = Ref { *this }] {
-        sendToProcessesForEvent(type, Messages::WebExtensionContextProxy::DispatchCookiesChangedEvent());
-    });
-}
 
 } // namespace WebKit
 

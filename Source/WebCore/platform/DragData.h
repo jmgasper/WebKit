@@ -53,6 +53,9 @@ namespace WebCore {
 class SelectionData;
 }
 typedef WebCore::SelectionData* DragDataRef;
+#elif PLATFORM(HAIKU)
+class BMessage;
+typedef class BMessage* DragDataRef;
 #else
 typedef void* DragDataRef;
 #endif
@@ -88,6 +91,10 @@ public:
 
 #if PLATFORM(COCOA)
     WEBCORE_EXPORT DragData(const String& dragStorageName, const IntPoint& clientPosition, const IntPoint& globalPosition, const Vector<String>&, Vector<String>&& /* promisedFileMIMETypes */, OptionSet<DragOperation>, OptionSet<DragApplicationFlags> = { }, OptionSet<DragDestinationAction> = anyDragDestinationAction(), std::optional<PageIdentifier> pageID = std::nullopt);
+#endif
+#if PLATFORM(HAIKU)
+    // An external drag (files from Tracker) carries its files' paths, also over IPC.
+    WEBCORE_EXPORT DragData(const IntPoint& clientPosition, const IntPoint& globalPosition, const Vector<String>& fileNames, OptionSet<DragOperation>, OptionSet<DragApplicationFlags> = { }, OptionSet<DragDestinationAction> = anyDragDestinationAction(), std::optional<PageIdentifier> pageID = std::nullopt);
 #endif
     // This constructor should used only by WebKit2 IPC because DragData
     // is initialized by the decoder and not in the constructor.

@@ -263,6 +263,11 @@ public:
     // Tell the view to invalidate the given region. The region is in view coordinates.
     virtual void setViewNeedsDisplay(const WebCore::Region&) = 0;
 
+#if PLATFORM(HAIKU)
+    // Complete on the WebKit main thread after presentation or view teardown.
+    virtual void presentBitmapHaiku(Ref<WebCore::ShareableBitmap>&&, const WebCore::IntSize&, float, CompletionHandler<void()>&& completionHandler) { completionHandler(); }
+#endif
+
     // Tell the view to scroll to the given position, and whether this was a programmatic scroll.
     virtual void requestScroll(const WebCore::FloatPoint& scrollPosition, const WebCore::IntPoint& scrollOrigin, WebCore::ScrollIsAnimated, WebCore::InterruptScrollAnimation) = 0;
 

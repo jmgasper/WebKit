@@ -60,7 +60,15 @@ LibWebRTCProvider::LibWebRTCProvider(WebPage& webPage)
     : m_webPage(webPage)
 {
     m_useNetworkThreadWithSocketServer = false;
+#if PLATFORM(HAIKU)
+    // Host candidates hide behind mDNS names only where the network process
+    // can answer for them (Avahi on GTK and WPE, Bonjour on Cocoa). Haiku has
+    // no mDNS responder: a name nobody answers would leave peers without host
+    // candidates, so they are given as they are, as browsers did before mDNS.
+    m_supportsMDNS = false;
+#else
     m_supportsMDNS = true;
+#endif
 }
 
 LibWebRTCProvider::~LibWebRTCProvider() = default;

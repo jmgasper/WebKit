@@ -31,6 +31,7 @@
 #include "WebExtensionAPIEvent.h"
 #include "WebExtensionAPIObject.h"
 #include "WebExtensionWindow.h"
+#include <wtf/JSONValues.h>
 
 OBJC_CLASS NSDictionary;
 OBJC_CLASS NSString;
@@ -51,7 +52,23 @@ public:
 
     const ListenerVector& listeners() const LIFETIME_BOUND { return m_listeners; }
 
+    template<typename Factory>
+    void invokeListenersWithArgumentFactory(OptionSet<WindowTypeFilter> filter, Factory&& factory)
+    {
+        auto listeners = m_listeners;
+        for (auto& entry : listeners) {
+            if (!entry.second.containsAny(filter))
+                continue;
+            Ref listener = *entry.first;
+            Protected<JSValueRef> argument = factory(listener->globalContext());
+            listener->call(argument.get());
+        }
+    }
+
+    void addListener(WebCore::FrameIdentifier, RefPtr<WebExtensionCallbackHandler>, RefPtr<JSON::Value> filter, String& exception);
+#if PLATFORM(COCOA)
     void addListener(WebCore::FrameIdentifier, RefPtr<WebExtensionCallbackHandler>, NSDictionary *filter, NSString **outExceptionString);
+#endif
     void removeListener(WebCore::FrameIdentifier, RefPtr<WebExtensionCallbackHandler>);
     bool hasListener(RefPtr<WebExtensionCallbackHandler>);
 

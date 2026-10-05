@@ -26,9 +26,10 @@
 [
     Conditional=WK_WEB_EXTENSIONS,
     MainWorldOnly,
+    UseCPPAPI,
 ] interface WebExtensionAPIWindowsEvent {
 
-    [NeedsFrameIdentifier, RaisesException] void addListener([CallbackHandler] function listener, [Optional, NSDictionary] any filter);
+    [NeedsFrameIdentifier, RaisesStringException] void addListener([CallbackHandler] function listener, [Optional, JSONValue] any filter);
     [NeedsFrameIdentifier] void removeListener([CallbackHandler] function listener);
     boolean hasListener([CallbackHandler] function listener);
 

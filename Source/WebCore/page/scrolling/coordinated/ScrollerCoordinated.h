@@ -67,6 +67,13 @@ private:
     RefPtr<CoordinatedPlatformLayer> m_hostLayer WTF_GUARDED_BY_LOCK(m_lock);
     AdwaitaScrollbarPainter::State m_state WTF_GUARDED_BY_LOCK(m_lock);
     ScrollerPairCoordinated::Values m_currentValue WTF_GUARDED_BY_LOCK(m_lock);
+#if PLATFORM(HAIKU)
+    // What the host layer shows now, so a repaint that would draw the same
+    // pixels is skipped.
+    std::optional<AdwaitaScrollbarPainter::State> m_paintedState WTF_GUARDED_BY_LOCK(m_lock);
+    float m_paintedScale WTF_GUARDED_BY_LOCK(m_lock) { 0 };
+    const CoordinatedPlatformLayer* m_paintedLayer WTF_GUARDED_BY_LOCK(m_lock) { nullptr };
+#endif
 };
 
 } // namespace WebCore

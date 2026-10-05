@@ -121,7 +121,7 @@ void ContentExtension::compileGlobalDisplayNoneStyleSheet()
 
 void ContentExtension::populateTopURLActionCacheIfNeeded(const URL& topURL) const
 {
-    if (m_cachedTopURL == topURL)
+    if (m_cachedTopURL && *m_cachedTopURL == topURL)
         return;
 
     DFABytecodeInterpreter interpreter(m_compiledExtension->topURLFiltersBytecode());
@@ -138,7 +138,7 @@ void ContentExtension::populateTopURLActionCacheIfNeeded(const URL& topURL) cons
 
 void ContentExtension::populateFrameURLActionCacheIfNeeded(const URL& frameURL) const
 {
-    if (m_cachedFrameURL == frameURL)
+    if (m_cachedFrameURL && *m_cachedFrameURL == frameURL)
         return;
 
     DFABytecodeInterpreter interpreter(m_compiledExtension->frameURLFiltersBytecode());

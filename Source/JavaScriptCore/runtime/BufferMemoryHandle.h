@@ -167,6 +167,11 @@ public:
 
     static size_t NODELETE fastMappedRedzoneBytes();
     static size_t NODELETE fastMappedBytes();
+#if OS(HAIKU)
+    // A signaling memory's reservation is mapped inaccessible and opened as
+    // the memory grows (SUMMIT_WASM_RESERVE_INACCESSIBLE=0: the old way).
+    static bool signalingMemoryStartsInaccessible();
+#endif
 
     static void* nullBasePointer();
 

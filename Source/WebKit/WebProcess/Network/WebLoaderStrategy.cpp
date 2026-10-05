@@ -85,7 +85,7 @@
 #include <WebCore/QuickLook.h>
 #endif
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
 #include "WebExtensionControllerProxy.h"
 #endif
 
@@ -415,7 +415,7 @@ static void addParametersShared(const LocalFrame* frame, NetworkResourceLoadPara
         page->logMediaDiagnosticMessage(parameters.request.httpBody());
 
         if (RefPtr webPage = WebPage::fromCorePage(*page)) {
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
             if (auto* extensionControllerProxy = webPage->webExtensionControllerProxy())
                 parameters.pageHasLoadedWebExtensions = extensionControllerProxy->hasLoadedContexts();
 #endif

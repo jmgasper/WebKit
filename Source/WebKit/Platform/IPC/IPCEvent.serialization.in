@@ -26,7 +26,11 @@ webkit_platform_header: "IPCEvent.h"
 #if PLATFORM(COCOA)
     MachSendRight takeSendRight();
 #endif
-#if !PLATFORM(COCOA)
+#if OS(HAIKU)
+    [Validator='!!*semaphore'] IPC::Semaphore semaphore();
+    [Validator='IPC::Signal::isValidConnection(*takeConnection)'] UnixFileDescriptor takeConnection();
+#endif
+#if !PLATFORM(COCOA) && !OS(HAIKU)
     IPC::Semaphore semaphore();
 #endif
 }

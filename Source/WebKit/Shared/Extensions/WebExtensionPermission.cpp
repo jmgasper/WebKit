@@ -58,6 +58,18 @@ String WebExtensionPermission::contextMenus()
     return "contextMenus"_s;
 }
 
+#if PLATFORM(HAIKU)
+String WebExtensionPermission::downloads()
+{
+    return "downloads"_s;
+}
+
+String WebExtensionPermission::privacy()
+{
+    return "privacy"_s;
+}
+#endif
+
 String WebExtensionPermission::cookies()
 {
     return "cookies"_s;

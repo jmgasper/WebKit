@@ -33,8 +33,16 @@
 #include "Page.h"
 #include "Timer.h"
 #include <wtf/SystemTracing.h>
+#if PLATFORM(HAIKU)
+#include <wtf/text/MakeString.h>
+#endif
 #include <wtf/TZoneMallocInlines.h>
 #include <wtf/text/TextStream.h>
+
+#if PLATFORM(HAIKU)
+#include <cstdlib>
+#include <cstring>
+#endif
 
 namespace WebCore {
 
@@ -88,7 +96,23 @@ void RenderingUpdateScheduler::scheduleRenderingUpdate()
 
     if (!scheduleAnimation()) {
         LOG_WITH_STREAM(DisplayLink, stream << "RenderingUpdateScheduler::scheduleRenderingUpdate for interval " << protect(m_page)->preferredRenderingUpdateInterval() << " falling back to timer");
-        startTimer(protect(m_page)->preferredRenderingUpdateInterval());
+        Seconds delay = protect(m_page)->preferredRenderingUpdateInterval();
+#if PLATFORM(HAIKU)
+        // Haiku has no display link, so every update comes from this timer.
+        // Counted from the request, the interval came on top of the time the
+        // page took to ask (requestAnimationFrame from inside its callback):
+        // a page asking 2 ms into its frame got a frame every 19 ms, 52 a
+        // second (WebGL Aquarium). Count it from the last update's start, as a
+        // display's refresh would; an update that is overdue runs at once.
+        // SUMMIT_REFRESH_FROM_REQUEST=1 returns to the old timing.
+        static const bool fromRequest = [] {
+            const char* value = getenv("SUMMIT_REFRESH_FROM_REQUEST");
+            return value && !strcmp(value, "1");
+        }();
+        if (!fromRequest && m_lastRefreshHaiku)
+            delay = std::clamp(delay - (MonotonicTime::now() - m_lastRefreshHaiku), 0_s, delay);
+#endif
+        startTimer(delay);
     }
     
     protect(m_page)->didScheduleRenderingUpdate();
@@ -113,6 +137,25 @@ void RenderingUpdateScheduler::clearScheduled()
     m_refreshTimer = nullptr;
 }
 
+#if PLATFORM(HAIKU)
+String RenderingUpdateScheduler::describeHaiku() const
+{
+    if (!isScheduled())
+        return "idle"_s;
+    if (!m_refreshTimer)
+        return "pending through a display refresh monitor"_s;
+    if (!m_refreshTimer->isActive())
+        return "pending on a refresh timer that is not running"_s;
+    return makeString("refresh timer due in "_s, m_refreshTimer->nextFireInterval().milliseconds(), " ms"_s);
+}
+
+void RenderingUpdateScheduler::restartHaiku()
+{
+    clearScheduled();
+    triggerRenderingUpdate();
+}
+#endif
+
 DisplayRefreshMonitorFactory* RenderingUpdateScheduler::displayRefreshMonitorFactory() const
 {
     return m_page->chrome().client().displayRefreshMonitorFactory();
@@ -130,6 +173,9 @@ void RenderingUpdateScheduler::displayRefreshFired()
 
     tracePoint(TriggerRenderingUpdate);
 
+#if PLATFORM(HAIKU)
+    m_lastRefreshHaiku = MonotonicTime::now();
+#endif
     clearScheduled();
     
     if (m_page->chrome().client().shouldTriggerRenderingUpdate(m_rescheduledRenderingUpdateCount)) {

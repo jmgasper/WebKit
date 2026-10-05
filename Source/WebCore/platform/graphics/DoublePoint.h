@@ -106,6 +106,10 @@ public:
     WEBCORE_EXPORT DoublePoint(const POINT&);
 #endif
 
+#if PLATFORM(HAIKU)
+    WEBCORE_EXPORT DoublePoint(const BPoint&);
+#endif
+
     WEBCORE_EXPORT Ref<JSON::Object> toJSONObject() const;
 
     friend bool operator==(const DoublePoint&, const DoublePoint&) = default;

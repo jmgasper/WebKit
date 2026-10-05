@@ -48,6 +48,9 @@ namespace WebCore {
 class GraphicsContextCairo;
 }
 using PlatformGraphicsContext = WebCore::GraphicsContextCairo;
+#elif USE(HAIKU_GRAPHICS)
+#include <View.h>
+using PlatformGraphicsContext = BView;
 #elif USE(SKIA)
 class SkCanvas;
 using PlatformGraphicsContext = SkCanvas;

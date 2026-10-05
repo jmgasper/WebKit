@@ -67,7 +67,13 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(SkiaPaintingEngine);
 
 static bool canPerformAcceleratedRendering()
 {
+#if PLATFORM(HAIKU)
+    // The Haiku GL context is currently used for Canvas only. GPU tile
+    // painting through Zink has been slower than the CPU painting path.
+    return false;
+#else
     return ProcessCapabilities::canUseAcceleratedBuffers() && PlatformDisplay::sharedDisplay().skiaGLContext();
+#endif
 }
 
 SkiaPaintingEngine::SkiaPaintingEngine(sk_sp<GrContextThreadSafeProxy>&& threadSafeGrContext)
@@ -109,7 +115,18 @@ void SkiaPaintingEngine::paintIntoGraphicsContext(const GraphicsLayer& layer, Gr
 
     context.translate(-dirtyRect.x(), -dirtyRect.y());
     context.scale(contentsScale);
+#if PLATFORM(HAIKU)
+    // A large image an element shows for the first time is decoded on the
+    // image decoder's thread and painted when ready, as Cocoa's tiles do on
+    // their first paint; RenderLayerBacking only offers that on a layer's
+    // very first paint, and the root layer is painted many times while a
+    // page loads, so its pictures were decoded on the main thread while it
+    // painted (AVIF: 92 ms of a Guardian load in dav1d). An element that
+    // already shows its image still decodes in place, so nothing flickers.
+    layer.paintGraphicsLayerContents(context, clipRect, { GraphicsLayerPaintBehavior::DefaultAsynchronousImageDecode });
+#else
     layer.paintGraphicsLayerContents(context, clipRect);
+#endif
 }
 
 Ref<CoordinatedTileBuffer> SkiaPaintingEngine::createBuffer(RenderingMode renderingMode, const IntSize& size, bool contentsOpaque) const
@@ -259,10 +276,24 @@ Ref<CoordinatedTileBuffer> SkiaPaintingEngine::replay(const GraphicsLayerCoordin
 #else
     auto bufferSize = renderingMode == RenderingMode::Accelerated ? tileRect.size() : dirtyRect.size();
 #endif
+#if PLATFORM(HAIKU)
+    // The task below clears the canvas before it replays the recording.
+    auto buffer = renderingMode == RenderingMode::Accelerated ? createBuffer(renderingMode, bufferSize, recording->contentsOpaque())
+        : CoordinatedUnacceleratedTileBuffer::createForThreadedPainting(bufferSize, recording->contentsOpaque() ? CoordinatedTileBuffer::NoFlags : CoordinatedTileBuffer::SupportsAlpha);
+#else
     auto buffer = createBuffer(renderingMode, bufferSize, recording->contentsOpaque());
+#endif
     buffer->beginPainting();
+#if PLATFORM(HAIKU)
+    // A mask hides where it is transparent: its empty tiles have to be drawn.
+    const bool mayHaveNoTexture = !layer.isMaskLayer();
+#endif
 
-    m_paintingWorkerPool->postTask([platformLayer = WTF::move(platformLayer), buffer = Ref { buffer }, tileRect, dirtyRect, recording = WTF::move(recording), threadSafeGrContext = m_threadSafeGrContext]() mutable {
+    m_paintingWorkerPool->postTask([platformLayer = WTF::move(platformLayer), buffer = Ref { buffer }, tileRect, dirtyRect, recording = WTF::move(recording), threadSafeGrContext = m_threadSafeGrContext
+#if PLATFORM(HAIKU)
+        , mayHaveNoTexture
+#endif
+        ]() mutable {
         if (auto* canvas = buffer->canvas()) {
             auto replayPicture = [](const sk_sp<SkPicture>& picture, SkCanvas* canvas, const IntRect& recordRect, const IntRect& tileRect, const IntRect& dirtyRect, bool isDDLBuffer) {
                 canvas->save();
@@ -297,6 +328,10 @@ Ref<CoordinatedTileBuffer> SkiaPaintingEngine::replay(const GraphicsLayerCoordin
             WTFEndSignpost(canvas, PaintTile);
         }
 
+#if PLATFORM(HAIKU)
+        if (mayHaveNoTexture && !buffer->isBackedByOpenGL())
+            static_cast<CoordinatedUnacceleratedTileBuffer&>(buffer.get()).noteIfTransparent();
+#endif
         buffer->completePainting();
         platformLayer->didPaintTile();
     });
@@ -310,7 +345,15 @@ unsigned SkiaPaintingEngine::numberOfCPUPaintingThreads()
     static unsigned numberOfThreads = 0;
 
     std::call_once(onceFlag, [] {
+#if PLATFORM(HAIKU)
+        // The shared-memory compositor leaves layout and script work on the
+        // WebProcess main thread. On the 32-logical-core workstation two tile
+        // painters avoid the severe Speedometer stalls seen with eight, while
+        // keeping the 400-card scroll probe at display cadence.
+        numberOfThreads = std::max(1, std::min(2, WTF::numberOfProcessorCores() / 2));
+#else
         numberOfThreads = std::max(1, std::min(8, WTF::numberOfProcessorCores() / 2)); // By default, use half the CPU cores, capped at 8.
+#endif
 
         if (const char* envString = getenv("WEBKIT_SKIA_CPU_PAINTING_THREADS")) {
             auto newValue = parseInteger<unsigned>(StringView::fromLatin1(envString));

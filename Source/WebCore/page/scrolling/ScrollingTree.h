@@ -52,6 +52,29 @@
 
 namespace WebCore {
 
+#if PLATFORM(HAIKU)
+// SUMMIT_SCROLL_LOCK_TRACE=1 names whatever keeps the scrolling tree's lock, or
+// the scrolling thread, for over 20 ms.
+class ScrollingTraceScopeHaiku {
+public:
+    WEBCORE_EXPORT static bool enabled();
+    explicit ScrollingTraceScopeHaiku(const char* name)
+        : m_name(name)
+        , m_start(enabled() ? MonotonicTime::now() : MonotonicTime())
+    {
+    }
+    ~ScrollingTraceScopeHaiku()
+    {
+        if (m_start)
+            report(m_name, MonotonicTime::now() - m_start);
+    }
+    WEBCORE_EXPORT static void report(const char* name, Seconds);
+private:
+    const char* m_name;
+    MonotonicTime m_start;
+};
+#endif
+
 class IntPoint;
 class ScrollingStateTree;
 class ScrollingStateNode;
@@ -235,6 +258,9 @@ public:
 
     virtual void lockLayersForHitTesting() { }
     virtual void unlockLayersForHitTesting() { }
+#if PLATFORM(HAIKU)
+    virtual bool canHitTestWithoutWaitingHaiku() { return true; }
+#endif
 
     class HitTestLocker {
     public:
@@ -370,6 +396,26 @@ private:
 
     ScrollingTreeLatchingController m_latchingController;
     ScrollingTreeGestureState m_gestureState;
+
+#if PLATFORM(HAIKU)
+    // A wheel has no gesture phases to latch by, so every notch hit-tested
+    // the layers, twice, and a hit test waits for the main thread to finish
+    // flushing them: tens of milliseconds while a page loads. A burst of
+    // notches at one place scrolls what its first notch scrolled, and asks
+    // again what listens under the pointer only when that needs no waiting.
+    struct WheelLatchHaiku {
+        MonotonicTime lastEventTime;
+        IntPoint position;
+        Markable<ScrollingNodeID> nodeID;
+        OptionSet<WheelEventProcessingSteps> steps;
+        FloatSize delta;
+
+        bool matches(const PlatformWheelEvent&, MonotonicTime) const;
+    };
+    static bool wheelLatchEnabledHaiku();
+    WheelLatchHaiku m_wheelLatchForStepsHaiku WTF_GUARDED_BY_LOCK(m_treeStateLock);
+    WheelLatchHaiku m_wheelLatchForNodeHaiku WTF_GUARDED_BY_LOCK(m_treeLock);
+#endif
 
     RelatedNodesMap m_overflowRelatedNodesMap;
 

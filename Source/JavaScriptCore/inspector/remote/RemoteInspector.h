@@ -49,6 +49,10 @@ OBJC_CLASS NSString;
 typedef RetainPtr<NSDictionary> TargetListing;
 #endif
 
+#if PLATFORM(HAIKU)
+typedef void* TargetListing;
+#endif
+
 #if USE(GLIB)
 #include <wtf/glib/GRefPtr.h>
 #include <wtf/glib/SocketConnection.h>

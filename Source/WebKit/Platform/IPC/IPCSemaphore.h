@@ -29,6 +29,10 @@
 #include <wtf/Lock.h>
 #include <wtf/Noncopyable.h>
 #include <wtf/Seconds.h>
+#if OS(HAIKU)
+#include <wtf/RefPtr.h>
+namespace WebCore { class SharedMemory; }
+#endif
 #include <wtf/TZoneMallocInlines.h>
 
 #if PLATFORM(COCOA)
@@ -79,7 +83,12 @@ public:
 #elif USE(UNIX_DOMAIN_SOCKETS)
     explicit Semaphore(UnixFileDescriptor&&);
     UnixFileDescriptor duplicateDescriptor() const;
+#if OS(HAIKU)
+    explicit operator bool() const;
+    static bool isValidDescriptor(const UnixFileDescriptor&);
+#else
     explicit operator bool() const { return !!m_fd; }
+#endif
 #else
     explicit operator bool() const { return true; }
 #endif
@@ -92,6 +101,8 @@ private:
     semaphore_t m_semaphore { SEMAPHORE_NULL };
 #elif OS(WINDOWS)
     Win32Handle m_semaphoreHandle;
+#elif OS(HAIKU)
+    RefPtr<WebCore::SharedMemory> m_memory;
 #elif USE(UNIX_DOMAIN_SOCKETS)
     UnixFileDescriptor m_fd;
 #endif

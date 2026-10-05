@@ -104,6 +104,12 @@ messages -> NetworkProcessProxy WantsDispatchMessage {
     ReportConsoleMessage(PAL::SessionID sessionID, URL scriptURL, WebCore::SecurityOriginData serviceWorkerOrigin, enum:uint8_t JSC::MessageSource messageSource, enum:uint8_t JSC::MessageLevel messageLevel, String message, uint64_t requestIdentifier)
 
     CookiesDidChange(PAL::SessionID sessionID)
+#if PLATFORM(HAIKU) && USE(CURL)
+    CookiesDidChangeWithDetails(PAL::SessionID sessionID, Vector<WebCore::CookieChange> changes)
+#endif
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    ResourceLoadWebRequestDecisionHaiku(WebKit::WebPageProxyIdentifier pageIdentifier, uint8_t phase, struct WebKit::ResourceLoadInfo resourceLoadInfo, WebCore::ResourceRequest request, std::optional<IPC::FormDataReference> httpBody, std::optional<WebCore::ResourceResponse> response, std::optional<WebCore::AuthenticationChallenge> challenge) -> (struct WebKit::WebExtensionWebRequestGateResultHaiku result)
+#endif
 
     DeleteWebsiteDataInWebProcessesForOrigin(OptionSet<WebKit::WebsiteDataType> websiteDataTypes, struct WebCore::ClientOrigin origin, PAL::SessionID sessionID, WebKit::WebPageProxyIdentifier webPageProxyID) -> ()
     ReloadExecutionContextsForOrigin(struct WebCore::ClientOrigin origin, PAL::SessionID sessionID, std::optional<WebCore::FrameIdentifier> triggeringFrame) -> ()

@@ -29,70 +29,13 @@
 
 #include "Attachment.h"
 #include "Encoder.h"
+#include "MessageInfo.h"
 #include <WebCore/SharedMemory.h>
 #include <wtf/StdLibExtras.h>
 #include <wtf/TZoneMallocInlines.h>
 #include <wtf/Vector.h>
 
 namespace IPC {
-
-class MessageInfo {
-public:
-    MessageInfo()
-    {
-        // The entire MessageInfo is passed to write(), so we have to zero our
-        // padding bytes to avoid writing uninitialized memory.
-        zeroBytes(*this);
-    }
-
-#if OS(ANDROID)
-    MessageInfo(size_t bodySize, size_t initialAttachmentCount, size_t hardwareBufferCount)
-        : MessageInfo()
-    {
-        m_bodySize = bodySize;
-        m_attachmentCount = initialAttachmentCount;
-        m_hardwareBufferCount = hardwareBufferCount;
-    }
-
-    size_t hardwareBufferCount() const { return m_hardwareBufferCount; }
-#else
-    MessageInfo(size_t bodySize, size_t initialAttachmentCount)
-        : MessageInfo()
-    {
-        m_bodySize = bodySize;
-        m_attachmentCount = initialAttachmentCount;
-    }
-#endif
-
-    MessageInfo(const MessageInfo& info)
-        : MessageInfo()
-    {
-        *this = info;
-    }
-
-    MessageInfo& operator=(const MessageInfo&) = default;
-
-    void setBodyOutOfLine()
-    {
-        ASSERT(!isBodyOutOfLine());
-
-        m_isBodyOutOfLine = true;
-        m_attachmentCount++;
-    }
-
-    bool isBodyOutOfLine() const { return m_isBodyOutOfLine; }
-    size_t bodySize() const { return m_bodySize; }
-    size_t attachmentCount() const { return m_attachmentCount; }
-
-private:
-    // The MessageInfo will be copied using memcpy, so all members must be trivially copyable.
-    size_t m_bodySize;
-    size_t m_attachmentCount;
-#if OS(ANDROID)
-    size_t m_hardwareBufferCount;
-#endif
-    bool m_isBodyOutOfLine;
-};
 
 class UnixMessage {
     WTF_MAKE_TZONE_ALLOCATED_INLINE(UnixMessage);

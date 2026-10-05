@@ -37,6 +37,7 @@
 namespace WebCore {
 
 class AuthenticationChallenge;
+class CertificateInfo;
 class CachedResource;
 class DocumentLoader;
 class LocalFrame;
@@ -53,6 +54,8 @@ public:
     explicit ResourceLoadNotifier(LocalFrame&);
 
     void didReceiveAuthenticationChallenge(ResourceLoaderIdentifier, DocumentLoader*, const AuthenticationChallenge&);
+
+    bool didReceiveInvalidCertificate(ResourceLoader*, const CertificateInfo&, const char*);
 
     void willSendRequest(ResourceLoader&, ResourceLoaderIdentifier, ResourceRequest&, const ResourceResponse& redirectResponse);
     void didReceiveResponse(ResourceLoader&, ResourceLoaderIdentifier, const ResourceResponse&);

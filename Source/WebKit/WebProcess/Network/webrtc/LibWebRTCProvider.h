@@ -36,6 +36,8 @@
 #include <WebCore/LibWebRTCProviderCocoa.h>
 #elif USE(GSTREAMER)
 #include <WebCore/LibWebRTCProviderGStreamer.h>
+#elif PLATFORM(HAIKU)
+#include <WebCore/LibWebRTCProviderHaiku.h>
 #endif
 #else // !USE(LIBWEBRTC)
 #include <WebCore/WebRTCProvider.h>
@@ -51,6 +53,8 @@ class WebPage;
 using LibWebRTCProviderBase = WebCore::LibWebRTCProviderCocoa;
 #elif USE(GSTREAMER)
 using LibWebRTCProviderBase = WebCore::LibWebRTCProviderGStreamer;
+#elif PLATFORM(HAIKU)
+using LibWebRTCProviderBase = WebCore::LibWebRTCProviderHaiku;
 #else
 using LibWebRTCProviderBase = WebCore::LibWebRTCProvider;
 #endif

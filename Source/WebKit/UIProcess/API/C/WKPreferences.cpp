@@ -1684,7 +1684,8 @@ bool WKPreferencesGetRequestVideoFrameCallbackEnabled(WKPreferencesRef preferenc
 }
 
 
-// The following are all deprecated and do nothing. They should be removed when possible.
+// The following are deprecated. Haiku still implements hyperlink auditing;
+// the remaining obsolete setters do nothing and should be removed when possible.
 
 void WKPreferencesSetCSSOMViewScrollingAPIEnabled(WKPreferencesRef, bool)
 {
@@ -1695,13 +1696,24 @@ bool WKPreferencesGetCSSOMViewScrollingAPIEnabled(WKPreferencesRef)
     return true;
 }
 
-void WKPreferencesSetHyperlinkAuditingEnabled(WKPreferencesRef, bool)
+void WKPreferencesSetHyperlinkAuditingEnabled(WKPreferencesRef preferences, bool enabled)
 {
+#if PLATFORM(HAIKU)
+    toImpl(preferences)->setHyperlinkAuditingEnabled(enabled);
+#else
+    UNUSED_PARAM(preferences);
+    UNUSED_PARAM(enabled);
+#endif
 }
 
-bool WKPreferencesGetHyperlinkAuditingEnabled(WKPreferencesRef)
+bool WKPreferencesGetHyperlinkAuditingEnabled(WKPreferencesRef preferences)
 {
+#if PLATFORM(HAIKU)
+    return toImpl(preferences)->hyperlinkAuditingEnabled();
+#else
+    UNUSED_PARAM(preferences);
     return true;
+#endif
 }
 
 void WKPreferencesSetDNSPrefetchingEnabled(WKPreferencesRef, bool)

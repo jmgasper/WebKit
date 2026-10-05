@@ -34,6 +34,9 @@
 #include "RenderText.h"
 #include "RenderView.h"
 #include "Settings.h"
+#if PLATFORM(HAIKU)
+#include <cstdlib>
+#endif
 #include <pal/Logging.h>
 #include <wtf/text/TextStream.h>
 
@@ -105,6 +108,26 @@ enum class GridAvoidanceReason : uint8_t {
     NotAGrid,
     GridFormattingContextIntegrationDisabled,
 };
+
+#if PLATFORM(HAIKU)
+static bool summitExtendedGridIntegrationEnabled()
+{
+    static bool enabled = [] {
+        const char* value = std::getenv("SUMMIT_EXTENDED_GRID_INTEGRATION");
+        return !value || value[0] != '0' || value[1] != '\0';
+    }();
+    return enabled;
+}
+
+static bool summitPageUpdateTraceEnabled()
+{
+    static bool enabled = [] {
+        const char* value = std::getenv("SUMMIT_PAGE_UPDATE_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    return enabled;
+}
+#endif
 
 #if ASSERT_ENABLED
 static bool avoidanceReasonIsColumnPlacementRelated(GridAvoidanceReason gridAvoidanceReason)
@@ -254,6 +277,10 @@ static bool hasValidRowEnd(const Style::GridPositionExplicit& explicitRowStart, 
 
 static bool gridItemHasValidWidth(const Style::PreferredSize& width)
 {
+#if PLATFORM(HAIKU)
+    if (summitExtendedGridIntegrationEnabled() && width.isPercent())
+        return true;
+#endif
     return WTF::switchOn(width,
         [&](const CSS::Keyword::Auto&) {
             return true;
@@ -355,7 +382,11 @@ static EnumSet<GridAvoidanceReason> gridLayoutAvoidanceReason(const RenderGrid& 
             [&](const Style::GridTrackSize& trackSize) -> std::optional<GridAvoidanceReason> {
                 // Since a GridTrackSize type of Breadth sets the MinTrackBreadth and
                 // MaxTrackBreadth to the same value we only need to check one.
-                if (!trackSize.isBreadth())
+                if (!trackSize.isBreadth()
+#if PLATFORM(HAIKU)
+                    && !(summitExtendedGridIntegrationEnabled() && trackSize.isMinMax())
+#endif
+                )
                     return GridAvoidanceReason::GridHasUnsupportedGridTemplateColumns;
                 return { };
             },
@@ -420,10 +451,18 @@ static EnumSet<GridAvoidanceReason> gridLayoutAvoidanceReason(const RenderGrid& 
     if (renderGridStyle->usedContain().contains(Style::ContainValue::Size))
         ADD_REASON_AND_RETURN_IF_NEEDED(GridAvoidanceReason::GridHasContainsSize, reasons, reasonCollectionMode);
 
-    if (!renderGridStyle->justifyContent().isNormal())
+    if (!renderGridStyle->justifyContent().isNormal()
+#if PLATFORM(HAIKU)
+        && !(summitExtendedGridIntegrationEnabled() && renderGridStyle->justifyContent().resolve().distribution() == ContentDistribution::SpaceBetween)
+#endif
+    )
         ADD_REASON_AND_RETURN_IF_NEEDED(GridAvoidanceReason::GridHasUnsupportedJustifyContent, reasons, reasonCollectionMode);
 
-    if (!renderGridStyle->alignContent().isNormal())
+    if (!renderGridStyle->alignContent().isNormal()
+#if PLATFORM(HAIKU)
+        && !(summitExtendedGridIntegrationEnabled() && renderGridStyle->alignContent().resolve().distribution() == ContentDistribution::SpaceBetween)
+#endif
+    )
         ADD_REASON_AND_RETURN_IF_NEEDED(GridAvoidanceReason::GridHasUnsupportedAlignContent, reasons, reasonCollectionMode);
 
     // GFC cannot yet resolve intrinsic (min-content/max-content/fit-content) sizing on the grid container itself.
@@ -487,8 +526,15 @@ static EnumSet<GridAvoidanceReason> gridLayoutAvoidanceReason(const RenderGrid& 
             ADD_REASON_AND_RETURN_IF_NEEDED(GridAvoidanceReason::GridItemHasUnsupportedInlineAxisAlignment, reasons, reasonCollectionMode);
 
         auto& gridItemWidth = gridItemStyle->width();
-        if (!gridItemHasValidWidth(gridItemWidth))
+        if (!gridItemHasValidWidth(gridItemWidth)) {
+#if PLATFORM(HAIKU)
+            if (summitPageUpdateTraceEnabled())
+                WTFLogAlways("Summit legacy grid item width: grid=%p item=%p percent=%u calculated=%u minContent=%u maxContent=%u fitContent=%u stretch=%u\n",
+                    &renderGrid, gridItem.ptr(), gridItemWidth.isPercent(), gridItemWidth.isCalculated(), gridItemWidth.isMinContent(),
+                    gridItemWidth.isMaxContent(), gridItemWidth.isFitContent(), gridItemWidth.isStretch());
+#endif
             ADD_REASON_AND_RETURN_IF_NEEDED(GridAvoidanceReason::GridItemHasUnsupportedWidthValue, reasons, reasonCollectionMode);
+        }
 
         if (gridItemWidth.isAuto() && !canComputeAutomaticSize(gridItem))
             ADD_REASON_AND_RETURN_IF_NEEDED(GridAvoidanceReason::GridItemHasUnsupportedAutomaticInlineSizing, reasons, reasonCollectionMode);
@@ -641,8 +687,23 @@ static EnumSet<GridAvoidanceReason> gridLayoutAvoidanceReason(const RenderGrid& 
         if (gridItemStyle->aspectRatio().hasRatio())
             ADD_REASON_AND_RETURN_IF_NEEDED(GridAvoidanceReason::GridItemHasAspectRatio, reasons, reasonCollectionMode);
 
-        if (!gridItemStyle->isOverflowVisible())
+        auto hasSupportedExperimentalOverflow = [&] {
+#if PLATFORM(HAIKU)
+            return summitExtendedGridIntegrationEnabled()
+                && gridItemStyle->overflowX() == Overflow::Hidden
+                && gridItemStyle->overflowY() == Overflow::Auto;
+#else
+            return false;
+#endif
+        };
+        if (!gridItemStyle->isOverflowVisible() && !hasSupportedExperimentalOverflow()) {
+#if PLATFORM(HAIKU)
+            if (summitPageUpdateTraceEnabled())
+                WTFLogAlways("Summit legacy grid item overflow: grid=%p item=%p x=%u y=%u\n", &renderGrid, gridItem.ptr(),
+                    static_cast<unsigned>(gridItemStyle->overflowX()), static_cast<unsigned>(gridItemStyle->overflowY()));
+#endif
             ADD_REASON_AND_RETURN_IF_NEEDED(GridAvoidanceReason::GridItemHasNonVisibleOverflow, reasons, reasonCollectionMode);
+        }
 
         if (gridItemStyle->usedContain().contains(Style::ContainValue::Size))
             ADD_REASON_AND_RETURN_IF_NEEDED(GridAvoidanceReason::GridItemHasContainsSize, reasons, reasonCollectionMode);
@@ -919,6 +980,45 @@ bool canUseForGridLayout(const RenderGrid& renderGrid)
     });
 #endif
     auto reasons = gridLayoutAvoidanceReason(renderGrid, ReasonCollectionMode::FirstOnly);
+#if PLATFORM(HAIKU)
+    if (summitPageUpdateTraceEnabled() && !reasons.isEmpty())
+        WTFLogAlways("Summit legacy grid: grid=%p firstReason=%u\n", &renderGrid, static_cast<unsigned>(*reasons.begin()));
+    if (summitPageUpdateTraceEnabled() && reasons.contains(GridAvoidanceReason::GridHasUnsupportedJustifyContent)) {
+        auto justifyContent = renderGrid.style().justifyContent().resolve();
+        WTFLogAlways("Summit legacy grid justify-content: grid=%p position=%u distribution=%u overflow=%u\n", &renderGrid,
+            static_cast<unsigned>(justifyContent.position()), static_cast<unsigned>(justifyContent.distribution()), static_cast<unsigned>(justifyContent.overflow()));
+    }
+    if (summitPageUpdateTraceEnabled() && reasons.contains(GridAvoidanceReason::GridHasUnsupportedAlignContent)) {
+        auto alignContent = renderGrid.style().alignContent().resolve();
+        WTFLogAlways("Summit legacy grid align-content: grid=%p position=%u distribution=%u overflow=%u\n", &renderGrid,
+            static_cast<unsigned>(alignContent.position()), static_cast<unsigned>(alignContent.distribution()), static_cast<unsigned>(alignContent.overflow()));
+    }
+    if (summitPageUpdateTraceEnabled() && reasons.contains(GridAvoidanceReason::GridHasUnsupportedGridTemplateColumns)) {
+        auto& columns = renderGrid.style().gridTemplateColumns().list;
+        if (columns.isEmpty())
+            WTFLogAlways("Summit legacy grid columns: grid=%p detail=empty\n", &renderGrid);
+        else {
+            for (auto& entry : columns) {
+                const char* detail = WTF::switchOn(entry,
+                    [](const Style::GridTrackSize& trackSize) -> const char* {
+                        if (trackSize.isMinMax())
+                            return "minmax";
+                        if (trackSize.isFitContent())
+                            return "fitContent";
+                        return nullptr;
+                    },
+                    [](const Style::GridLineNames& names) -> const char* { return names.isEmpty() ? nullptr : "lineNames"; },
+                    [](const Style::GridTrackEntryRepeat&) -> const char* { return "repeat"; },
+                    [](const Style::GridTrackEntryAutoRepeat&) -> const char* { return "autoRepeat"; },
+                    [](const Style::GridTrackEntrySubgrid&) -> const char* { return "subgrid"; });
+                if (detail) {
+                    WTFLogAlways("Summit legacy grid columns: grid=%p detail=%s\n", &renderGrid, detail);
+                    break;
+                }
+            }
+        }
+    }
+#endif
     return reasons.isEmpty();
 }
 

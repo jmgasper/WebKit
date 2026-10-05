@@ -33,9 +33,44 @@
 #include "TrackSizingAlgorithm.h"
 #include "TrackSizingFunctions.h"
 #include <wtf/Vector.h>
+#if PLATFORM(HAIKU)
+#include <OS.h>
+#include <cstdio>
+#include <cstdlib>
+#endif
 
 namespace WebCore {
 namespace Layout {
+
+#if PLATFORM(HAIKU)
+static bool summitGridSizerTraceEnabled()
+{
+    static bool enabled = [] {
+        const char* value = std::getenv("SUMMIT_GRID_PHASE_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    return enabled;
+}
+
+static void recordSummitGridSizerPhases(bigtime_t columns, bigtime_t rows)
+{
+    struct Totals {
+        unsigned calls { 0 };
+        bigtime_t columns { 0 };
+        bigtime_t rows { 0 };
+    };
+    static thread_local Totals totals;
+    ++totals.calls;
+    totals.columns += columns;
+    totals.rows += rows;
+    if (totals.calls < 100)
+        return;
+    std::fprintf(stderr, "Summit grid sizing: calls=%u columns=%.2f rows=%.2f total=%.2f\n",
+        totals.calls, totals.columns / 1000.0, totals.rows / 1000.0,
+        (totals.columns + totals.rows) / 1000.0);
+    totals = { };
+}
+#endif
 
 GridSizer::GridSizer(const GridFormattingContext& gridFormattingContext, const GridLayoutState& gridLayoutState)
     : m_gridFormattingContext(gridFormattingContext)
@@ -164,6 +199,10 @@ TrackSizes GridSizer::sizeColumnsOnlyFastPath(const PlacedGridItems& placedGridI
 UsedTrackSizes GridSizer::sizeGrid(const PlacedGridItems& placedGridItems, const TrackSizingFunctionsList& columnTrackSizingFunctionsList,
     const TrackSizingFunctionsList& rowTrackSizingFunctionsList) const
 {
+#if PLATFORM(HAIKU)
+    bool traceGridSizer = summitGridSizerTraceEnabled();
+    bigtime_t startedAt = traceGridSizer ? system_time() : 0;
+#endif
     // 1. First, the track sizing algorithm is used to resolve the sizes of the grid columns.
     // If calculating the layout of a grid item in this step depends on the available space in the
     // block axis, assume the available space that it would have if any row with a definite max
@@ -172,11 +211,18 @@ UsedTrackSizes GridSizer::sizeGrid(const PlacedGridItems& placedGridItems, const
     // effective size of any gaps spanned by such items; otherwise ignore the effects of track
     // alignment in this estimation.
     auto columnSizes = sizeColumnTracks(placedGridItems, columnTrackSizingFunctionsList, rowTrackSizingFunctionsList);
+#if PLATFORM(HAIKU)
+    bigtime_t columnsDoneAt = traceGridSizer ? system_time() : 0;
+#endif
 
     // 2. Next, the track sizing algorithm resolves the sizes of the grid rows. To find the
     // inline-axis available space for any items whose block-axis size contributions require it,
     // use the grid column sizes calculated in the previous step.
     auto rowSizes = sizeRowTracks(placedGridItems, columnSizes, rowTrackSizingFunctionsList);
+#if PLATFORM(HAIKU)
+    if (traceGridSizer)
+        recordSummitGridSizerPhases(columnsDoneAt - startedAt, system_time() - columnsDoneAt);
+#endif
 
     // 3. Then, if the min-content contribution of any grid item has changed based on the
     // row sizes and alignment calculated in step 2, re-resolve the sizes of the grid
@@ -194,7 +240,7 @@ UsedTrackSizes GridSizer::sizeGrid(const PlacedGridItems& placedGridItems, const
     };
     UNUSED_VARIABLE(resolveGridRowSizesIfAnyMinContentContributionChanged);
 
-    return { columnSizes, rowSizes };
+    return { columnSizes, rowSizes, { }, { } };
 }
 
 } // namespace Layout

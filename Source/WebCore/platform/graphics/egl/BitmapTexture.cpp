@@ -109,6 +109,10 @@ void BitmapTexture::determineRenderTargetAndBinding()
 
 unsigned BitmapTexture::textureFormat() const
 {
+#if PLATFORM(HAIKU)
+    if (m_flags.contains(Flags::SingleChannel))
+        return GL_LUMINANCE;
+#endif
     return m_flags.contains(Flags::UseBGRALayout) ? GL_BGRA : GL_RGBA;
 }
 
@@ -159,6 +163,36 @@ BitmapTexture::BitmapTexture(const IntSize& size, OptionSet<Flags> flags)
     glBindTexture(m_renderTarget, boundTexture);
 }
 
+#if PLATFORM(HAIKU)
+// SUMMIT_TEXTURE_TRACE=1 names the allocation that the driver refuses.
+static bool traceTextureErrors()
+{
+    static const bool enabled = [] {
+        const char* value = getenv("SUMMIT_TEXTURE_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    return enabled;
+}
+
+static void forgetGLErrors()
+{
+    if (!traceTextureErrors())
+        return;
+    for (int i = 0; i < 8 && glGetError() != GL_NO_ERROR; ++i) { }
+}
+
+static void reportGLError(const char* what, const IntSize& size, unsigned detail)
+{
+    if (!traceTextureErrors())
+        return;
+    auto error = glGetError();
+    if (error != GL_NO_ERROR)
+        fprintf(stderr, "Summit texture: %s %dx%d (0x%x) failed with 0x%x\n", what, size.width(), size.height(), detail, error);
+    else if (size.width() > 4096 || size.height() > 4096)
+        fprintf(stderr, "Summit texture: %s %dx%d (0x%x)\n", what, size.width(), size.height(), detail);
+}
+#endif
+
 void BitmapTexture::createTexture()
 {
     ASSERT(!m_id);
@@ -177,7 +211,13 @@ void BitmapTexture::allocateTexture()
     createTexture();
     // EXT_texture_format_BGRA8888 mandates internalFormat == format.
     // https://registry.khronos.org/OpenGL/extensions/EXT/EXT_texture_format_BGRA8888.txt
+#if PLATFORM(HAIKU)
+    forgetGLErrors();
+#endif
     glTexImage2D(m_renderTarget, 0, textureFormat(), m_size.width(), m_size.height(), 0, textureFormat(), s_pixelDataType, nullptr);
+#if PLATFORM(HAIKU)
+    reportGLError("texture", m_size, textureFormat());
+#endif
 }
 
 size_t BitmapTexture::sizeInBytes() const
@@ -186,7 +226,11 @@ size_t BitmapTexture::sizeInBytes() const
     if (size.isEmpty())
         return 0;
 
+#if PLATFORM(HAIKU)
+    const auto bytesPerRow = CheckedUint32(size.width()) * (m_flags.contains(Flags::SingleChannel) ? 1 : 4);
+#else
     const auto bytesPerRow = CheckedUint32(size.width()) * 4;
+#endif
     return CheckedUint32(size.height()) * bytesPerRow;
 }
 
@@ -328,7 +372,12 @@ void BitmapTexture::updateContents(const void* srcData, const IntRect& targetRec
     }
 #endif
 
+#if PLATFORM(HAIKU)
+    const bool singleChannel = m_flags.contains(Flags::SingleChannel);
+    const unsigned bytesPerPixel = singleChannel ? 1 : 4;
+#else
     const unsigned bytesPerPixel = 4;
+#endif
     auto data = static_cast<const uint8_t*>(srcData);
     Vector<uint8_t> temporaryData;
     IntPoint adjustedSourceOffset = sourceOffset;
@@ -367,7 +416,16 @@ void BitmapTexture::updateContents(const void* srcData, const IntRect& targetRec
         glPixelStorei(GL_UNPACK_SKIP_PIXELS, adjustedSourceOffset.x());
     }
 
+#if PLATFORM(HAIKU)
+    // Rows of one byte a pixel need not start on four bytes.
+    if (singleChannel)
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+#endif
     glTexSubImage2D(m_renderTarget, 0, targetRect.x(), targetRect.y(), targetRect.width(), targetRect.height(), textureFormat(), s_pixelDataType, data);
+#if PLATFORM(HAIKU)
+    if (singleChannel)
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+#endif
 
     if (supportsUnpackSubimage) {
         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
@@ -394,6 +452,57 @@ void BitmapTexture::updateContents(NativeImage* frameImage, const IntRect& targe
     SkPixmap pixmap;
     if (surface->peekPixels(&pixmap))
         updateContents(pixmap.addr(), targetRect, offset, pixmap.rowBytes(), PixelFormat::BGRA8);
+#elif USE(HAIKU_GRAPHICS)
+    // B_RGBA32 and B_RGB32 are BGRA in memory, like the Cairo and Skia sources
+    // above, but B_RGBA32 stores straight alpha (see ImageBufferHaiku.cpp) and
+    // the fourth byte of B_RGB32 is undefined. TextureMapper blends with
+    // glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA), so it needs premultiplied
+    // texels. Convert on the CPU before uploading: premultiplying in the
+    // shader instead would filter straight-alpha texels and fringe the edges.
+    auto colorSpace = surface->ColorSpace();
+    if (colorSpace != B_RGBA32 && colorSpace != B_RGB32)
+        return;
+
+    const bool hasAlpha = colorSpace == B_RGBA32;
+    const IntSize sourceSize(surface->Bounds().IntegerWidth() + 1, surface->Bounds().IntegerHeight() + 1);
+    const IntRect sourceRect(offset, targetRect.size());
+    if (targetRect.isEmpty() || !IntRect({ }, sourceSize).contains(sourceRect))
+        return;
+
+    const size_t sourceBytesPerRow = surface->BytesPerRow();
+    const size_t width = targetRect.width();
+    const size_t height = targetRect.height();
+    const auto* sourceBits = static_cast<const uint8_t*>(surface->Bits());
+    if (!sourceBits || sourceBytesPerRow < static_cast<size_t>(sourceSize.width()) * 4)
+        return;
+
+    Vector<uint8_t> premultiplied;
+    if (!premultiplied.tryGrow(width * height * 4))
+        return;
+
+    WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN // Haiku port
+    for (size_t y = 0; y < height; ++y) {
+        const uint8_t* source = sourceBits + (offset.y() + y) * sourceBytesPerRow + static_cast<size_t>(offset.x()) * 4;
+        uint8_t* destination = premultiplied.mutableSpan().data() + y * width * 4;
+        for (size_t x = 0; x < width; ++x, source += 4, destination += 4) {
+            const unsigned alpha = hasAlpha ? source[3] : 255;
+            if (alpha == 255) {
+                destination[0] = source[0];
+                destination[1] = source[1];
+                destination[2] = source[2];
+            } else {
+                for (unsigned channel = 0; channel < 3; ++channel) {
+                    // Exact rounded division by 255.
+                    const unsigned product = source[channel] * alpha + 128;
+                    destination[channel] = static_cast<uint8_t>((product + (product >> 8)) >> 8);
+                }
+            }
+            destination[3] = static_cast<uint8_t>(alpha);
+        }
+    }
+    WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+
+    updateContents(premultiplied.span().data(), targetRect, IntPoint(), static_cast<int>(width * 4), PixelFormat::BGRA8);
 #else
     UNUSED_PARAM(targetRect);
     UNUSED_PARAM(offset);
@@ -503,11 +612,21 @@ void BitmapTexture::initializeStencil()
 
     glGenRenderbuffers(1, &m_stencilBufferObject);
     glBindRenderbuffer(GL_RENDERBUFFER, m_stencilBufferObject);
+#if PLATFORM(HAIKU)
+    forgetGLErrors();
+#endif
     glRenderbufferStorage(GL_RENDERBUFFER, GL_STENCIL_INDEX8, m_size.width(), m_size.height());
+#if PLATFORM(HAIKU)
+    reportGLError("stencil buffer", m_size, GL_STENCIL_INDEX8);
+#endif
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, m_stencilBufferObject);
     glClearStencil(0);
     glClear(GL_STENCIL_BUFFER_BIT);
+#if PLATFORM(HAIKU)
+    if (traceTextureErrors())
+        fprintf(stderr, "Summit texture: stencil buffer %dx%d attached, framebuffer status 0x%x\n", m_size.width(), m_size.height(), glCheckFramebufferStatus(GL_FRAMEBUFFER));
+#endif
 }
 
 void BitmapTexture::clearIfNeeded()

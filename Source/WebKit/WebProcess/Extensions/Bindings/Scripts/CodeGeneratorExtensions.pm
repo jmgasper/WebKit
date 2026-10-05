@@ -475,7 +475,7 @@ EOF
             my $isDeletePropertyFunction = defined $function->extendedAttributes->{"DeleteProperty"};
             my $isPropertyFunction = $isSetPropertyFunction || $isGetPropertyFunction || $isDeletePropertyFunction;
 
-            my $conditionalString = conditionalString($function);
+            my $conditionalString = join(" && ", map { "($_)" } grep { $_ } (conditionalString($function), platformString($function)));
             push(@contents, <<EOF) if $conditionalString;
 #if ${conditionalString}
 EOF
@@ -494,11 +494,24 @@ EOF
                 push(@contents, $functionSignature);
             }
 
+            # Chrome and Firefox API functions also work detached from their namespace object,
+            # e.g. `const getURL = browser.runtime.getURL; getURL("")` (uBlock Origin does this).
+            my $namespaceMember = $implementationClassName;
+            $namespaceMember =~ s/^WebExtensionAPI//;
+            $namespaceMember = "i18n" if $namespaceMember eq "Localization";
+            $namespaceMember = lcfirst($namespaceMember);
+            my $unboundFallback = $isPropertyFunction ? "" : <<EOF;
+    if (!impl) [[unlikely]] {
+        if (auto namespaceObject = unboundExtensionNamespaceMember(context, "${namespaceMember}"_s))
+            impl = to${implementationClassName}(context, namespaceObject);
+    }
+EOF
+
             push(@contents, <<EOF);
 
 {
     RefPtr impl = to${implementationClassName}(context, thisObject);
-    if (${functionEarlyReturnCondition}) [[unlikely]]
+${unboundFallback}    if (${functionEarlyReturnCondition}) [[unlikely]]
         return ${defaultEarlyReturnValue};
 
     RELEASE_LOG_DEBUG(Extensions, "Called function ${call} (%" PUBLIC_LOG "lu %" PUBLIC_LOG_STRING ") in %" PUBLIC_LOG_STRING " world", argumentCount, argumentCount == 1 ? "argument" : "arguments", toDebugString(impl->contentWorldType()).utf8().legacyCStringPointer());
@@ -528,6 +541,7 @@ EOF
 
             foreach my $parameter (@specifiedParameters) {
                 $self->_includeHeaders(\%contentsIncludes, $parameter->type, $parameter);
+                $contentsIncludes{"<cmath>"} = 1 if $parameter->extendedAttributes->{"Finite"};
                 $optionalArgumentCount++ if $parameter->extendedAttributes->{"Optional"};
                 $needsPage = 1 if $parameter->extendedAttributes->{"CallbackHandler"} && $interface->extendedAttributes->{"NeedsPageWithCallbackHandler"};
                 $needsPageIdentifier = 1 if $parameter->extendedAttributes->{"CallbackHandler"} && $interface->extendedAttributes->{"NeedsPageIdentifierWithCallbackHandler"};
@@ -1477,7 +1491,9 @@ sub _javaScriptTypeCondition
     $nullOrUndefined = " || JSValueIsNull(context, ${argument}) || JSValueIsUndefined(context, ${argument})" if $signature->extendedAttributes->{"Optional"};
 
     return "isDictionary(context, ${argument}) || JSValueIsString(context, ${argument})${nullOrUndefined}" if $idlTypeName eq "any" && $signature->extendedAttributes->{"NSObject"} && $signature->extendedAttributes->{"DOMString"};
+    return "(JSValueIsNull(context, ${argument}) || (!JSValueIsUndefined(context, ${argument}) && !JSObjectIsFunction(context, JSValueToObject(context, ${argument}, nullptr))))${nullOrUndefined}" if $idlTypeName eq "any" && $signature->extendedAttributes->{"Serialization"} && $signature->extendedAttributes->{"ValuesAllowed"};
     return "(!JSValueIsNull(context, ${argument}) && !JSValueIsUndefined(context, ${argument}) && !JSObjectIsFunction(context, JSValueToObject(context, ${argument}, nullptr)))${nullOrUndefined}" if $idlTypeName eq "any" && $signature->extendedAttributes->{"Serialization"};
+    return "JSValueIsArray(context, ${argument})${nullOrUndefined}" if $idlTypeName eq "any" && $signature->extendedAttributes->{"JSONValue"} && $signature->extendedAttributes->{"JSONValue"} eq "Array";
     return "isDictionary(context, ${argument})${nullOrUndefined}" if $idlTypeName eq "any" && ($signature->extendedAttributes->{"NSDictionary"} || $signature->extendedAttributes->{"JSONValue"});
     return "JSValueIsObject(context, ${argument})${nullOrUndefined}" if $idlTypeName eq "any" && $signature->extendedAttributes->{"NSObject"};
     return "JSValueIsObject(context, ${argument})${nullOrUndefined}" if $idlTypeName eq "any" && !$signature->extendedAttributes->{"ValuesAllowed"};
@@ -1485,6 +1501,7 @@ sub _javaScriptTypeCondition
     return "JSValueIsBoolean(context, ${argument})${nullOrUndefined}" if $idlTypeName eq "boolean";
     return "JSValueIsArray(context, ${argument})${nullOrUndefined}" if $idlTypeName eq "array";
     return "JSValueIsString(context, ${argument})${nullOrUndefined}" if $$self{codeGenerator}->IsStringType($idlType);
+    return "(JSValueIsNumber(context, ${argument}) && std::isfinite(JSValueToNumber(context, ${argument}, nullptr)))${nullOrUndefined}" if $$self{codeGenerator}->IsPrimitiveType($idlType) && $signature->extendedAttributes->{"Finite"};
     return "JSValueIsNumber(context, ${argument})${nullOrUndefined}"  if $$self{codeGenerator}->IsPrimitiveType($idlType);
     return $argument;
 }
@@ -1539,6 +1556,7 @@ sub _platformTypeConstructor
         return "toNSDictionary(context, $argumentName, NullValuePolicy::Allowed, ValuePolicy::StopAtTopLevel)" if $signature->extendedAttributes->{"NSDictionary"} && $signature->extendedAttributes->{"NSDictionary"} eq "StopAtTopLevel";
         return "toNSDictionary(context, $argumentName, NullValuePolicy::Allowed)" if $signature->extendedAttributes->{"NSDictionary"} && $signature->extendedAttributes->{"NSDictionary"} eq "NullAllowed";
         return "toNSDictionary(context, $argumentName, NullValuePolicy::NotAllowed)" if $signature->extendedAttributes->{"NSDictionary"};
+        return "fromJSValue(context, $argumentName)" if $signature->extendedAttributes->{"JSONValue"} && $signature->extendedAttributes->{"JSONValue"} eq "Array";
         return "toJSONValue(context, $argumentName, NullValuePolicy::Allowed, ValuePolicy::StopAtTopLevel)" if $signature->extendedAttributes->{"JSONValue"} && $signature->extendedAttributes->{"JSONValue"} eq "StopAtTopLevel";
         return "toJSONValue(context, $argumentName, NullValuePolicy::Allowed)" if $signature->extendedAttributes->{"JSONValue"} && $signature->extendedAttributes->{"JSONValue"} eq "NullAllowed";
         return "toJSONValue(context, $argumentName, NullValuePolicy::NotAllowed)" if $signature->extendedAttributes->{"JSONValue"};
@@ -1563,6 +1581,7 @@ sub _platformTypeConstructor
     return "[NSURL URLWithString:toString(context, $argumentName, $nullStringPolicy).createNSString().get()]" if !$interface->extendedAttributes->{"UseCPPAPI"} && $$self{codeGenerator}->IsStringType($idlType) && $signature->extendedAttributes->{"URL"};
     return "URL { toString(context, $argumentName, $nullStringPolicy) }" if $interface->extendedAttributes->{"UseCPPAPI"} && $$self{codeGenerator}->IsStringType($idlType) && $signature->extendedAttributes->{"URL"};
     return "toString(context, $argumentName, $nullStringPolicy)" if $$self{codeGenerator}->IsStringType($idlType);
+    return "(JSValueIsNull(context, $argumentName) || JSValueIsUndefined(context, $argumentName) ? std::numeric_limits<double>::quiet_NaN() : JSValueToNumber(context, $argumentName, nullptr))" if $$self{codeGenerator}->IsPrimitiveType($idlType) && $signature->extendedAttributes->{"Finite"} && $signature->extendedAttributes->{"Optional"};
     return "JSValueToNumber(context, $argumentName, nullptr)" if $$self{codeGenerator}->IsPrimitiveType($idlType);
     return "to" . _implementationClassName($idlType) . "(context, $argumentName)";
 }
@@ -1674,7 +1693,7 @@ sub _staticFunctionsGetterImplementation
         my @attributes = ();
         push(@attributes, "kJSPropertyAttributeDontEnum") if $_->extendedAttributes->{"DontEnum"};
         my $jsproperties = scalar @attributes == 0 ? "kJSPropertyAttributeNone" : join(" | ", @attributes);
-        my $conditionalString = conditionalString($_);
+        my $conditionalString = join(" && ", map { "($_)" } grep { $_ } (conditionalString($_), platformString($_)));
 
         return "#if ${conditionalString}\n        { \"$name\", $name, $jsproperties },\n        #endif" if $conditionalString;
         return "{ \"$name\", $name, $jsproperties },";
@@ -1927,7 +1946,7 @@ EOF
             my $condition = "JSStringIsEqualToUTF8CString(propertyName, \"${name}\")" if $hasMainWorldOnlyProperties and !$hasDynamicProperties;
             $condition = &$generateCondition($function, "JSStringIsEqualToUTF8CString(propertyName, \"${name}\")") if $hasDynamicProperties;
 
-            my $conditionalString = conditionalString($function);
+            my $conditionalString = join(" && ", map { "($_)" } grep { $_ } (conditionalString($function), platformString($function)));
 
             push(@contents, "#if ${conditionalString}\n") if $conditionalString;
             push(@contents, "    if (${condition})\n");

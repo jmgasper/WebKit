@@ -31,6 +31,10 @@
 
 namespace WebCore {
 
+#if USE(HAIKU_GRAPHICS)
+typedef unsigned int Glyph;
+#else
 typedef unsigned short Glyph;
+#endif
 
 } // namespace WebCore

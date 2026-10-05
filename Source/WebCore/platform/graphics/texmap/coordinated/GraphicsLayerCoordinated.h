@@ -84,7 +84,7 @@ private:
     void setContentsClipShapePath(const Path&) override;
     void setContentsNeedsDisplay() override;
     void setContentsNeedsDisplayInRect(const FloatRect&) override;
-#if ENABLE(VIDEO) && USE(GSTREAMER)
+#if ENABLE(VIDEO) && (USE(GSTREAMER) || PLATFORM(HAIKU))
     void setContentsToMediaPlayer(MediaPlayer*, ContentsLayerPurpose) override;
 #endif
     void setContentsDisplayDelegate(RefPtr<GraphicsLayerContentsDisplayDelegate>&&, ContentsLayerPurpose) override;
@@ -129,6 +129,9 @@ private:
     Vector<GraphicsLayer::AcceleratedAnimationForTesting> acceleratedAnimationsForTesting() const override;
 
     void setNeedsDisplay() override;
+#if PLATFORM(HAIKU)
+    bool shouldRepaintOnSizeChange() const override;
+#endif
     void setNeedsDisplayInRect(const FloatRect&, ShouldClipToLayer = ShouldClipToLayer::Clip) override;
 
     FloatSize pixelAlignmentOffset() const override { return m_pixelAlignmentOffset; }

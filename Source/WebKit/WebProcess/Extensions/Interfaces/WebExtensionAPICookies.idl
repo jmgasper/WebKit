@@ -75,14 +75,15 @@ dictionary WebExtensionCookieSetDetails {
 [
     Conditional=WK_WEB_EXTENSIONS,
     MainWorldOnly,
+    UseCPPAPI,
     ReturnsPromiseWhenCallbackIsOmitted,
 ] interface WebExtensionAPICookies {
 
-    [RaisesException] void get([NSDictionary] any details, [Optional, CallbackHandler] function callback);
-    [RaisesException] void getAll([NSDictionary] any details, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void get([JSONValue] any details, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void getAll([JSONValue] any details, [Optional, CallbackHandler] function callback);
 
-    [RaisesException] void set([NSDictionary] any details, [Optional, CallbackHandler] function callback);
-    [RaisesException] void remove([NSDictionary] any details, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void set([JSONValue] any details, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void remove([JSONValue] any details, [Optional, CallbackHandler] function callback);
 
     void getAllCookieStores([Optional, CallbackHandler] function callback);
 

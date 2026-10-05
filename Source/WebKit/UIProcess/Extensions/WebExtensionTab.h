@@ -35,6 +35,9 @@
 #include <wtf/RefCountedAndCanMakeWeakPtr.h>
 #include <wtf/TZoneMalloc.h>
 #include <wtf/WeakPtr.h>
+#if PLATFORM(HAIKU)
+#include "haiku/WebExtensionActiveTabGrant.h"
+#endif
 #if PLATFORM(COCOA)
 #include "CocoaImage.h"
 #include <wtf/WeakObjCPtr.h>
@@ -47,6 +50,7 @@ OBJC_PROTOCOL(WKWebExtensionTab);
 
 namespace WebKit {
 
+class WebPageProxy;
 class WebExtensionContext;
 class WebExtensionMatchPattern;
 class WebExtensionWindow;
@@ -73,6 +77,18 @@ public:
     }
 
     explicit WebExtensionTab(const WebExtensionContext&, WKWebExtensionTab *);
+#if PLATFORM(HAIKU)
+    WebExtensionTab(const WebExtensionContext&, WebPageProxy&);
+    RefPtr<WebPageProxy> nativePage() const;
+    bool isDiscarded() const;
+    URL nativeCommittedOrigin() const;
+    bool grantNativeTemporaryPermission();
+    bool hasNativeTemporaryPermission(const URL&) const;
+    bool nativeTemporaryPermissionMatches(const WebExtensionMatchPattern::MatchPatternSet& patterns) const { return m_nativeActiveTabGrant.matchesAnyPattern(patterns); }
+    bool clearNativeUserGesture();
+    void nativeDidCommitNavigation();
+    bool isValid() const;
+#endif
 
     enum class ChangedProperties : uint16_t {
         Loading      = 1 << 1,
@@ -194,6 +210,10 @@ public:
 
     bool isActive() const;
     void activate(CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
+#if PLATFORM(HAIKU)
+    // Within the tab's own window; -1 puts it after the last tab.
+    void moveToIndex(int32_t, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
+#endif
 
     bool isSelected() const;
     void setSelected(bool, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
@@ -217,6 +237,10 @@ public:
 
 private:
     WeakPtr<WebExtensionContext> m_extensionContext;
+#if PLATFORM(HAIKU)
+    WeakPtr<WebPageProxy> m_nativePage;
+    WebExtensionActiveTabGrant m_nativeActiveTabGrant;
+#endif
 #if PLATFORM(COCOA)
     WeakObjCPtr<WKWebExtensionTab> m_delegate;
 #endif

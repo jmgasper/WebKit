@@ -37,8 +37,11 @@ class WebExtensionAPICommands : public WebExtensionAPIObject, public JSWebExtens
     WEB_EXTENSION_DECLARE_JS_WRAPPER_CLASS(WebExtensionAPICommands, commands, commands);
 
 public:
-#if PLATFORM(COCOA)
     void getAll(Ref<WebExtensionCallbackHandler>&&);
+#if PLATFORM(HAIKU)
+    void update(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+    void reset(const String&, Ref<WebExtensionCallbackHandler>&&);
+#endif
 
     WebExtensionAPIEvent& onCommand();
     WebExtensionAPIEvent& onChanged();
@@ -46,7 +49,6 @@ public:
 private:
     RefPtr<WebExtensionAPIEvent> m_onCommand;
     RefPtr<WebExtensionAPIEvent> m_onChanged;
-#endif
 };
 
 } // namespace WebKit

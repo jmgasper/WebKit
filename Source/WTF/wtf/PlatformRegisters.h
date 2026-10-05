@@ -37,6 +37,8 @@
 #include <windows.h>
 #elif OS(OPENBSD)
 typedef ucontext_t mcontext_t;
+#elif OS(HAIKU)
+#include <signal.h>
 #elif OS(QNX)
 #include <ucontext.h>
 #else

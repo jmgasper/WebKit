@@ -63,6 +63,19 @@ public:
                 break;
             }
         }
+        // An empty match at the start does not imply matching every URL when
+        // the pattern must also reach the end. For example, ^a*$ accepts only
+        // strings of a's, and ^$ accepts only the empty string. Preserve those
+        // terms in the automaton instead of turning the action unconditional.
+        if (matchesEverything && m_hasBeginningOfLineAssertion && !m_sunkTerms.isEmpty() && m_sunkTerms.last().isEndOfLineAssertion()) {
+            matchesEverything = false;
+            for (const auto& term : m_sunkTerms) {
+                if (term.isKnownToMatchAnyString()) {
+                    matchesEverything = true;
+                    break;
+                }
+            }
+        }
         if (matchesEverything) {
             fail(URLFilterParser::MatchesEverything);
             return;

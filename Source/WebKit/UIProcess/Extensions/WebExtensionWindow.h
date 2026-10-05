@@ -76,6 +76,11 @@ public:
     }
 
     explicit WebExtensionWindow(const WebExtensionContext&, WKWebExtensionWindow*);
+#if PLATFORM(HAIKU)
+    WebExtensionWindow(const WebExtensionContext&, uint64_t nativeWindowIdentifier);
+    uint64_t nativeWindowIdentifier() const { return m_nativeWindowIdentifier; }
+    bool isValid() const;
+#endif
 
     enum class Type : uint8_t {
         Normal,
@@ -149,6 +154,9 @@ public:
 
 private:
     WeakPtr<WebExtensionContext> m_extensionContext;
+#if PLATFORM(HAIKU)
+    uint64_t m_nativeWindowIdentifier;
+#endif
 #if PLATFORM(COCOA)
     WeakObjCPtr<WKWebExtensionWindow> m_delegate;
 #endif

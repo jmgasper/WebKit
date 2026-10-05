@@ -43,6 +43,7 @@ OBJC_CLASS NSHTTPCookieStorage;
 
 namespace WebCore {
 struct Cookie;
+struct CookieChange;
 enum class HTTPCookieAcceptPolicy : uint8_t;
 }
 
@@ -69,6 +70,9 @@ public:
 #endif
 
     void notifyCookiesDidChange(PAL::SessionID);
+#if PLATFORM(HAIKU) && USE(CURL)
+    void notifyCookiesDidChange(PAL::SessionID, Vector<WebCore::CookieChange>&&);
+#endif
 
 private:
     // IPC::MessageReceiver
@@ -77,6 +81,10 @@ private:
     void getHostnamesWithCookies(PAL::SessionID, CompletionHandler<void(Vector<String>&&)>&&);
 
     void deleteCookie(PAL::SessionID, const WebCore::Cookie&, CompletionHandler<void()>&&);
+#if PLATFORM(HAIKU) && USE(CURL)
+    void setCookieWithResult(PAL::SessionID, const WebCore::Cookie&, uint64_t cookiesVersion, CompletionHandler<void(bool, std::optional<WebCore::Cookie>&&)>&&);
+    void deleteCookieWithResult(PAL::SessionID, const WebCore::Cookie&, CompletionHandler<void(bool)>&&);
+#endif
     void deleteCookiesForHostnames(PAL::SessionID, const Vector<String>&, CompletionHandler<void()>&&);
     void deleteAllCookies(PAL::SessionID, CompletionHandler<void()>&&);
     void deleteAllCookiesModifiedSince(PAL::SessionID, WallTime, CompletionHandler<void()>&&);

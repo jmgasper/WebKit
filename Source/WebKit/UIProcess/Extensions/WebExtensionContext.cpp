@@ -34,11 +34,24 @@
 #include "InjectUserScriptImmediately.h"
 #include "Logging.h"
 #include "WebExtensionConstants.h"
+#include "WebExtensionAction.h"
+#include "WebExtensionTab.h"
 #include "WebExtensionContextParameters.h"
 #include "WebExtensionContextProxyMessages.h"
+#include "WebExtensionDeferredReply.h"
 #include "WebExtensionController.h"
+#if PLATFORM(HAIKU)
+#include "haiku/WebExtensionPrivacyControllerHaiku.h"
+#endif
 #include "WebExtensionPermission.h"
 #include "WebPageProxy.h"
+#if PLATFORM(HAIKU)
+#include "WebViewPrivate.h"
+#include "BrowserCommandBrokerHaiku.h"
+#include "ExtensionPermissionPromptHaiku.h"
+#include "haiku/ExtensionActionPopupHaiku.h"
+#include "haiku/WebExtensionTestMessageQueueHaiku.h"
+#endif
 #include <WebCore/LocalizedStrings.h>
 #include <WebCore/TextResourceDecoder.h>
 #include <wtf/HashMap.h>
@@ -49,7 +62,317 @@ static constexpr size_t maximumCachedPermissionResults = 256;
 
 namespace WebKit {
 
+bool WebExtensionContext::hasTestEventListeners(WebExtensionEventListenerType type)
+{
+#if PLATFORM(HAIKU)
+    return hasWebExtensionTestEventListenersHaiku(type, m_eventListenerFrames);
+#else
+    switch (type) {
+    case WebExtensionEventListenerType::TestOnMessage:
+        return m_testMessageListenersCount;
+    case WebExtensionEventListenerType::TestOnTestStarted:
+        return m_testStartedListenersCount;
+    case WebExtensionEventListenerType::TestOnTestFinished:
+        return m_testFinishedListenersCount;
+
+    default:
+        return false;
+    }
+#endif
+}
+
+
 using namespace WebCore;
+
+bool WebExtensionContext::hasActiveUserGesture(WebExtensionTab& tab) const
+{
+    ASSERT(isLoaded());
+    if (!isLoaded())
+        return false;
+
+#if PLATFORM(HAIKU)
+    if (tab.extensionContext() != this || !tab.isOpen() || !tab.extensionHasAccess())
+        return false;
+#endif
+    return tab.hasActiveUserGesture();
+}
+
+void WebExtensionContext::clearUserGesture(WebExtensionTab& tab)
+{
+    ASSERT(isLoaded());
+    if (!isLoaded())
+        return;
+
+#if PLATFORM(HAIKU)
+    if (tab.extensionContext() != this)
+        return;
+    if (tab.clearNativeUserGesture())
+        didChangeTabProperties(tab, { WebExtensionTab::ChangedProperties::URL, WebExtensionTab::ChangedProperties::Title });
+#else
+    RefPtr oldTemporaryPermissionMatchPattern = tab.temporaryPermissionMatchPattern();
+
+    tab.setActiveUserGesture(false);
+    tab.setTemporaryPermissionMatchPattern(nullptr);
+
+    // FIXME: <https://webkit.org/b/279287> permissionsDidChange should include a tab parameter for this use-case
+    if (oldTemporaryPermissionMatchPattern)
+        permissionsDidChange(PermissionNotification::GrantedPermissionMatchPatternsWereRemoved, MatchPatternSet { *oldTemporaryPermissionMatchPattern });
+#endif
+}
+
+#if PLATFORM(COCOA) || PLATFORM(HAIKU)
+
+std::expected<bool, RefPtr<API::Error>> WebExtensionContext::load(WebExtensionController& controller, String storageDirectory)
+{
+    if (isLoaded()) {
+        RELEASE_LOG_ERROR(Extensions, "Extension context already loaded");
+        return makeUnexpected(createError(Error::AlreadyLoaded));
+    }
+
+#if PLATFORM(IOS) || PLATFORM(VISION)
+    RefPtr extension = m_extension;
+    if (extension->backgroundContentIsPersistent()) {
+        RELEASE_LOG_ERROR(Extensions, "Cannot load persistent background content on this platform");
+        return makeUnexpected(extension->createError(WebExtension::Error::InvalidBackgroundPersistence));
+    }
+#endif
+
+#if PLATFORM(HAIKU)
+    if (!m_extension->manifestParsedSuccessfully() || m_extension->version().isEmpty() || m_extension->nativeResourceFingerprint().isEmpty())
+        return makeUnexpected(m_extension->createError(WebExtension::Error::InvalidManifest));
+#endif
+
+    m_storageDirectory = storageDirectory;
+#if PLATFORM(HAIKU)
+    if (!readStateFromStorage())
+        return makeUnexpected(createError(Error::Unknown, "could not read saved extension state"_s));
+    if (auto restored = restoreNativePermissionState(); !restored)
+        return makeUnexpected(createError(Error::Unknown, restored.error()));
+    if (auto restored = restoreNativePrivacySettings(); !restored)
+        return makeUnexpected(createError(Error::Unknown, restored.error()));
+#endif
+    m_extensionController = controller;
+    m_contentScriptWorld = API::ContentWorld::sharedWorldWithName(makeString("WebExtension-"_s, m_uniqueIdentifier));
+
+#if !PLATFORM(HAIKU)
+    readStateFromStorage();
+#endif
+
+    auto lastSeenBaseURL = updatePersistedMetadataDuringLoad();
+
+    loadStorageAccessLevelsFromStorage();
+
+    determineInstallReasonDuringLoad();
+
+    writeStateToStorage();
+
+    populateWindowsAndTabs();
+
+    moveLocalStorageIfNeeded(lastSeenBaseURL, [this, protectedThis = Ref { *this }] {
+        // The extension could have been unloaded before this was called.
+        if (!isLoaded())
+            return;
+
+        removeStaleExtensionWebsiteData();
+
+        m_safeToInjectContent = true;
+
+        loadBackgroundWebViewDuringLoad();
+
+#if ENABLE(INSPECTOR_EXTENSIONS)
+        loadInspectorBackgroundPagesDuringLoad();
+#endif
+
+        loadRegisteredContentScripts();
+
+        loadDeclarativeNetRequestRulesetStateFromStorage();
+        loadDeclarativeNetRequestRules([](bool) { });
+
+        // Notify the WebProcess that the extension loaded before we inject content scripts.
+        // This will ensure that the content world is set up correctly (e.g. configured with the `browser` namespace).
+        if (RefPtr controller = extensionController())
+            controller->dispatchDidLoad(*this);
+
+        addInjectedContent();
+    });
+
+    return true;
+}
+
+std::expected<bool, RefPtr<API::Error>> WebExtensionContext::unload()
+{
+    if (!isLoaded()) {
+        RELEASE_LOG_ERROR(Extensions, "Extension context not loaded");
+        return makeUnexpected(createError(Error::NotLoaded));
+    }
+
+#if PLATFORM(HAIKU)
+    RELEASE_ASSERT(++m_nativePrivacyGeneration);
+    closeNativeActionPopup();
+    Vector<WTF::UUID> removedMenuCallbacks;
+    for (auto& token : m_menuClickHandlerIdentifiers.values())
+        removedMenuCallbacks.append(token);
+    m_menuClickHandlerIdentifiers.clear();
+    removeMenusClickHandlers(removedMenuCallbacks);
+    // Detach before closing background pages, which can itself remove ports.
+    for (auto& entry : m_nativePortMap) {
+        entry.value->disconnectForContextUnload();
+        m_ports.remove({ WebExtensionContentWorldType::Native, entry.key });
+        clearQueuedPortMessages(WebExtensionContentWorldType::Main, entry.key);
+        clearQueuedPortMessages(WebExtensionContentWorldType::Native, entry.key);
+    }
+    m_nativePortMap.clear();
+#endif
+
+    writeStateToStorage();
+
+    unloadBackgroundWebView();
+#if ENABLE(WK_WEB_EXTENSIONS_OFFSCREEN)
+    unloadOffscreenWebView();
+#endif
+
+    removeInjectedContent();
+
+    invalidateStorage();
+    unloadDeclarativeNetRequestState();
+
+#if PLATFORM(HAIKU)
+    auto oldPrivilegedIdentifier = std::exchange(m_privilegedIdentifier, std::nullopt);
+    // Invalidate the load before delivering queued cancellation completions.
+    if (oldPrivilegedIdentifier && extensionController()) {
+        extensionController()->nativePermissionPrompts()->cancelOwner(oldPrivilegedIdentifier.value().toUInt64());
+        extensionController()->nativeBrowserCommands()->cancelOwner(oldPrivilegedIdentifier.value().toUInt64());
+    }
+#else
+    m_privilegedIdentifier = std::nullopt;
+#endif
+
+    cancelBackgroundContentTasks();
+    m_backgroundContentEventListeners.clear();
+    m_backgroundContentHasLoadedOnce = false;
+    m_eventListenerFrames.clear();
+    m_installReason = InstallReason::None;
+    m_previousVersion = nullString();
+    m_safeToLoadBackgroundContent = false;
+    m_backgroundContentLoadError = nullptr;
+
+    ++m_registeredContentScriptsGeneration;
+    m_registeredScriptsMap.clear();
+    m_dynamicallyInjectedUserStyleSheets.clear();
+    m_injectedScriptsPerPatternMap.clear();
+    m_injectedStyleSheetsPerPatternMap.clear();
+    m_safeToInjectContent = false;
+
+    m_extensionController = nullptr;
+    m_contentScriptWorld = nullptr;
+
+#if PLATFORM(HAIKU)
+    for (auto& entry : m_tabMap)
+        entry.value->clearNativeUserGesture();
+#endif
+    m_tabMap.clear();
+    m_extensionPageTabMap.clear();
+#if PLATFORM(COCOA)
+    clearTabDelegateMap();
+#endif
+
+    m_windowMap.clear();
+#if PLATFORM(HAIKU)
+    m_nativeWindowEventIdentifiers.clear();
+    m_nativeTabEventIdentifiers.clear();
+#endif
+    m_windowOrderVector.clear();
+    m_focusedWindowIdentifier = std::nullopt;
+
+    m_actionWindowMap.clear();
+    m_actionTabMap.clear();
+    m_defaultAction = nullptr;
+#if ENABLE(WK_WEB_EXTENSIONS_SIDEBAR)
+    m_sidebarWindowMap.clear();
+    m_sidebarTabMap.clear();
+    m_sidebarPageMap.clear();
+    m_defaultSidebar = nullptr;
+#endif
+    m_popupPageActionMap.clear();
+
+    m_ports.clear();
+    m_pagePortMap.clear();
+    m_portQueuedMessages.clear();
+    m_nativePortMap.clear();
+
+    m_alarmMap.clear();
+
+    m_commands.clear();
+    m_populatedCommands = false;
+
+    m_menuItems.clear();
+    m_mainMenuItems.clear();
+
+#if ENABLE(INSPECTOR_EXTENSIONS)
+    m_inspectorContextMap.clear();
+#endif
+
+    m_pendingPermissionRequests = 0;
+
+    return true;
+}
+
+std::expected<bool, RefPtr<API::Error>> WebExtensionContext::reload()
+{
+    if (!isLoaded()) {
+        RELEASE_LOG_ERROR(Extensions, "Extension context not loaded");
+        return makeUnexpected(createError(Error::NotLoaded));
+    }
+
+    Ref controller = *m_extensionController;
+    auto unloadResult = controller->unload(*this);
+    if (!unloadResult)
+        return makeUnexpected(unloadResult.error());
+
+    auto loadResult = controller->load(*this);
+    if (!loadResult)
+        return makeUnexpected(loadResult.error());
+
+    return true;
+}
+
+#endif // PLATFORM(COCOA) || PLATFORM(HAIKU)
+
+void WebExtensionContext::invalidateStorage()
+{
+    m_registeredContentScriptsStorage = nullptr;
+    m_localStorageStore = nullptr;
+    m_sessionStorageStore = nullptr;
+    m_syncStorageStore = nullptr;
+    m_storageAccessLevels.clear();
+}
+
+void WebExtensionContext::setStorageAccessLevel(WebExtensionDataType dataType, WebExtensionStorageAccessLevel accessLevel)
+{
+    m_storageAccessLevels.set(dataType, accessLevel);
+
+    saveStorageAccessLevelsToStorage();
+
+    if (!isLoaded())
+        return;
+
+    if (RefPtr extensionController = this->extensionController())
+        extensionController->sendToAllProcesses(Messages::WebExtensionContextProxy::SetStorageAccessLevel(dataType, accessLevel), identifier());
+}
+
+void WebExtensionContext::didEncounterScriptError(const String& message, const String& sourceURL, uint32_t lineNumber, uint32_t columnNumber, WebExtensionContentWorldType)
+{
+    auto path = sourceURL.isEmpty() ? String() : URL(sourceURL).path().toString();
+    if (path.startsWith('/'))
+        path = path.substring(1);
+    auto location = !path.isEmpty() ? (columnNumber ? makeString(path, ':', lineNumber, ':', columnNumber) : makeString(path, ':', lineNumber)) : String();
+    String description;
+    if (message.isEmpty())
+        description = !location.isEmpty() ? makeString('(', location, ')') : String();
+    else
+        description = !location.isEmpty() ? makeString(message, " ("_s, location, ')') : message;
+    recordError(createError(Error::ScriptExecutionError, description));
+}
 
 int WebExtensionContext::toAPIError(WebExtensionContext::Error error)
 {
@@ -230,6 +553,20 @@ void WebExtensionContext::setHasAccessToPrivateData(bool hasAccess)
         return;
 
     m_hasAccessToPrivateData = hasAccess;
+#if PLATFORM(HAIKU)
+    RELEASE_ASSERT(++m_nativePrivacyGeneration);
+    if (isLoaded())
+        extensionController()->nativePrivacy().refresh();
+    validateNativeActionPopup();
+#endif
+#if PLATFORM(HAIKU)
+    if (!hasAccess && isLoaded()) {
+        for (Ref tab : openTabs(IgnoreExtensionAccess::Yes)) {
+            if (tab->isPrivate())
+                clearUserGesture(tab);
+        }
+    }
+#endif
 
     if (!safeToInjectContent())
         return;
@@ -261,6 +598,15 @@ void WebExtensionContext::setHasAccessToFileURLs(bool hasAccess)
         return;
 
     m_hasAccessToFileURLs = hasAccess;
+#if PLATFORM(HAIKU)
+    if (!hasAccess && isLoaded()) {
+        for (Ref tab : openTabs(IgnoreExtensionAccess::Yes)) {
+            RefPtr pattern = tab->temporaryPermissionMatchPattern();
+            if (pattern && pattern->scheme() == "file"_s)
+                clearUserGesture(tab);
+        }
+    }
+#endif
 
     if (!safeToInjectContent())
         return;
@@ -282,6 +628,10 @@ const WebExtensionContext::PermissionsMap& WebExtensionContext::grantedPermissio
 
 void WebExtensionContext::setGrantedPermissions(PermissionsMap&& grantedPermissions)
 {
+#if PLATFORM(HAIKU)
+    if (!m_nativePermissionStateInitialized)
+        m_nativeGrantedPermissionsWereSet = true;
+#endif
     PermissionsSet removedPermissions;
     for (auto& entry : m_grantedPermissions)
         removedPermissions.add(entry.key);
@@ -348,6 +698,10 @@ const WebExtensionContext::PermissionMatchPatternsMap& WebExtensionContext::gran
 
 void WebExtensionContext::setGrantedPermissionMatchPatterns(PermissionMatchPatternsMap&& grantedPermissionMatchPatterns, EqualityOnly equalityOnly)
 {
+#if PLATFORM(HAIKU)
+    if (!m_nativePermissionStateInitialized)
+        m_nativeGrantedPatternsWereSet = true;
+#endif
     MatchPatternSet removedMatchPatterns;
     for (auto& entry : m_grantedPermissionMatchPatterns)
         removedMatchPatterns.add(entry.key);
@@ -576,7 +930,23 @@ bool WebExtensionContext::removePermissionMatchPatterns(PermissionMatchPatternsM
 
 bool WebExtensionContext::removeGrantedPermissionMatchPatterns(MatchPatternSet& matchPatternsToRemove, EqualityOnly equalityOnly)
 {
-#if PLATFORM(COCOA)
+#if PLATFORM(HAIKU)
+    if (!m_nativePermissionStateInitialized) {
+        for (auto& pattern : matchPatternsToRemove)
+            m_nativeRemovedPatternsBeforeLoad.append({ pattern, equalityOnly });
+    }
+#endif
+#if PLATFORM(HAIKU)
+    bool removedTemporaryPermission = false;
+    if (isLoaded()) {
+        for (Ref tab : openTabs(IgnoreExtensionAccess::Yes)) {
+            if (tab->nativeTemporaryPermissionMatches(matchPatternsToRemove)) {
+                clearUserGesture(tab);
+                removedTemporaryPermission = true;
+            }
+        }
+    }
+#elif PLATFORM(COCOA)
     // Clear activeTab permissions if the patterns match.
     for (Ref tab : openTabs()) {
         auto temporaryPattern = tab->temporaryPermissionMatchPattern();
@@ -590,8 +960,13 @@ bool WebExtensionContext::removeGrantedPermissionMatchPatterns(MatchPatternSet& 
     }
 #endif
 
-    if (!removePermissionMatchPatterns(m_grantedPermissionMatchPatterns, matchPatternsToRemove, equalityOnly, m_nextGrantedPermissionMatchPatternsExpirationDate, WebExtensionContext::PermissionNotification::GrantedPermissionMatchPatternsWereRemoved))
+    if (!removePermissionMatchPatterns(m_grantedPermissionMatchPatterns, matchPatternsToRemove, equalityOnly, m_nextGrantedPermissionMatchPatternsExpirationDate, WebExtensionContext::PermissionNotification::GrantedPermissionMatchPatternsWereRemoved)) {
+#if PLATFORM(HAIKU)
+        return removedTemporaryPermission;
+#else
         return false;
+#endif
+    }
 
     removeInjectedContent(matchPatternsToRemove);
 
@@ -600,6 +975,10 @@ bool WebExtensionContext::removeGrantedPermissionMatchPatterns(MatchPatternSet& 
 
 bool WebExtensionContext::removeGrantedPermissions(PermissionsSet& permissionsToRemove)
 {
+#if PLATFORM(HAIKU)
+    if (!m_nativePermissionStateInitialized)
+        m_nativeRemovedPermissionsBeforeLoad.addAll(permissionsToRemove);
+#endif
     return removePermissions(m_grantedPermissions, permissionsToRemove, m_nextGrantedPermissionsExpirationDate, WebExtensionContext::PermissionNotification::GrantedPermissionsWereRemoved);
 }
 
@@ -623,14 +1002,14 @@ WebExtensionContext::PermissionsMap& WebExtensionContext::removeExpired(Permissi
     WallTime currentTime = WallTime::now();
 
     // If the next expiration date hasn't passed yet, there is nothing to remove.
-    if (nextExpirationDate != WallTime::nan() && nextExpirationDate > currentTime)
+    if (!nextExpirationDate.isNaN() && nextExpirationDate > currentTime)
         return permissionMap;
 
     nextExpirationDate = WallTime::infinity();
 
     PermissionsSet removedPermissions;
     permissionMap.removeIf([&](auto& entry) {
-        if (entry.value <= currentTime) {
+        if (entry.value.isNaN() || entry.value <= currentTime) {
             removedPermissions.add(entry.key);
             return true;
         }
@@ -644,7 +1023,7 @@ WebExtensionContext::PermissionsMap& WebExtensionContext::removeExpired(Permissi
     if (removedPermissions.isEmpty() || notification == PermissionNotification::None)
         return permissionMap;
 
-#if PLATFORM(COCOA)
+#if PLATFORM(COCOA) || PLATFORM(HAIKU)
     permissionsDidChange(notification, removedPermissions);
 #endif
 
@@ -656,14 +1035,14 @@ WebExtensionContext::PermissionMatchPatternsMap& WebExtensionContext::removeExpi
     WallTime currentTime = WallTime::now();
 
     // If the next expiration date hasn't passed yet, there is nothing to remove.
-    if (nextExpirationDate != WallTime::nan() && nextExpirationDate > currentTime)
+    if (!nextExpirationDate.isNaN() && nextExpirationDate > currentTime)
         return matchPatternMap;
 
     nextExpirationDate = WallTime::infinity();
 
     MatchPatternSet removedMatchPatterns;
     matchPatternMap.removeIf([&](auto& entry) {
-        if (entry.value <= currentTime) {
+        if (entry.value.isNaN() || entry.value <= currentTime) {
             removedMatchPatterns.add(entry.key);
             return true;
         }
@@ -677,7 +1056,7 @@ WebExtensionContext::PermissionMatchPatternsMap& WebExtensionContext::removeExpi
     if (removedMatchPatterns.isEmpty() || notification == PermissionNotification::None)
         return matchPatternMap;
 
-#if PLATFORM(COCOA)
+#if PLATFORM(COCOA) || PLATFORM(HAIKU)
     permissionsDidChange(notification, removedMatchPatterns);
 #endif
 
@@ -836,7 +1215,11 @@ WebExtensionContext::PermissionState WebExtensionContext::permissionState(const 
 {
     ASSERT(!permission.isEmpty());
 
-#if PLATFORM(COCOA)
+#if PLATFORM(HAIKU)
+    if (tab && (tab->extensionContext() != this || !tab->isOpen() || !tab->extensionHasAccess()))
+        return PermissionState::Unknown;
+#endif
+#if PLATFORM(COCOA) || PLATFORM(HAIKU)
     if (tab && permission == WebExtensionPermission::tabs()) {
         if (tab->extensionHasTemporaryPermission())
             return PermissionState::GrantedExplicitly;
@@ -869,6 +1252,10 @@ WebExtensionContext::PermissionState WebExtensionContext::permissionState(const 
 
 WebExtensionContext::PermissionState WebExtensionContext::permissionState(const URL& url, WebExtensionTab* tab, OptionSet<PermissionStateOptions> options)
 {
+#if PLATFORM(HAIKU)
+    if (tab && (tab->extensionContext() != this || !tab->isOpen() || !tab->extensionHasAccess()))
+        return PermissionState::Unknown;
+#endif
     if (url.isEmpty())
         return PermissionState::Unknown;
 
@@ -881,11 +1268,16 @@ WebExtensionContext::PermissionState WebExtensionContext::permissionState(const 
     if (url.protocolIsFile() && !m_hasAccessToFileURLs)
         return PermissionState::Unknown;
 
+#if PLATFORM(HAIKU)
+    if (tab && tab->hasNativeTemporaryPermission(url))
+        return PermissionState::GrantedExplicitly;
+#else
     if (tab) {
         auto temporaryPattern = tab->temporaryPermissionMatchPattern();
         if (temporaryPattern && temporaryPattern->matchesURL(url))
             return PermissionState::GrantedExplicitly;
     }
+#endif
 
     bool skipRequestedPermissions = options.contains(PermissionStateOptions::SkipRequestedPermissions);
 
@@ -1001,6 +1393,10 @@ WebExtensionContext::PermissionState WebExtensionContext::permissionState(const 
 
 WebExtensionContext::PermissionState WebExtensionContext::permissionState(const WebExtensionMatchPattern& pattern, WebExtensionTab* tab, OptionSet<PermissionStateOptions> options)
 {
+#if PLATFORM(HAIKU)
+    if (tab && (tab->extensionContext() != this || !tab->isOpen() || !tab->extensionHasAccess()))
+        return PermissionState::Unknown;
+#endif
     if (!pattern.isValid())
         return PermissionState::Unknown;
 
@@ -1013,11 +1409,15 @@ WebExtensionContext::PermissionState WebExtensionContext::permissionState(const 
     if (!pattern.matchesAllURLs() && pattern.scheme() == "file"_s && !m_hasAccessToFileURLs)
         return PermissionState::Unknown;
 
+#if !PLATFORM(HAIKU)
+    // Native activeTab grants include an origin port. A match pattern cannot
+    // express that scope; only URL decisions may consume that temporary grant.
     if (tab) {
         auto temporaryPattern = tab->temporaryPermissionMatchPattern();
         if (temporaryPattern && temporaryPattern->matchesPattern(pattern))
             return PermissionState::GrantedExplicitly;
     }
+#endif
 
     // Access the maps here to remove any expired entries, and only do it once for this call.
     auto& grantedPermissionMatchPatterns = this->grantedPermissionMatchPatterns();
@@ -1615,6 +2015,16 @@ bool WebExtensionContext::purgeMatchedRulesFromBefore(const WallTime& startTime)
 
 void WebExtensionContext::addDeclarativeNetRequestRules(WebUserContentControllerProxy& controllerProxy)
 {
+#if PLATFORM(HAIKU)
+    if (!isLoaded() || !m_nativeDNRRules || !hasPermission(WebExtensionPermission::declarativeNetRequest()))
+        return;
+    for (Ref controller : userContentControllers()) {
+        if (controller.ptr() == &controllerProxy) {
+            controllerProxy.addContentRuleList(*m_nativeDNRRules, m_baseURL);
+            break;
+        }
+    }
+#else
     API::ContentRuleListStore::defaultStoreSingleton().lookupContentRuleListFile(declarativeNetRequestContentRuleListFilePath(), uniqueIdentifier().isolatedCopy(), [this, protectedThis = Ref { *this }, controllerProxy = Ref { controllerProxy }](RefPtr<API::ContentRuleList> ruleList, std::error_code) {
         if (!ruleList)
             return;
@@ -1625,10 +2035,17 @@ void WebExtensionContext::addDeclarativeNetRequestRules(WebUserContentController
 
         controllerProxy->addContentRuleList(*ruleList, m_baseURL);
     });
+#endif
 }
 
 void WebExtensionContext::addDeclarativeNetRequestRulesToPrivateUserContentControllers()
 {
+#if PLATFORM(HAIKU)
+    if (!isLoaded() || !hasAccessToPrivateData() || !m_nativeDNRRules || !hasPermission(WebExtensionPermission::declarativeNetRequest()))
+        return;
+    for (Ref controller : extensionController()->allPrivateUserContentControllers())
+        controller->addContentRuleList(*m_nativeDNRRules, m_baseURL);
+#else
     API::ContentRuleListStore::defaultStoreSingleton().lookupContentRuleListFile(declarativeNetRequestContentRuleListFilePath(), uniqueIdentifier().isolatedCopy(), [this, protectedThis = Ref { *this }](RefPtr<API::ContentRuleList> ruleList, std::error_code) {
         if (!ruleList)
             return;
@@ -1640,6 +2057,7 @@ void WebExtensionContext::addDeclarativeNetRequestRulesToPrivateUserContentContr
         for (Ref controller : extensionController()->allPrivateUserContentControllers())
             controller->addContentRuleList(*ruleList, m_baseURL);
     });
+#endif
 }
 
 static HashMap<WebExtensionContextIdentifier, WeakRef<WebExtensionContext>>& NODELETE webExtensionContexts()
@@ -1660,7 +2078,15 @@ WebExtensionContext::WebExtensionContext()
 }
 
 #if !USE(GLIB)
-WebExtensionContext::~WebExtensionContext() = default;
+WebExtensionContext::~WebExtensionContext()
+{
+    webExtensionContexts().remove(identifier());
+#if PLATFORM(HAIKU)
+    clearNativeDeclarativeNetRequestRules();
+    closeNativeActionPopup();
+    unloadBackgroundWebView();
+#endif
+}
 #endif
 
 WebExtensionContextIdentifier WebExtensionContext::privilegedIdentifier() const
@@ -1686,6 +2112,9 @@ WebExtensionContextParameters WebExtensionContext::parameters(IncludePrivilegedI
         includePrivilegedIdentifier == IncludePrivilegedIdentifier::Yes ? std::optional(privilegedIdentifier()) : std::nullopt,
         baseURL(),
         uniqueIdentifier(),
+#if PLATFORM(HAIKU)
+        m_contentScriptWorld ? std::optional(m_contentScriptWorld->identifier()) : std::nullopt,
+#endif
         unsupportedAPIs(),
         m_grantedPermissions,
         extension->serializeLocalization(),
@@ -1798,9 +2227,17 @@ void WebExtensionContext::loadBackgroundContent(CompletionHandler<void(RefPtr<AP
         return;
     }
 
-    wakeUpBackgroundContentIfNecessary([this, protectedThis = Ref { *this }, completionHandler = WTF::move(completionHandler)]() mutable {
-        if (completionHandler)
-            completionHandler(backgroundContentLoadError());
+    if (!completionHandler) {
+        wakeUpBackgroundContentIfNecessary([] { });
+        return;
+    }
+    auto pendingReply = deferWebExtensionReply<RefPtr<API::Error>>(
+        [completionHandler = WTF::move(completionHandler)](RefPtr<API::Error>&& error) mutable {
+            completionHandler(WTF::move(error));
+        }, createError(Error::BackgroundContentFailedToLoad, "Background content became unavailable before it finished loading"_s));
+    wakeUpBackgroundContentIfNecessary([this, protectedThis = Ref { *this }, pendingReply = WTF::move(pendingReply)]() mutable {
+        auto completionHandler = resumeWebExtensionReply(WTF::move(pendingReply));
+        completionHandler(backgroundContentLoadError());
     });
 }
 
@@ -2001,6 +2438,128 @@ Ref<WebExtensionRegisteredScriptsSQLiteStore> WebExtensionContext::registeredCon
     if (!m_registeredContentScriptsStorage)
         m_registeredContentScriptsStorage = WebExtensionRegisteredScriptsSQLiteStore::create(m_uniqueIdentifier, storageDirectory(), !storageIsPersistent());
     return *m_registeredContentScriptsStorage;
+}
+
+void WebExtensionContext::cancelBackgroundContentTasks()
+{
+    if (m_actionsToPerformAfterBackgroundContentLoads.isEmpty())
+        return;
+    auto tasks = std::exchange(m_actionsToPerformAfterBackgroundContentLoads, { });
+    RunLoop::mainSingleton().dispatch([tasks = WTF::move(tasks)]() mutable { tasks.clear(); });
+}
+
+void WebExtensionContext::removePage(WebPageProxy& page)
+{
+    disconnectPortsForPage(page);
+}
+
+#if PLATFORM(COCOA) || PLATFORM(HAIKU)
+void WebExtensionContext::performTasksAfterBackgroundContentLoads()
+{
+    if (!isLoaded() || !m_backgroundWebView)
+        return;
+
+    auto background = m_backgroundWebView;
+    RELEASE_LOG_DEBUG(Extensions, "Background content loaded");
+
+    if (m_shouldFireStartupEvent) {
+        fireRuntimeStartupEventIfNeeded();
+        m_shouldFireStartupEvent = false;
+    }
+
+    if (m_installReason != InstallReason::None) {
+        fireRuntimeInstalledEventIfNeeded();
+
+        m_installReason = InstallReason::None;
+        m_previousVersion = nullString();
+    }
+
+    RELEASE_LOG_DEBUG(Extensions, "Performing %{public}zu task(s) after background content loaded", m_actionsToPerformAfterBackgroundContentLoads.size());
+
+    m_backgroundContentIsLoaded = true;
+    m_backgroundContentHasLoadedOnce = true;
+    auto actions = std::exchange(m_actionsToPerformAfterBackgroundContentLoads, { });
+    for (auto& action : actions) {
+        if (!isLoaded() || m_backgroundWebView != background)
+            return;
+        action();
+    }
+    if (!isLoaded() || m_backgroundWebView != background)
+        return;
+
+    saveBackgroundPageListenersToStorage();
+    scheduleBackgroundContentToUnload();
+}
+
+#endif
+
+Vector<WebExtensionContext::PageIdentifierTuple> WebExtensionContext::popupPageIdentifiers(WebProcessProxy& destinationProcess) const
+{
+    Vector<PageIdentifierTuple> result;
+
+    for (auto entry : m_popupPageActionMap) {
+        Ref page = entry.key;
+        Ref value = entry.value;
+        RefPtr tab = value->tab();
+        RefPtr window = tab ? tab->window() : value->window();
+
+        auto tabIdentifier = tab ? std::optional(tab->identifier()) : std::nullopt;
+        auto windowIdentifier = window ? std::optional(window->identifier()) : std::nullopt;
+
+        result.append({ page->webPageIDInProcess(destinationProcess), tabIdentifier, windowIdentifier });
+    }
+
+    return result;
+}
+
+Vector<WebExtensionContext::PageIdentifierTuple> WebExtensionContext::tabPageIdentifiers(WebProcessProxy& destinationProcess) const
+{
+    Vector<PageIdentifierTuple> result;
+
+    for (auto entry : m_extensionPageTabMap) {
+        RefPtr tab = getTab(entry.value);
+        if (!tab)
+            continue;
+
+        Ref page = entry.key;
+        RefPtr window = tab->window();
+        auto windowIdentifier = window ? std::optional(window->identifier()) : std::nullopt;
+
+        result.append({ page->webPageIDInProcess(destinationProcess), tab->identifier(), windowIdentifier });
+    }
+
+    return result;
+}
+
+void WebExtensionContext::addPopupPage(WebPageProxy& page, WebExtensionAction& action)
+{
+    m_popupPageActionMap.set(page, action);
+
+    RefPtr tab = action.tab();
+    RefPtr window = tab ? tab->window() : action.window();
+
+    auto tabIdentifier = tab ? std::optional(tab->identifier()) : std::nullopt;
+    auto windowIdentifier = window ? std::optional(window->identifier()) : std::nullopt;
+
+    Ref protectedPage = page;
+    protectedPage->forEachWebContentProcess([&](auto& webProcess, auto pageID) {
+        webProcess.send(Messages::WebExtensionContextProxy::AddPopupPageIdentifier(pageID, tabIdentifier, windowIdentifier), identifier());
+    });
+}
+
+void WebExtensionContext::addExtensionTabPage(WebPageProxy& page, WebExtensionTab& tab)
+{
+    m_extensionPageTabMap.set(page, tab.identifier());
+
+    RefPtr window = tab.window();
+
+    auto tabIdentifier = tab.identifier();
+    auto windowIdentifier = window ? std::optional(window->identifier()) : std::nullopt;
+
+    Ref protectedPage = page;
+    protectedPage->forEachWebContentProcess([&](auto& webProcess, auto pageID) {
+        webProcess.send(Messages::WebExtensionContextProxy::AddTabPageIdentifier(pageID, tabIdentifier, windowIdentifier), identifier());
+    });
 }
 
 } // namespace WebKit

@@ -512,6 +512,9 @@ AsyncClipboardAPIEnabled:
   humanReadableDescription: "Enable the async clipboard API"
   defaultValue:
     default: false
+    WebKitLegacy:
+      "PLATFORM(HAIKU)" : true
+      default: false
     WebKit:
       "PLATFORM(COCOA) || PLATFORM(GTK) || PLATFORM(WPE) || PLATFORM(WIN)" : true
       default: false
@@ -1967,7 +1970,9 @@ EditableLinkBehavior:
   status: embedder
   defaultValue:
     default: WebCore::EditableLinkBehavior::NeverLive
-    WebKitLegacy: WebKitEditableLinkDefaultBehavior
+    WebKitLegacy:
+      "PLATFORM(HAIKU)": WebCore::EditableLinkBehavior::Default
+      default: WebKitEditableLinkDefaultBehavior
     WebCore: EditableLinkBehavior::Default
 
 EmbedElementEnabled:
@@ -2659,8 +2664,10 @@ HardwareAccelerationEnabled:
   status: internal
   humanReadableName: "Hardware acceleration"
   humanReadableDescription: "Enable hardware acceleration"
-  condition: PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
-  defaultValue: true
+  condition: PLATFORM(GTK) || ENABLE(WPE_PLATFORM) || PLATFORM(HAIKU)
+  defaultValue:
+    "PLATFORM(HAIKU)": false
+    default: true
 
 HeadingOffsetEnabled:
   type: bool
@@ -2734,6 +2741,11 @@ HostedBlurMaterialInMediaControlsEnabled:
   defaultValue:
     default: false
     WebKit: defaultHostedBlurMaterialInMediaControlsEnabled()
+
+HyperlinkAuditingEnabled:
+  type: bool
+  status: embedder
+  defaultValue: true
 
 ICECandidateFilteringEnabled:
   type: bool
@@ -2977,6 +2989,9 @@ InputTypeColorEnabled:
   humanReadableDescription: "Enable input elements of type color"
   defaultValue:
     default: false
+    WebKitLegacy:
+      "PLATFORM(HAIKU)": true
+      default: false
     WebKit:
       "PLATFORM(COCOA) && !PLATFORM(WATCHOS)": true
       "PLATFORM(GTK) || PLATFORM(WPE)": true
@@ -3005,7 +3020,7 @@ InputTypeDateEnabled:
     "PLATFORM(COCOA) || PLATFORM(GTK)": true
     default: false
     WebKitLegacy:
-      "PLATFORM(IOS_FAMILY)": true
+      "PLATFORM(IOS_FAMILY) || PLATFORM(HAIKU)": true
       default: false
     WebCore: false
   sharedPreferenceForWebProcess: true
@@ -3019,7 +3034,7 @@ InputTypeDateTimeLocalEnabled:
     "PLATFORM(COCOA) || PLATFORM(GTK)": true
     default: false
     WebKitLegacy:
-      "PLATFORM(IOS_FAMILY)": true
+      "PLATFORM(IOS_FAMILY) || PLATFORM(HAIKU)": true
       default: false
     WebCore: false
   sharedPreferenceForWebProcess: true
@@ -3367,6 +3382,9 @@ JavaScriptRuntimeFlags:
   webKitLegacyPreferenceKey: WebKitJavaScriptRuntimeFlagsPreferenceKey
   defaultValue:
     default: 0
+    WebKitLegacy:
+      "PLATFORM(HAIKU)": "{ }"
+      default: 0
     WebCore: '{ }'
 
 JointIterationEnabled:
@@ -3403,7 +3421,11 @@ LargestContentfulPaintEnabled:
   category: dom
   humanReadableName: "Largest Contentful Paint"
   humanReadableDescription: "Enable Largest Contentful Paint performance entries"
-  defaultValue: true
+  defaultValue:
+    default: true
+    WebKitLegacy:
+      "PLATFORM(HAIKU)": false
+      default: true
 
 
 LayerBasedSVGEngineEnabled:
@@ -4307,6 +4329,9 @@ NavigatorWebDriverActivePolicy:
   status: embedder
   defaultValue:
     default: static_cast<uint32_t>(WebCore::NavigatorWebDriverActivePolicy::Auto)
+    WebKitLegacy:
+      "PLATFORM(HAIKU)": WebCore::NavigatorWebDriverActivePolicy::Auto
+      default: static_cast<uint32_t>(WebCore::NavigatorWebDriverActivePolicy::Auto)
     WebCore: NavigatorWebDriverActivePolicy::Auto
 
 NeedsAdobeFrameReloadingQuirk:
@@ -4714,6 +4739,10 @@ PitchCorrectionAlgorithm:
   defaultValue:
     "PLATFORM(COCOA)": static_cast<uint32_t>(WebCore::MediaPlayerEnums::PitchCorrectionAlgorithm::BestForSpeech)
     default: static_cast<uint32_t>(WebCore::MediaPlayerEnums::PitchCorrectionAlgorithm::BestAllAround)
+    WebKitLegacy:
+      "PLATFORM(COCOA)": static_cast<uint32_t>(WebCore::MediaPlayerEnums::PitchCorrectionAlgorithm::BestForSpeech)
+      "PLATFORM(HAIKU)": WebCore::MediaPlayerEnums::PitchCorrectionAlgorithm::BestAllAround
+      default: static_cast<uint32_t>(WebCore::MediaPlayerEnums::PitchCorrectionAlgorithm::BestAllAround)
     WebCore: MediaPlayerEnums::PitchCorrectionAlgorithm::BestAllAround
 
 PointerLockEnabled:
@@ -5245,6 +5274,7 @@ ScrollAnimatorEnabled:
   defaultValue:
     "PLATFORM(MAC)": WebKit::defaultScrollAnimatorEnabled()
     "PLATFORM(GTK) || PLATFORM(WPE)": true
+    "PLATFORM(HAIKU)": true
     default: false
     WebCore: false
 
@@ -5522,7 +5552,9 @@ ShouldConvertInvalidURLsToBlank:
   status: embedder
   defaultValue:
     default: true
-    WebKitLegacy: WebKit::defaultShouldConvertInvalidURLsToBlank()
+    WebKitLegacy:
+      "PLATFORM(HAIKU)": true
+      default: WebKit::defaultShouldConvertInvalidURLsToBlank()
 
 ShouldConvertPositionStyleOnCopy:
   type: bool
@@ -5626,7 +5658,9 @@ ShouldRestrictBaseURLSchemes:
   status: embedder
   defaultValue:
     default: false
-    WebKitLegacy: WebKit::defaultShouldRestrictBaseURLSchemes()
+    WebKitLegacy:
+      "PLATFORM(HAIKU)": false
+      default: WebKit::defaultShouldRestrictBaseURLSchemes()
     WebCore: true
 
 ShouldSuppressTextInputFromEditingDuringProvisionalNavigation:
@@ -5700,7 +5734,9 @@ ShrinksStandaloneImagesToFit:
   status: embedder
   defaultValue:
     default: true
-    WebKitLegacy: false
+    WebKitLegacy:
+      "PLATFORM(HAIKU)": true
+      default: false
 
 SiteIsolationEnabled:
   type: bool
@@ -5921,7 +5957,9 @@ StorageBlockingPolicy:
   webcoreOnChange: storageBlockingPolicyChanged
   defaultValue:
     default: WebCore::StorageBlockingPolicy::BlockThirdParty
-    WebKitLegacy: WebAllowAllStorage
+    WebKitLegacy:
+      "PLATFORM(HAIKU)": WebCore::StorageBlockingPolicy::AllowAll
+      default: WebAllowAllStorage
     WebCore: StorageBlockingPolicy::AllowAll
   sharedPreferenceForWebProcess: true
 

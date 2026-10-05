@@ -46,6 +46,10 @@
 #include "MediaRecorderPrivateAVFImpl.h"
 #endif
 
+#if PLATFORM(HAIKU) && USE(LIBWEBRTC)
+#include "MediaRecorderPrivateHaiku.h"
+#endif
+
 #if USE(GSTREAMER)
 #include "MediaRecorderPrivateGStreamer.h"
 #endif
@@ -58,7 +62,7 @@ MediaRecorder::CreatorFunction MediaRecorder::m_customCreator = nullptr;
 
 bool MediaRecorder::isTypeSupported(Document& document, const String& value)
 {
-#if PLATFORM(COCOA) || USE(GSTREAMER)
+#if PLATFORM(COCOA) || USE(GSTREAMER) || (PLATFORM(HAIKU) && USE(LIBWEBRTC))
     if (value.isEmpty())
         return true;
 
@@ -68,6 +72,9 @@ bool MediaRecorder::isTypeSupported(Document& document, const String& value)
 #elif USE(GSTREAMER)
     UNUSED_PARAM(document);
     return MediaRecorderPrivateGStreamer::isTypeSupported(mimeType);
+#else
+    UNUSED_PARAM(document);
+    return MediaRecorderPrivateHaiku::isTypeSupported(mimeType);
 #endif
 #else
     UNUSED_PARAM(document);
@@ -103,6 +110,8 @@ ExceptionOr<std::unique_ptr<MediaRecorderPrivate>> MediaRecorder::createMediaRec
     std::unique_ptr<MediaRecorderPrivate> result = MediaRecorderPrivateAVFImpl::create(stream, options);
 #elif USE(GSTREAMER)
     std::unique_ptr<MediaRecorderPrivate> result = MediaRecorderPrivateGStreamer::create(stream, options);
+#elif PLATFORM(HAIKU) && USE(LIBWEBRTC)
+    std::unique_ptr<MediaRecorderPrivate> result = MediaRecorderPrivateHaiku::create(stream, options);
 #else
     std::unique_ptr<MediaRecorderPrivate> result;
 #endif

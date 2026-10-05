@@ -51,6 +51,8 @@ struct SkIRect;
 
 #if PLATFORM(WIN)
 typedef struct tagRECT RECT;
+#elif PLATFORM(HAIKU)
+class BRect;
 #endif
 
 #if USE(CAIRO) || PLATFORM(GTK)
@@ -209,6 +211,9 @@ public:
 #if PLATFORM(WIN)
     WEBCORE_EXPORT IntRect(const RECT&);
     WEBCORE_EXPORT operator RECT() const;
+#elif PLATFORM(HAIKU)
+    explicit IntRect(const BRect&);
+    operator BRect() const;
 #endif
 
 #if USE(CAIRO) || PLATFORM(GTK)

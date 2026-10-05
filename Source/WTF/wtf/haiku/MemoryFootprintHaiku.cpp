@@ -26,22 +26,18 @@
 #include "config.h"
 #include <wtf/MemoryFootprint.h>
 
-#include <image.h>
-
+#include <wtf/haiku/CurrentProcessMemoryStatus.h>
 
 namespace WTF {
 
+// Resident memory, as Linux reports it. This used to add up the loaded
+// images' data segments, a few MiB whatever the page held (and it passed
+// get_next_image_info() a null cookie).
 size_t memoryFootprint()
 {
-    image_info info;
-    int32* cookie = nullptr;
-
-    size_t heapSize = 0;
-
-    while (get_next_image_info(B_CURRENT_TEAM, cookie, &info) == B_OK)
-        heapSize += info.data_size;
-
-    return heapSize;
+    ProcessMemoryStatus memoryStatus;
+    currentProcessMemoryStatus(memoryStatus);
+    return memoryStatus.resident;
 }
 
 }

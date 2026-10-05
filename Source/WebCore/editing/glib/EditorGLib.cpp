@@ -126,10 +126,16 @@ void Editor::writeSelectionToPasteboard(Pasteboard& pasteboard)
 
 RefPtr<DocumentFragment> Editor::webContentFromPasteboard(Pasteboard& pasteboard, const SimpleRange& context, bool allowPlainText, bool& chosePlainText)
 {
+#if PLATFORM(HAIKU)
+    // The Haiku pasteboard has no web content reader; it builds the fragment
+    // itself from the clipboard's HTML, image or plain text.
+    return pasteboard.documentFragment(*document().frame(), context, allowPlainText, chosePlainText);
+#else
     WebContentReader reader(*document().frame(), context, allowPlainText);
     pasteboard.read(reader);
     chosePlainText = reader.madeFragmentFromPlainText();
     return reader.takeFragment();
+#endif
 }
 
 } // namespace WebCore

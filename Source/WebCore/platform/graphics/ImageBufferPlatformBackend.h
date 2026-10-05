@@ -29,6 +29,8 @@
 #include "ImageBufferCGBitmapBackend.h"
 #elif USE(CAIRO)
 #include "ImageBufferCairoImageSurfaceBackend.h"
+#elif USE(HAIKU_GRAPHICS)
+#include "ImageBufferHaikuSurfaceBackend.h"
 #elif USE(SKIA)
 #include "ImageBufferSkiaUnacceleratedBackend.h"
 #endif
@@ -41,6 +43,8 @@ using ImageBufferPlatformBitmapBackend = ImageBufferCGBitmapBackend;
 #elif USE(CAIRO)
 using ImageBufferPlatformBackend = ImageBufferCairoBackend;
 using ImageBufferPlatformBitmapBackend = ImageBufferCairoImageSurfaceBackend;
+#elif USE(HAIKU_GRAPHICS)
+using ImageBufferPlatformBitmapBackend = ImageBufferHaikuSurfaceBackend;
 #elif USE(SKIA)
 using ImageBufferPlatformBackend = ImageBufferSkiaBackend;
 using ImageBufferPlatformBitmapBackend = ImageBufferSkiaUnacceleratedBackend;

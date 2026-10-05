@@ -30,6 +30,10 @@
 #include <WebCore/RunLoopObserver.h>
 #include <WebCore/WindowEventLoop.h>
 #include <wtf/SystemTracing.h>
+#if PLATFORM(HAIKU)
+#include <cstdio>
+#include <unistd.h>
+#endif
 
 namespace WebKit {
 using namespace WebCore;
@@ -51,13 +55,40 @@ FrameRenderer::~FrameRenderer()
 
 void FrameRenderer::scheduleRenderingUpdateRunLoopObserver()
 {
-    if (m_renderingUpdateRunLoopObserver->isScheduled())
+    if (m_renderingUpdateRunLoopObserver->isScheduled()) {
+#if PLATFORM(HAIKU)
+        // The observer fires on the next turn of the main loop. One that has
+        // not fired for a second never will (see
+        // LayerTreeHost::checkRenderingStallHaiku()); arm it again.
+        Seconds waited = MonotonicTime::now() - m_renderingUpdateScheduledAtHaiku;
+        if (waited < 1_s)
+            return;
+        std::fprintf(stderr, "Summit rendering update stall: pid=%d the update has not run for %.1f s; scheduling it again\n",
+            static_cast<int>(getpid()), waited.seconds());
+        m_renderingUpdateRunLoopObserver->invalidate();
+#else
         return;
+#endif
+    }
 
-    if (m_isUpdatingRendering)
+    if (m_isUpdatingRendering) {
+#if PLATFORM(HAIKU)
+        // Painting runs inside the update and may want another: the largest
+        // contentful paint is reported by the update after the one that
+        // painted it (LargestContentfulPaintData::didPaintImage). Dropped,
+        // the request waited for whatever updated the page next, or forever
+        // on a page that went still: The Guardian's lead image, painted
+        // 250 ms into the load, was reported at 1.4 s. LayerTreeHost asks
+        // again when the update is over.
+        m_renderingUpdateRequestedWhileUpdatingHaiku = true;
+#endif
         return;
+    }
 
     tracePoint(RenderingUpdateRunLoopObserverStart);
+#if PLATFORM(HAIKU)
+    m_renderingUpdateScheduledAtHaiku = MonotonicTime::now();
+#endif
     m_renderingUpdateRunLoopObserver->schedule();
 }
 

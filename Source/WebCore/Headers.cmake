@@ -1018,6 +1018,7 @@ set(WebCore_PRIVATE_FRAMEWORK_HEADERS
     contentextensions/ContentExtensionRule.h
     contentextensions/ContentExtensionStringSerialization.h
     contentextensions/ContentExtensionStyleSheet.h
+    contentextensions/ContentExtensionURLConditions.h
     contentextensions/ContentExtensionsBackend.h
     contentextensions/ContentExtensionsDebugging.h
     contentextensions/ContentRuleListBlockedLoadInfo.h
@@ -2231,6 +2232,7 @@ set(WebCore_PRIVATE_FRAMEWORK_HEADERS
     platform/ContextMenu.h
     platform/ContextMenuItem.h
     platform/Cookie.h
+    platform/CookieChange.h
     platform/CountedUserActivity.h
     platform/Cursor.h
     platform/DataListSuggestionPicker.h
@@ -2937,6 +2939,8 @@ set(WebCore_PRIVATE_FRAMEWORK_HEADERS
     platform/mediastream/libwebrtc/LibWebRTCSocketIdentifier.h
     platform/mediastream/libwebrtc/LibWebRTCVideoFrameUtilities.h
     platform/mediastream/libwebrtc/VideoFrameLibWebRTC.h
+
+    platform/mediastream/haiku/DummyWebRTCProvider.h
 
     platform/mock/DeviceOrientationClientMock.h
     platform/mock/MediaPlaybackTargetMock.h

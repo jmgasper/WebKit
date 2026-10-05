@@ -51,6 +51,7 @@
 #include <wtf/HashMap.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/RunLoop.h>
+#include <wtf/Scope.h>
 #include <wtf/StdLibExtras.h>
 #include <wtf/WeakRandom.h>
 #include <wtf/WorkQueue.h>
@@ -432,6 +433,14 @@ static std::expected<MappedData, std::error_code> compiledToFile(WTF::String&& j
         return makeUnexpected(ContentRuleListStore::Error::CompileFailed);
     }
 
+    // Rejected rules and failed writes must not leave partial files which
+    // identifier enumeration would mistake for persistent rule lists. Close
+    // the original handle too when failure precedes its transfer to the client.
+    auto removeTemporaryFile = makeScopeExit([&] {
+        temporaryFileHandle = { };
+        deleteFile(temporaryFilePath);
+    });
+
     std::array<uint8_t, currentVersionFileHeaderSize> invalidHeader;
     invalidHeader.fill(0xFF);
 
@@ -462,6 +471,8 @@ static std::expected<MappedData, std::error_code> compiledToFile(WTF::String&& j
         RELEASE_LOG_ERROR(ContentRuleLists, "Content Rule List compiling failed: Moving file failed.");
         return makeUnexpected(ContentRuleListStore::Error::CompileFailed);
     }
+
+    removeTemporaryFile.release();
 
     if (!FileSystem::makeSafeToUseMemoryMapForPath(finalFilePath)) {
         RELEASE_LOG_ERROR(ContentRuleLists, "Content Rule List compiling failed: makeSafeToUseMemoryMapForPath failed.");
@@ -640,8 +651,12 @@ void ContentRuleListStore::compileContentRuleListFile(WTF::String&& filePath, WT
     m_workQueue->dispatch([protectedThis = Ref { *this }, filePath = WTF::move(filePath).isolatedCopy(), identifier = WTF::move(identifier).isolatedCopy(), json = WTF::move(json).isolatedCopy(), parsedRules = crossThreadCopy(WTF::move(parsedRules).value()), storePath = m_storePath.isolatedCopy(), completionHandler = WTF::move(completionHandler), cssSelectorsAllowed] () mutable {
         if (cssSelectorsAllowed == WebCore::ContentExtensions::CSSSelectorsAllowed::No) {
             auto parsedRulesOnBackgroundQueue = WebCore::ContentExtensions::parseRuleList(json, cssSelectorsAllowed);
-            if (!parsedRulesOnBackgroundQueue.has_value())
-                return completionHandler(nullptr, parsedRulesOnBackgroundQueue.error());
+            if (!parsedRulesOnBackgroundQueue.has_value()) {
+                RunLoop::mainSingleton().dispatch([protectedThis = WTF::move(protectedThis), error = parsedRulesOnBackgroundQueue.error(), completionHandler = WTF::move(completionHandler)]() mutable {
+                    completionHandler(nullptr, error);
+                });
+                return;
+            }
 
             parsedRules = parsedRulesOnBackgroundQueue.value();
         }

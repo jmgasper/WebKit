@@ -428,7 +428,10 @@ namespace WebCore {
     WEBCORE_EXPORT String inputWeekLabel(const DateComponents&);
 #endif
 
-#if ENABLE(WEB_AUTHN)
+// These prompts belong to the Touch ID authenticator and are built with it.
+// They use Cocoa format strings, so a port without that authenticator
+// does not declare or define them.
+#if ENABLE(WEB_AUTHN) && PLATFORM(COCOA)
     WEBCORE_EXPORT String makeCredentialTouchIDPromptTitle(const String& bundleName, const String& domain);
     WEBCORE_EXPORT String getAssertionTouchIDPromptTitle(const String& bundleName, const String& domain);
     WEBCORE_EXPORT String genericTouchIDPromptTitle();

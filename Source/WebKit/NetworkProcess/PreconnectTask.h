@@ -25,7 +25,9 @@
 
 #pragma once
 
-#if ENABLE(SERVER_PRECONNECT)
+// Haiku has it without the build-wide switch: its curl backend opens the
+// connection and stops before the request (CurlRequest::setPreconnectOnly).
+#if ENABLE(SERVER_PRECONNECT) || PLATFORM(HAIKU)
 
 #include "NetworkLoadClient.h"
 #include <WebCore/Timer.h>
@@ -75,4 +77,4 @@ private:
 
 } // namespace WebKit
 
-#endif // ENABLE(SERVER_PRECONNECT)
+#endif // ENABLE(SERVER_PRECONNECT) || PLATFORM(HAIKU)

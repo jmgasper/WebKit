@@ -50,6 +50,8 @@
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 #include <skia/core/SkColorFilter.h>
 #include <skia/core/SkImage.h>
+#include <skia/core/SkBlurTypes.h>
+#include <skia/core/SkMaskFilter.h>
 #include <skia/core/SkPathBuilder.h>
 #include <skia/core/SkPathEffect.h>
 #include <skia/core/SkPathTypes.h>
@@ -421,7 +423,7 @@ void GraphicsContextSkia::drawSkiaPath(const SkPath& path, SkPaint& paint)
     if (hasDropShadow()) {
         inExtraTransparencyLayer = drawOutsetShadow(paint, [&](const SkPaint& paint) {
             m_canvas.drawPath(path, paint);
-        });
+        }, ShadowSource::SolidShape);
     }
     m_canvas.drawPath(path, paint);
     if (inExtraTransparencyLayer)
@@ -456,7 +458,11 @@ bool GraphicsContextSkia::drawPathAsSingleElement(const Path& path, SkPaint& pai
             return false;
 
         SkRect oval = { arc.center.x() - arc.radius, arc.center.y() - arc.radius, arc.center.x() + arc.radius, arc.center.y() + arc.radius };
-        if (isClosedArc)
+        // Filling implicitly closes each subpath. A complete arc therefore has
+        // the same fill as an oval even when the script did not call closePath().
+        // Besides expressing that shape directly, drawOval avoids Skia's more
+        // general arc path handling for the common Canvas 2D circle idiom.
+        if (isClosedOval && (isClosedArc || paint.getStyle() == SkPaint::kFill_Style))
             m_canvas.drawOval(oval, paint);
         else
             m_canvas.drawArc(oval, startDegrees, sweepDegrees, false, paint);
@@ -575,15 +581,63 @@ sk_sp<SkImageFilter> GraphicsContextSkia::createDropShadowFilterIfNeeded(ShadowS
     return nullptr;
 }
 
-bool GraphicsContextSkia::drawOutsetShadow(SkPaint& paint, Function<void(const SkPaint&)>&& drawFunction)
+std::optional<bool> GraphicsContextSkia::drawOutsetShadowWithMaskFilter(const SkPaint& paint, const Function<void(const SkPaint&)>& drawFunction)
 {
-    auto shadow = createDropShadowFilterIfNeeded(ShadowStyle::Outset);
+    // The colour must be the paint's own: a shader or filter would make the
+    // shadow's opacity vary across the shape.
+    if (paint.getShader() || paint.getColorFilter() || paint.getMaskFilter() || paint.getImageFilter())
+        return std::nullopt;
+
+    const auto& shadow = dropShadow();
     if (!shadow)
         return false;
+    auto offset = shadow->offset;
+    const auto& shadowColor = shadow->color;
+    if (!shadowColor.isVisible() || (!offset.width() && !offset.height() && !shadow->radius))
+        return false;
 
-    paint.setImageFilter(shadow);
-    drawFunction(paint);
-    paint.setImageFilter(nullptr);
+    // As with DropShadowOnly: the shape's coverage times its opacity, in the
+    // shadow's colour, blurred with sigma radius / 2, offset, and composited
+    // with the paint's blend mode.
+    auto [skShadowColor, skShadowColorSpace] = skColor4fAndColorSpaceForColor(shadowColor);
+    skShadowColor.fA *= paint.getAlphaf();
+    SkPaint shadowPaint(paint);
+    shadowPaint.setColor(skShadowColor, skShadowColorSpace.get());
+    const bool ignoreTransforms = state().shadowsIgnoreTransforms();
+    const float sigma = shadow->radius / 2.0;
+    if (sigma > 0)
+        shadowPaint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, sigma, !ignoreTransforms));
+
+    m_canvas.save();
+    if (ignoreTransforms) {
+        // Offset and blur are in device space whatever the transform (canvas
+        // shadows): move the device, not the user space.
+        SkMatrix matrix = m_canvas.getTotalMatrix();
+        matrix.postTranslate(offset.width(), offset.height());
+        m_canvas.setMatrix(matrix);
+    } else
+        m_canvas.translate(offset.width(), offset.height());
+    drawFunction(shadowPaint);
+    m_canvas.restore();
+    return true;
+}
+
+bool GraphicsContextSkia::drawOutsetShadow(SkPaint& paint, Function<void(const SkPaint&)>&& drawFunction, ShadowSource source)
+{
+    std::optional<bool> drewWithMaskFilter;
+    if (source == ShadowSource::SolidShape)
+        drewWithMaskFilter = drawOutsetShadowWithMaskFilter(paint, drawFunction);
+    if (drewWithMaskFilter && !*drewWithMaskFilter)
+        return false;
+    if (!drewWithMaskFilter) {
+        auto shadow = createDropShadowFilterIfNeeded(ShadowStyle::Outset);
+        if (!shadow)
+            return false;
+
+        paint.setImageFilter(shadow);
+        drawFunction(paint);
+        paint.setImageFilter(nullptr);
+    }
 
     auto reversed = m_skiaStateStack | std::views::reverse;
     auto it = std::ranges::find(reversed, true, &SkiaState::isLayer);
@@ -650,7 +704,7 @@ void GraphicsContextSkia::drawSkiaRect(const SkRect& boundaries, SkPaint& paint)
     if (hasDropShadow()) {
         inExtraTransparencyLayer = drawOutsetShadow(paint, [&](const SkPaint& paint) {
             m_canvas.drawRect(boundaries, paint);
-        });
+        }, ShadowSource::SolidShape);
     }
     m_canvas.drawRect(boundaries, paint);
     if (inExtraTransparencyLayer)
@@ -1092,7 +1146,7 @@ void GraphicsContextSkia::fillRoundedRectImpl(const FloatRoundedRect& rect, cons
     if (hasDropShadow()) {
         inExtraTransparencyLayer = drawOutsetShadow(paint, [&](const SkPaint& paint) {
             m_canvas.drawRRect(rect, paint);
-        });
+        }, ShadowSource::SolidShape);
     }
     m_canvas.drawRRect(rect, paint);
     if (inExtraTransparencyLayer)
@@ -1359,7 +1413,7 @@ void GraphicsContextSkia::drawSkiaText(const sk_sp<SkTextBlob>& blob, SkScalar x
         if (hasDropShadow()) {
             inExtraTransparencyLayer = drawOutsetShadow(paint, [&](const SkPaint& paint) {
                 m_canvas.drawTextBlob(blob, x, y, paint);
-            });
+            }, ShadowSource::SolidShape);
         }
         m_canvas.drawTextBlob(blob, x, y, paint);
         if (inExtraTransparencyLayer)

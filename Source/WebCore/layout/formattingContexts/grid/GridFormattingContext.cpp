@@ -242,8 +242,10 @@ GridLayoutResult GridFormattingContext::layout(GridLayoutConstraints layoutConst
 
         for (auto& gridItemRect : gridItemRects) {
             auto& lineNumbersForGridArea = gridItemRect.lineNumbersForGridArea;
-            auto columnPosition = GridLayoutUtils::computeGridLinePosition(lineNumbersForGridArea.columnStartLine, usedTrackSizes.columnSizes, layoutState.usedColumnGap);
-            auto rowPosition = GridLayoutUtils::computeGridLinePosition(lineNumbersForGridArea.rowStartLine, usedTrackSizes.rowSizes, layoutState.usedRowGap);
+            auto columnPosition = usedTrackSizes.columnAlignment.position + GridLayoutUtils::computeGridLinePosition(lineNumbersForGridArea.columnStartLine,
+                usedTrackSizes.columnSizes, layoutState.usedColumnGap + usedTrackSizes.columnAlignment.distribution);
+            auto rowPosition = usedTrackSizes.rowAlignment.position + GridLayoutUtils::computeGridLinePosition(lineNumbersForGridArea.rowStartLine,
+                usedTrackSizes.rowSizes, layoutState.usedRowGap + usedTrackSizes.rowAlignment.distribution);
 
             gridItemRect.borderBoxRect.moveBy(LayoutPoint { columnPosition, rowPosition });
         }

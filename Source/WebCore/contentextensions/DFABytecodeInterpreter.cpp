@@ -200,7 +200,7 @@ void DFABytecodeInterpreter::interpretTestFlagsAndAppendAction(uint32_t& program
     bool loadTypeMatches = loadTypeFlags ? (loadTypeFlags & flags) : true;
     bool loadContextMatches = loadContextFlags ? (loadContextFlags & flags) : true;
     bool resourceTypeMatches = resourceTypeFlags ? (resourceTypeFlags & flags) : true;
-    bool requestMethodMatches = requestMethodFlags ? (requestMethodFlags == (flags & RequestMethodMask)) : true;
+    bool requestMethodMatches = !requestMethodFlags || flags == AllResourceFlags || requestMethodFlags == (flags & RequestMethodMask);
 
     auto actionWithoutFlags = consumeAction(m_bytecode, programCounter, instructionLocation);
     if (loadTypeMatches && loadContextMatches && resourceTypeMatches && requestMethodMatches) {

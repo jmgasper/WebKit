@@ -34,6 +34,8 @@
 #if ENABLE(WK_WEB_EXTENSIONS)
 
 #import "MessageSenderInlines.h"
+#import "CocoaHelpers.h"
+#import <wtf/JSONValues.h>
 #import "WebExtensionAPITabs.h"
 #import "WebExtensionAPIWindows.h"
 #import "WebExtensionContextMessages.h"
@@ -43,6 +45,36 @@
 #import "WebProcess.h"
 
 namespace WebKit {
+
+// C++ bindings preserve the existing Cocoa implementations.
+URL WebExtensionAPIExtension::getURL(const String& resourcePath, String& exception)
+{
+    NSString *nativeException = nil;
+    auto result = getURL(resourcePath.createNSString().get(), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+    return URL { result };
+}
+
+JSValueRef WebExtensionAPIExtension::getBackgroundPageForJavaScript(JSContextRef context)
+{
+    return toJSValueRefOrJSNull(context, getBackgroundPage(context));
+}
+
+JSValueRef WebExtensionAPIExtension::getViews(JSContextRef context, RefPtr<JSON::Value> filter, String& exception)
+{
+    id nativeValue = filter ? parseJSON(filter->toJSONString().createNSString().get(), JSONOptions::FragmentsAllowed) : nil;
+    auto nativeFilter = dynamic_objc_cast<NSDictionary>(nativeValue);
+    if (nativeValue && !nativeFilter) {
+        exception = "filter must be an object"_s;
+        return JSValueMakeUndefined(context);
+    }
+    NSString *nativeException = nil;
+    auto result = getViews(context, nativeFilter, &nativeException);
+    if (nativeException)
+        exception = nativeException;
+    return toJSValueRefOrJSNull(context, result);
+}
 
 bool WebExtensionAPIExtension::parseViewFilters(NSDictionary *filter, std::optional<ViewType>& viewType, std::optional<WebExtensionTabIdentifier>& tabIdentifier, std::optional<WebExtensionWindowIdentifier>& windowIdentifier, NSString *sourceKey, NSString **outExceptionString)
 {

@@ -41,6 +41,7 @@ class WebExtensionAPIRuntime;
 
 class WebExtensionAPIRuntimeBase : public JSWebExtensionWrappable {
 public:
+    void markLastErrorAccessed() { m_lastErrorAccessed = true; }
     JSValueRef reportError(String errorMessage, JSGlobalContextRef, NOESCAPE const Function<void()>& = nullptr);
     JSValueRef reportError(const String& errorMessage, WebExtensionCallbackHandler&);
 
@@ -64,6 +65,13 @@ public:
     RefPtr<JSON::Object> getManifest();
     String getVersion();
     void getPlatformInfo(Ref<WebExtensionCallbackHandler>&&);
+#if PLATFORM(HAIKU)
+    void getBrowserInfo(Ref<WebExtensionCallbackHandler>&&);
+    void requestUpdateCheck(Ref<WebExtensionCallbackHandler>&&);
+    WebExtensionAPIEvent& onSuspend();
+    WebExtensionAPIEvent& onSuspendCanceled();
+    WebExtensionAPIEvent& onUpdateAvailable();
+#endif
     void getBackgroundPage(Ref<WebExtensionCallbackHandler>&&);
     double getFrameId(JSContextRef, JSValueRef);
     String getDocumentId(JSContextRef, JSValueRef, String& outExceptionString);
@@ -74,6 +82,12 @@ public:
     void reload();
 
     String NODELETE runtimeIdentifier();
+
+    RefPtr<JSON::Object> onInstalledReasons();
+    RefPtr<JSON::Object> onRestartRequiredReasons();
+    RefPtr<JSON::Object> platformOperatingSystems();
+    RefPtr<JSON::Object> platformArchitectures();
+    RefPtr<JSON::Object> contextTypes();
 
     JSValueRef NODELETE lastError();
 
@@ -99,6 +113,11 @@ private:
     RefPtr<WebExtensionAPIEvent> m_onInstalled;
     RefPtr<WebExtensionAPIEvent> m_onMessage;
     RefPtr<WebExtensionAPIEvent> m_onStartup;
+#if PLATFORM(HAIKU)
+    RefPtr<WebExtensionAPIEvent> m_onSuspend;
+    RefPtr<WebExtensionAPIEvent> m_onSuspendCanceled;
+    RefPtr<WebExtensionAPIEvent> m_onUpdateAvailable;
+#endif
     RefPtr<WebExtensionAPIEvent> m_onConnectExternal;
     RefPtr<WebExtensionAPIEvent> m_onMessageExternal;
 };

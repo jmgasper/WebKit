@@ -54,11 +54,12 @@
 namespace WebCore {
 namespace Style {
 
-RuleSetBuilder::RuleSetBuilder(RuleSet& ruleSet, const MQ::MediaQueryEvaluator& evaluator, Resolver* resolver, ShrinkToFit shrinkToFit)
+RuleSetBuilder::RuleSetBuilder(RuleSet& ruleSet, const MQ::MediaQueryEvaluator& evaluator, Resolver* resolver, ShrinkToFit shrinkToFit, bool preserveResolverMutatingRules)
     : m_ruleSet(&ruleSet)
     , m_mediaQueryCollector({ evaluator })
     , m_resolver(resolver)
     , m_shrinkToFit(shrinkToFit)
+    , m_preserveResolverMutatingRules(preserveResolverMutatingRules)
 {
     RELEASE_ASSERT(!m_ruleSet->m_isBuilding);
     m_ruleSet->m_isBuilding = true;
@@ -522,6 +523,8 @@ void RuleSetBuilder::addMutatingRulesToResolver()
             m_ruleSet->m_resolverMutatingRulesInLayers.append(collectedRule);
 
         auto& rule = collectedRule.rule;
+        if (m_preserveResolverMutatingRules)
+            continue;
         if (RefPtr styleRuleFontFace = dynamicDowncast<StyleRuleFontFace>(rule.get())) {
             protect(document->fontSelector())->addFontFaceRule(*styleRuleFontFace, false);
             resolver->invalidateMatchedDeclarationsCache();

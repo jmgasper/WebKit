@@ -100,6 +100,22 @@ public:
     void endClip();
     void endClipWithoutApplying();
     IntRect clipBounds();
+#if PLATFORM(HAIKU)
+    WEBCORE_EXPORT void warmShaderProgramsHaiku();
+    // What one composition drew, counted on the compositor thread while
+    // SUMMIT_COMPOSITOR_TIMING_TRACE asks for it.
+    struct DrawStatsHaiku {
+        unsigned draws { 0 };
+        unsigned blendedDraws { 0 };
+        unsigned drawsIntoSurfaces { 0 };
+        unsigned surfaceBinds { 0 };
+        unsigned blurPasses { 0 };
+        double megapixels { 0 };
+        double blendedMegapixels { 0 };
+    };
+    WEBCORE_EXPORT static void setCountsDrawsHaiku(bool);
+    WEBCORE_EXPORT static DrawStatsHaiku takeDrawStatsHaiku();
+#endif
     IntSize maxTextureSize() const;
     void setDepthRange(double zNear, double zFar);
     std::pair<double, double> depthRange() const;

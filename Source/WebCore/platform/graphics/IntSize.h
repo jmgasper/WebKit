@@ -49,6 +49,8 @@ typedef struct CGSize NSSize;
 
 #if PLATFORM(WIN)
 typedef struct tagSIZE SIZE;
+#elif PLATFORM(HAIKU)
+class BSize;
 #endif
 
 namespace WTF {
@@ -174,6 +176,11 @@ public:
 #if PLATFORM(WIN)
     WEBCORE_EXPORT IntSize(const SIZE&);
     WEBCORE_EXPORT operator SIZE() const;
+#endif
+
+#if PLATFORM(HAIKU)
+    explicit IntSize(const BSize&);
+    operator BSize() const;
 #endif
 
     WEBCORE_EXPORT String toJSONString() const;

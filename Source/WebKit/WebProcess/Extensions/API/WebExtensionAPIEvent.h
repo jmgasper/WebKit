@@ -29,8 +29,10 @@
 
 #include "JSWebExtensionAPIEvent.h"
 #include "JSWebExtensionWrappable.h"
+#include "Protected.h"
 #include "WebExtensionAPIObject.h"
 #include "WebExtensionEventListenerType.h"
+#include <array>
 
 OBJC_CLASS JSValue;
 
@@ -48,6 +50,25 @@ public:
     void invokeListenersWithArgument(id argument1, id argument2);
     void invokeListenersWithArgument(id argument1, id argument2, id argument3);
 #endif
+    template<size_t count, typename Factory>
+    void invokeListenersWithArgumentFactory(Factory&& factory)
+    {
+        static_assert(count >= 1 && count <= 3);
+        auto listeners = m_listeners;
+        for (RefPtr listener : listeners) {
+            // Each factory result owns protected values until callback return.
+            // Constructing a new result per listener also isolates mutation.
+            std::array<Protected<JSValueRef>, count> arguments = factory(listener->globalContext());
+            if constexpr (count == 1)
+                listener->call(arguments[0].get());
+            else if constexpr (count == 2)
+                listener->call(arguments[0].get(), arguments[1].get());
+            else
+                listener->call(arguments[0].get(), arguments[1].get(), arguments[2].get());
+        }
+    }
+
+    void invokeListenersWithJSONArguments(const Vector<String>&);
     void invokeListenersWithJSONArgument(const String& argument1);
     void invokeListenersWithJSONArgument(const String& argument1, const String& argument2);
 
@@ -63,6 +84,18 @@ public:
         for (RefPtr listener : listenersCopy) {
             // This is a safer cpp false positive (rdar://163760990).
             SUPPRESS_UNCOUNTED_ARG listener->call(toWebAPI(listener->globalContext(), argument));
+        }
+    }
+
+    template<typename T>
+    void invokeListenersWithParametersArgument(const String& name, const std::optional<T>& parameters)
+    {
+        auto listenersCopy = m_listeners;
+        for (RefPtr listener : listenersCopy) {
+            auto context = listener->globalContext();
+            Protected<JSValueRef> first(context, toJSValueRef(context, name));
+            Protected<JSValueRef> second(context, parameters ? toWebAPI(context, *parameters) : JSValueMakeUndefined(context));
+            listener->call(first.get(), second.get());
         }
     }
 

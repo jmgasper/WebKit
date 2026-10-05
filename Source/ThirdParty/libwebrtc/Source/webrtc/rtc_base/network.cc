@@ -685,7 +685,12 @@ void BasicNetworkManager::ConvertIfAddrs(
       continue;
     }
     // Skip ones which are down.
+#if defined(__HAIKU__)
+    // WEBRTC_WEBKIT_BUILD change: Haiku says IFF_LINK.
+    if (!(cursor->ifa_flags & IFF_LINK)) {
+#else
     if (!(cursor->ifa_flags & IFF_RUNNING)) {
+#endif
       RTC_LOG(LS_INFO) << "Skip interface because of not IFF_RUNNING: "
                        << ip.ToSensitiveString();
       continue;

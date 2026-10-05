@@ -40,6 +40,10 @@
 #include <wtf/SetForScope.h>
 #include <wtf/WTFProcess.h>
 
+#if PLATFORM(HAIKU)
+#include <Application.h>
+#endif
+
 #if !OS(WINDOWS)
 #include <unistd.h>
 #endif
@@ -49,6 +53,8 @@
 #if USE(GLIB)
 #include <wtf/glib/Sandbox.h>
 #endif
+#elif OS(HAIKU)
+#include <wtf/MemoryPressureHandler.h>
 #endif
 
 #if PLATFORM(COCOA)
@@ -233,6 +239,10 @@ void AuxiliaryProcess::stopRunLoop()
 #if !PLATFORM(COCOA)
 void AuxiliaryProcess::platformStopRunLoop()
 {
+#if PLATFORM(HAIKU)
+    if (be_app)
+        be_app->PostMessage(B_QUIT_REQUESTED);
+#endif
     RunLoop::mainSingleton().stop();
 }
 #endif
@@ -296,7 +306,7 @@ void AuxiliaryProcess::didReceiveInvalidMessage(IPC::Connection&, IPC::MessageNa
     CRASH();
 }
 
-#if OS(LINUX) && !OS(ANDROID)
+#if (OS(LINUX) && !OS(ANDROID)) || OS(HAIKU)
 void AuxiliaryProcess::didReceiveMemoryPressureEvent(bool isCritical)
 {
     MemoryPressureHandler::singleton().triggerMemoryPressureEvent(isCritical);

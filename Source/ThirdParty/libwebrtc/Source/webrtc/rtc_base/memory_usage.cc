@@ -24,6 +24,8 @@
 #include <windows.h>
 #include <psapi.h>  // must come after windows.h
 // clang-format on
+#elif defined(__HAIKU__)
+#include <OS.h>
 #elif defined(WEBRTC_FUCHSIA)
 #include <lib/zx/process.h>
 #include <zircon/status.h>
@@ -76,6 +78,14 @@ int64_t GetProcessResidentSizeBytes() {
                           << zx_status_get_string(status);
     return -1;
   }
+#elif defined(__HAIKU__)
+  // WEBRTC_WEBKIT_BUILD change: the team's areas that are in memory.
+  int64_t bytes = 0;
+  ssize_t cookie = 0;
+  area_info info;
+  while (get_next_area_info(B_CURRENT_TEAM, &cookie, &info) == B_OK)
+    bytes += info.ram_size;
+  return bytes;
 #else
   // Not implemented yet.
   static_assert(false,

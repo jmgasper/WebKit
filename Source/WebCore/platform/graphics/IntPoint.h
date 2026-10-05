@@ -44,6 +44,10 @@ typedef struct tagPOINT POINT;
 typedef struct tagPOINTS POINTS;
 #endif
 
+#if PLATFORM(HAIKU)
+class BPoint;
+#endif
+
 namespace WTF {
 class TextStream;
 }
@@ -137,6 +141,9 @@ public:
     WEBCORE_EXPORT operator POINT() const;
     WEBCORE_EXPORT IntPoint(const POINTS&);
     operator POINTS() const;
+#elif PLATFORM(HAIKU)
+    explicit IntPoint(const BPoint&);
+    operator BPoint() const;
 #endif
 
 private:

@@ -38,6 +38,8 @@ typedef HICON HCURSOR;
 #include <wtf/RefCounted.h>
 #elif PLATFORM(COCOA)
 #include <wtf/RetainPtr.h>
+#elif PLATFORM(HAIKU)
+#include <app/Cursor.h>
 #endif
 
 #if HAVE(NSCURSOR)
@@ -72,6 +74,8 @@ private:
 using PlatformCursor = RefPtr<SharedCursor>;
 #elif HAVE(NSCURSOR)
 using PlatformCursor = NSCursor *;
+#elif PLATFORM(HAIKU)
+using PlatformCursor = BCursor*;
 #else
 using PlatformCursor = void*;
 #endif

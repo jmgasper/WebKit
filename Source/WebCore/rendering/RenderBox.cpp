@@ -124,6 +124,13 @@
 #include "TypedElementDescendantIteratorInlines.h"
 #endif
 
+#if PLATFORM(HAIKU)
+namespace WebCore {
+// Layout reuse for flex and grid items lives in RenderBlock.cpp.
+void summitSetNeedsLayoutByContainer(RenderBox&);
+}
+#endif
+
 namespace WebCore {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(RenderBox);
@@ -296,6 +303,10 @@ void RenderBox::styleWillChange(Style::Difference diff, const Style::ComputedSty
         // The background of the root element or the body element could propagate up to
         // the canvas. Issue full repaint, when our style changes substantially.
         if (diff >= Style::DifferenceResult::Repaint && (isDocumentElementRenderer() || isBody())) {
+#if PLATFORM(HAIKU)
+            if (getenv("SUMMIT_FULL_REPAINT_TRACE"))
+                fprintf(stderr, "Summit full repaint: style of %s changed\n", isBody() ? "body" : "html");
+#endif
             view().repaintRootContents();
             if (Style::hasEntirelyFixedBackground(oldStyle->backgroundLayers()) != Style::hasEntirelyFixedBackground(newStyle.backgroundLayers()))
                 view().compositor().rootLayerConfigurationChanged();
@@ -3681,7 +3692,11 @@ LayoutUnit RenderBox::computeIntrinsicLogicalHeight()
     // height. A descendant that does not resolve against this box's logical height is unaffected and need not lay out again.
     layoutIfNeeded();
     auto blockSize = logicalHeight();
+#if PLATFORM(HAIKU)
+    summitSetNeedsLayoutByContainer(*this);
+#else
     setNeedsLayout(MarkingBehavior::MarkOnlyThis);
+#endif
     return blockSize;
 }
 

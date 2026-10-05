@@ -98,11 +98,63 @@ enum class WebExtensionEventListenerType : uint8_t {
     WindowsOnCreated,
     WindowsOnFocusChanged,
     WindowsOnRemoved,
+#if PLATFORM(HAIKU)
+    PrivacyOnChange,
+    IdleOnStateChanged,
+    ManagementOnDisabled,
+    ManagementOnEnabled,
+    ManagementOnInstalled,
+    ManagementOnUninstalled,
+    NotificationsOnClosed,
+    NotificationsOnShown,
+    RuntimeOnSuspend,
+    RuntimeOnSuspendCanceled,
+    RuntimeOnUpdateAvailable,
+    WebNavigationOnCreatedNavigationTarget,
+    WebNavigationOnHistoryStateUpdated,
+    WebNavigationOnReferenceFragmentUpdated,
+    WebNavigationOnTabReplaced,
+    DownloadsOnErased,
+#endif
 };
 
 inline String toAPIString(WebExtensionEventListenerType eventType)
 {
     switch (eventType) {
+#if PLATFORM(HAIKU)
+    case WebExtensionEventListenerType::PrivacyOnChange:
+        return "onChange"_s;
+    case WebExtensionEventListenerType::IdleOnStateChanged:
+        return "onStateChanged"_s;
+    case WebExtensionEventListenerType::ManagementOnDisabled:
+        return "onDisabled"_s;
+    case WebExtensionEventListenerType::ManagementOnEnabled:
+        return "onEnabled"_s;
+    case WebExtensionEventListenerType::ManagementOnInstalled:
+        return "onInstalled"_s;
+    case WebExtensionEventListenerType::ManagementOnUninstalled:
+        return "onUninstalled"_s;
+    case WebExtensionEventListenerType::NotificationsOnClosed:
+        return "onClosed"_s;
+    case WebExtensionEventListenerType::NotificationsOnShown:
+        return "onShown"_s;
+    case WebExtensionEventListenerType::RuntimeOnSuspend:
+        return "onSuspend"_s;
+    case WebExtensionEventListenerType::RuntimeOnSuspendCanceled:
+        return "onSuspendCanceled"_s;
+    case WebExtensionEventListenerType::RuntimeOnUpdateAvailable:
+        return "onUpdateAvailable"_s;
+    case WebExtensionEventListenerType::WebNavigationOnCreatedNavigationTarget:
+        return "onCreatedNavigationTarget"_s;
+    case WebExtensionEventListenerType::WebNavigationOnHistoryStateUpdated:
+        return "onHistoryStateUpdated"_s;
+    case WebExtensionEventListenerType::WebNavigationOnReferenceFragmentUpdated:
+        return "onReferenceFragmentUpdated"_s;
+    case WebExtensionEventListenerType::WebNavigationOnTabReplaced:
+        return "onTabReplaced"_s;
+    case WebExtensionEventListenerType::DownloadsOnErased:
+        return "onErased"_s;
+#endif
     case WebExtensionEventListenerType::Unknown:
         return nullString();
     case WebExtensionEventListenerType::ActionOnClicked:

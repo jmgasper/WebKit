@@ -1689,7 +1689,7 @@ header: <wtf/MachSendRight.h>
 #endif
 
 [CustomHeader, RValue, WebKitPlatform] class WebCore::SharedMemoryHandle {
-#if USE(UNIX_DOMAIN_SOCKETS)
+#if USE(UNIX_DOMAIN_SOCKETS) || OS(HAIKU)
     [Validator='!!m_handle && *m_handle'] UnixFileDescriptor m_handle;
 #endif
 #if OS(DARWIN)
@@ -1819,8 +1819,10 @@ class WebCore::DragData {
 #endif
     WebCore::IntPoint clientPosition();
     WebCore::IntPoint globalPosition();
-#if PLATFORM(COCOA)
+#if PLATFORM(COCOA) || PLATFORM(HAIKU)
     Vector<String> fileNames();
+#endif
+#if PLATFORM(COCOA)
     Vector<String> promisedFileMIMETypes();
 #endif
     OptionSet<WebCore::DragOperation> draggingSourceOperationMask();
@@ -3130,6 +3132,9 @@ enum class WebCore::MediaPlayerMediaEngineIdentifier : uint8_t {
     AVFoundationCF,
     GStreamer,
     GStreamerMSE,
+    Haiku,
+    HaikuMSE,
+    HaikuMediaStream,
     HolePunch,
     MediaFoundation,
     MockMSE,
@@ -6688,7 +6693,11 @@ using WebCore::GlyphBufferGlyph = CGGlyph
 #else
 using WebCore::GlyphBufferGlyph = WebCore::Glyph
 #endif
+#if USE(HAIKU_GRAPHICS)
+using WebCore::Glyph = unsigned int
+#else
 using WebCore::Glyph = unsigned short
+#endif
 
 enum class WebCore::ContentExtensionDefaultEnablement : bool
 using WebCore::ContentExtensionEnablement = std::pair<WebCore::ContentExtensionDefaultEnablement, HashSet<String>>;

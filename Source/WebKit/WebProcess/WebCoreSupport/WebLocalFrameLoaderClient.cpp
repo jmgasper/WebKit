@@ -120,7 +120,7 @@
 #include <WebCore/DocumentFullscreen.h>
 #endif
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
 #include "WebExtensionControllerProxy.h"
 #endif
 
@@ -609,7 +609,7 @@ void WebLocalFrameLoaderClient::dispatchDidStartProvisionalLoad()
     auto& url = provisionalLoader->url();
     auto& unreachableURL = provisionalLoader->unreachableURL();
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     // Notify the extensions controller.
     if (RefPtr extensionControllerProxy = webPage->webExtensionControllerProxy())
         extensionControllerProxy->didStartProvisionalLoadForFrame(*webPage, m_frame, url);
@@ -692,6 +692,13 @@ void WebLocalFrameLoaderClient::dispatchDidCommitLoad(std::optional<HasInsecureC
     // Notify the UIProcess.
     webPage->send(Messages::WebPageProxy::DidCommitLoadForFrame(frame->frameID(), frame->info(), documentLoader->request(), documentLoader->navigationID(), documentLoader->response().mimeType(), m_frameHasCustomContentProvider, m_localFrame->loader().loadType(), !certificateInfo.isEmpty(), usedLegacyTLS, wasPrivateRelayed, documentLoader->response().proxyName(), documentLoader->response().source(), m_localFrame->document()->isPluginDocument(), *hasInsecureContent, documentLoader->mouseEventPolicy(), *coreLocalFrame->frameDocumentSecurityPolicy(), cspOriginsThatUpgradeInsecureNavigations, UserData(WebProcess::singleton().transformObjectsToHandles(userData.get()).get()), m_localFrame->loader().loadingFromCachedPage() ? RestoredFromBackForwardCache::Yes : RestoredFromBackForwardCache::No, WTF::move(redirectReplaceFrameState)));
     webPage->didCommitLoad(m_frame.ptr());
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    // The UI commit and extension notification use the same ordered connection.
+    // Publish the new security origin before activeTab revocation/event delivery.
+    if (RefPtr extensionControllerProxy = webPage->webExtensionControllerProxy())
+        extensionControllerProxy->didCommitLoadForFrame(*webPage, frame.get(), frame->url());
+#endif
+
 }
 
 void WebLocalFrameLoaderClient::dispatchDidFailProvisionalLoad(const ResourceError& error, WillContinueLoading willContinueLoading, WillInternallyHandleFailure willInternallyHandleFailure)
@@ -713,7 +720,7 @@ void WebLocalFrameLoaderClient::dispatchDidFailProvisionalLoad(const ResourceErr
     // Notify the bundle client.
     webPage->injectedBundleLoaderClient().didFailProvisionalLoadWithErrorForFrame(*webPage, m_frame, error, userData);
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     // Notify the extensions controller.
     if (RefPtr extensionControllerProxy = webPage->webExtensionControllerProxy())
         extensionControllerProxy->didFailLoadForFrame(*webPage, m_frame, m_localFrame->loader().provisionalLoadErrorBeingHandledURL());
@@ -758,7 +765,7 @@ void WebLocalFrameLoaderClient::dispatchDidFailLoad(const ResourceError& error)
     // Notify the bundle client.
     webPage->injectedBundleLoaderClient().didFailLoadWithErrorForFrame(*webPage, m_frame, error, userData);
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     // Notify the extensions controller.
     if (RefPtr extensionControllerProxy = webPage->webExtensionControllerProxy())
         extensionControllerProxy->didFailLoadForFrame(*webPage, m_frame, m_frame->url());
@@ -801,7 +808,7 @@ void WebLocalFrameLoaderClient::dispatchDidFinishLoad()
     // Notify the bundle client.
     webPage->injectedBundleLoaderClient().didFinishLoadForFrame(*webPage, m_frame, userData);
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     // Notify the extensions controller.
     if (RefPtr extensionControllerProxy = webPage->webExtensionControllerProxy())
         extensionControllerProxy->didFinishLoadForFrame(*webPage, m_frame, m_frame->url());
@@ -1962,7 +1969,7 @@ void WebLocalFrameLoaderClient::dispatchGlobalObjectAvailable(DOMWrapperWorld& w
     if (!webPage)
         return;
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     if (RefPtr extensionControllerProxy = webPage->webExtensionControllerProxy())
         extensionControllerProxy->globalObjectIsAvailableForFrame(*webPage, m_frame, world);
 #endif
@@ -1976,7 +1983,7 @@ void WebLocalFrameLoaderClient::dispatchServiceWorkerGlobalObjectAvailable(DOMWr
     if (!webPage)
         return;
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     if (RefPtr extensionControllerProxy = webPage->webExtensionControllerProxy())
         extensionControllerProxy->serviceWorkerGlobalObjectIsAvailableForFrame(*webPage, m_frame, world);
 #endif
@@ -1990,7 +1997,7 @@ void WebLocalFrameLoaderClient::willInjectUserScript(DOMWrapperWorld& world)
     if (!webPage)
         return;
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     if (RefPtr extensionControllerProxy = webPage->webExtensionControllerProxy())
         extensionControllerProxy->globalObjectIsAvailableForFrame(*webPage, m_frame, world);
 #endif

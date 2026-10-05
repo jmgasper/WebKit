@@ -280,6 +280,28 @@ bool WebExtensionAPIMenus::parseCreateAndUpdateProperties(ForUpdate forUpdate, N
     return true;
 }
 
+JSValueRef WebExtensionAPIMenus::createMenu(WebPage& page, WebFrame& frame, JSContextRef context, JSValueRef value, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    NSString *nativeException = nil;
+    auto result = createMenu(page, frame, toNSDictionary(context, value, NullValuePolicy::Allowed), WTF::move(callback), &nativeException);
+    exception = nativeException;
+    return toJSValueRef(context, result);
+}
+
+void WebExtensionAPIMenus::update(WebPage& page, WebFrame& frame, JSContextRef context, JSValueRef identifier, JSValueRef value, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    NSString *nativeException = nil;
+    update(page, frame, toNSObject(context, identifier), toNSDictionary(context, value, NullValuePolicy::Allowed), WTF::move(callback), &nativeException);
+    exception = nativeException;
+}
+
+void WebExtensionAPIMenus::remove(JSContextRef context, JSValueRef identifier, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    NSString *nativeException = nil;
+    remove(toNSObject(context, identifier), WTF::move(callback), &nativeException);
+    exception = nativeException;
+}
+
 id WebExtensionAPIMenus::createMenu(WebPage& page, WebFrame& frame, NSDictionary *properties, Ref<WebExtensionCallbackHandler>&& callback, NSString **outExceptionString)
 {
     // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/menus/create

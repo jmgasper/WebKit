@@ -26,13 +26,15 @@
 #include "config.h"
 #include "VideoFrame.h"
 
+#include "NativeImage.h"
+
 #if ENABLE(VIDEO)
 
 #if USE(GSTREAMER)
 #include "VideoFrameGStreamer.h"
 #endif
 
-#if !PLATFORM(COCOA) && !USE(GSTREAMER)
+#if !PLATFORM(COCOA) && !USE(GSTREAMER) && !PLATFORM(HAIKU)
 #include "ImageOrientation.h"
 #endif
 
@@ -78,7 +80,8 @@ bool VideoFrame::is10bits() const
 #endif
 }
 
-#if !PLATFORM(COCOA) && !USE(GSTREAMER)
+// Haiku: VideoFrameHaiku.cpp.
+#if !PLATFORM(COCOA) && !USE(GSTREAMER) && !PLATFORM(HAIKU)
 RefPtr<VideoFrame> VideoFrame::fromNativeImage(NativeImage&)
 {
     // FIXME: Add support.

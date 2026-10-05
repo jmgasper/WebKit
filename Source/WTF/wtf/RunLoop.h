@@ -54,6 +54,12 @@
 #include <wtf/glib/GRefPtr.h>
 #endif
 
+#if USE(HAIKU_EVENT_LOOP)
+class BHandler;
+class BMessageRunner;
+class BLooper;
+#endif
+
 #if USE(GENERIC_EVENT_LOOP)
 #include <wtf/RedBlackTree.h>
 #endif
@@ -204,6 +210,10 @@ public:
         GRefPtr<GSource> m_source;
         bool m_isRepeating { false };
         Seconds m_interval { 0 };
+#elif USE(HAIKU_EVENT_LOOP)
+        BMessageRunner* m_messageRunner;
+        void timerFired();
+        friend class LoopHandler;
 #elif USE(GENERIC_EVENT_LOOP)
         bool isActiveWithLock() const WTF_REQUIRES_LOCK(m_runLoop->m_loopLock);
         void stopWithLock() WTF_REQUIRES_LOCK(m_runLoop->m_loopLock);
@@ -378,6 +388,10 @@ private:
 
     int m_nestedLoopLevel { 0 };
     std::atomic<bool> m_shouldStop { false };
+#elif USE(HAIKU_EVENT_LOOP)
+    BLooper* m_looper;
+    BHandler* m_handler;
+    friend class LoopHandler;
 #elif USE(GENERIC_EVENT_LOOP)
     void scheduleWithLock(TimerBase::ScheduledTask&) WTF_REQUIRES_LOCK(m_loopLock);
     void unscheduleWithLock(TimerBase::ScheduledTask&) WTF_REQUIRES_LOCK(m_loopLock);

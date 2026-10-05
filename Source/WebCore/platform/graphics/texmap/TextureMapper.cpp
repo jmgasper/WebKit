@@ -44,6 +44,14 @@
 #include <wtf/SetForScope.h>
 #include <wtf/TZoneMallocInlines.h>
 
+#if PLATFORM(HAIKU)
+#include <OS.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <unistd.h>
+#endif
+
 #if USE(CAIRO)
 #include "CairoUtilities.h"
 #include "RefPtrCairo.h"
@@ -75,6 +83,12 @@ public:
     bool didModifyStencil { false };
     GLint previousScissorState { 0 };
     GLint previousDepthState { 0 };
+#if PLATFORM(HAIKU)
+    // warmShaderProgramsHaiku(): the next program of its list, and the time
+    // the programs warmed so far took to compile.
+    unsigned warmedProgramsHaiku { 0 };
+    bigtime_t warmTimeHaiku { 0 };
+#endif
     std::array<GLint, 4> viewport { };
     std::array<GLint, 4> previousScissor { };
     double zNear { 0 };
@@ -174,7 +188,16 @@ Ref<TextureMapperShaderProgram> TextureMapperGLData::getShaderProgram(TextureMap
 {
     ASSERT(!options.isEmpty());
     auto addResult = m_sharedGLData->m_programs.ensure(options.toRaw(), [options] {
-        return TextureMapperShaderProgram::create(options);
+#if PLATFORM(HAIKU)
+        static const bool traceShaderCompile = std::getenv("SUMMIT_LAYER_PAINT_TRACE");
+        const bigtime_t startedAt = traceShaderCompile ? system_time() : 0;
+#endif
+        auto program = TextureMapperShaderProgram::create(options);
+#if PLATFORM(HAIKU)
+        if (traceShaderCompile)
+            std::fprintf(stderr, "Summit shader compile: at=%lld options=%u ms=%.1f\n", static_cast<long long>(startedAt), options.toRaw(), (system_time() - startedAt) / 1000.0);
+#endif
+        return program;
     });
     return *addResult.iterator->value;
 }
@@ -231,6 +254,77 @@ ClipStack& TextureMapper::clipStack()
 {
     return data().currentSurface ? data().currentSurface->clipStack() : m_clipStack;
 }
+
+#if PLATFORM(HAIKU)
+void TextureMapper::warmShaderProgramsHaiku()
+{
+    // A shader program is compiled when a layer first needs it, in a frame
+    // that has 16 ms: the first scroll of a page (a scrollbar fades in), the
+    // first rounded video, the first filter. These are the programs that
+    // twenty sites had compiled by the end of a scroll, and the filters of
+    // the same kind they did not use (the rounded solid colour, which Reddit
+    // can first use after scrolling begins, comes first after the first
+    // frame; compiled inside the first frame with the page, it cost a
+    // Raspberry Pi 4 75 ms). Each call compiles one program, so a
+    // composition asked for meanwhile waits for one program at most. The
+    // compositor makes the first two, which every first frame draws with,
+    // while the page is still being fetched, and the rest after its first
+    // frame. With
+    // Mesa's shader cache a program costs 0.3 to 3 ms (8 to 24 the first
+    // time the X399 compiles it). Without one, as on the Raspberry Pi 4
+    // (v3d), a program costs 40 to 150 ms and all of them took 2.2 s of a
+    // core while the first page loaded: warming stops once the programs
+    // compiled so far took the budget (SUMMIT_WARM_SHADERS=<ms>, default
+    // 150; "all" has no budget; the first two do not count) and the rest
+    // compile when first drawn with.
+    using Program = TextureMapperShaderProgram;
+    static constexpr unsigned firstFrameProgramCount = 2;
+    static const Program::Options programs[] = {
+        { Program::TextureRGB },
+        { Program::SolidColor },
+        { Program::SolidColor, Program::RoundedRectClip },
+        { Program::TextureRGB, Program::Opacity },
+        { Program::TextureRGB, Program::RoundedRectClip },
+        { Program::TextureRGB, Program::Opacity, Program::RoundedRectClip },
+        { Program::TextureCopy },
+        { Program::BlurFilter },
+        { Program::TextureRGB, Program::Antialiasing },
+        { Program::TextureRGB, Program::Opacity, Program::Antialiasing },
+        { Program::SolidColor, Program::Antialiasing },
+        { Program::TextureRGB, Program::BrightnessFilter },
+        { Program::TextureRGB, Program::SaturateFilter },
+        { Program::TextureRGB, Program::OpacityFilter },
+        { Program::TextureRGB, Program::GrayscaleFilter },
+        { Program::TextureRGB, Program::ContrastFilter },
+        { Program::TextureRGB, Program::InvertFilter },
+        { Program::AlphaBlur },
+    };
+    static const bigtime_t budget = [] () -> bigtime_t {
+        const char* value = getenv("SUMMIT_WARM_SHADERS");
+        if (value && !strcmp(value, "all"))
+            return std::numeric_limits<bigtime_t>::max();
+        if (value && *value >= '1' && *value <= '9')
+            return atoll(value) * 1000;
+        return 150000;
+    }();
+    static const bool trace = [] {
+        const char* value = getenv("SUMMIT_COMPOSITOR_TIMING_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    auto& glData = data();
+    if (glData.warmedProgramsHaiku >= std::size(programs) || glData.warmTimeHaiku >= budget)
+        return;
+    unsigned index = glData.warmedProgramsHaiku++;
+    bigtime_t startedAt = system_time();
+    glData.getShaderProgram(programs[index]);
+    bigtime_t took = system_time() - startedAt;
+    if (index >= firstFrameProgramCount)
+        glData.warmTimeHaiku += took;
+    if (trace)
+        std::fprintf(stderr, "Summit shader warm-up: pid=%d program=%u took=%.1f total=%.1f%s\n", static_cast<int>(getpid()), index,
+            took / 1000.0, glData.warmTimeHaiku / 1000.0, glData.warmTimeHaiku >= budget && index + 1 < std::size(programs) ? " (budget spent)" : "");
+}
+#endif
 
 void TextureMapper::beginPainting(FlipY flipY, BitmapTexture* surface)
 {
@@ -801,6 +895,10 @@ void TextureMapper::drawTexturePackedYUV(GLuint texture, const std::array<GLfloa
 
 void TextureMapper::drawSolidColor(const FloatRect& rect, const TransformationMatrix& matrix, const Color& color, bool isBlendingAllowed)
 {
+#if PLATFORM(HAIKU)
+    static const bool traceSolidPaint = std::getenv("SUMMIT_LAYER_PAINT_TRACE");
+    const bigtime_t startedAt = traceSolidPaint ? system_time() : 0;
+#endif
     OptionSet<TextureMapperFlags> flags;
     TextureMapperShaderProgram::Options options = TextureMapperShaderProgram::SolidColor;
     if (!matrix.mapQuad(rect).isRectilinear()) {
@@ -817,6 +915,9 @@ void TextureMapper::drawSolidColor(const FloatRect& rect, const TransformationMa
     }
 
     Ref<TextureMapperShaderProgram> program = data().getShaderProgram(options);
+#if PLATFORM(HAIKU)
+    const bigtime_t shaderAt = traceSolidPaint ? system_time() : 0;
+#endif
     glUseProgram(program->programID());
 
     if (clipStack().isRoundedRectClipEnabled())
@@ -828,6 +929,13 @@ void TextureMapper::drawSolidColor(const FloatRect& rect, const TransformationMa
         flags.add(TextureMapperFlags::ShouldBlend);
 
     draw(rect, matrix, program.get(), GL_TRIANGLE_FAN, flags);
+#if PLATFORM(HAIKU)
+    if (traceSolidPaint) {
+        const bigtime_t elapsed = system_time() - startedAt;
+        if (elapsed >= 4000)
+            std::fprintf(stderr, "Summit solid paint: at=%lld total=%.1f shader=%.1f gl=%.1f options=%u rect=%.0fx%.0f\n", static_cast<long long>(startedAt), elapsed / 1000.0, (shaderAt - startedAt) / 1000.0, (elapsed - (shaderAt - startedAt)) / 1000.0, options.toRaw(), rect.width(), rect.height());
+    }
+#endif
 }
 
 void TextureMapper::clearColor(const Color& color)
@@ -877,8 +985,38 @@ void TextureMapper::drawUnitRect(TextureMapperShaderProgram& program, GLenum dra
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
+#if PLATFORM(HAIKU)
+static thread_local bool s_countsDraws;
+static thread_local TextureMapper::DrawStatsHaiku s_drawStats;
+
+void TextureMapper::setCountsDrawsHaiku(bool counts)
+{
+    s_countsDraws = counts;
+}
+
+auto TextureMapper::takeDrawStatsHaiku() -> DrawStatsHaiku
+{
+    return std::exchange(s_drawStats, { });
+}
+#endif
+
 void TextureMapper::draw(const FloatRect& rect, const TransformationMatrix& modelViewMatrix, TextureMapperShaderProgram& program, GLenum drawingMode, OptionSet<TextureMapperFlags> flags)
 {
+#if PLATFORM(HAIKU)
+    if (s_countsDraws) {
+        ++s_drawStats.draws;
+        FloatRect drawn = modelViewMatrix.mapRect(rect);
+        drawn.intersect(FloatRect(clipBounds()));
+        double megapixels = drawn.width() * double(drawn.height()) / 1e6;
+        s_drawStats.megapixels += megapixels;
+        if (flags.contains(TextureMapperFlags::ShouldBlend) || isInMaskMode()) {
+            ++s_drawStats.blendedDraws;
+            s_drawStats.blendedMegapixels += megapixels;
+        }
+        if (data().currentSurface)
+            ++s_drawStats.drawsIntoSurfaces;
+    }
+#endif
     TransformationMatrix matrix(modelViewMatrix);
     matrix.multiply(TransformationMatrix::rectToRect(FloatRect(0, 0, 1, 1), rect));
 
@@ -987,6 +1125,10 @@ void TextureMapper::drawTextureCopy(const BitmapTexture& sourceTexture, const Fl
 
 void TextureMapper::drawBlurred(const BitmapTexture& sourceTexture, const FloatRect& rect, float radius, Direction direction, bool alphaBlur)
 {
+#if PLATFORM(HAIKU)
+    if (s_countsDraws)
+        ++s_drawStats.blurPasses;
+#endif
     Ref<TextureMapperShaderProgram> program = data().getShaderProgram({
         alphaBlur ? TextureMapperShaderProgram::AlphaBlur : TextureMapperShaderProgram::BlurFilter,
     });
@@ -1278,6 +1420,28 @@ RefPtr<BitmapTexture> TextureMapper::applyFilters(RefPtr<BitmapTexture>& sourceT
 
 RefPtr<BitmapTexture> TextureMapper::applyFilter(RefPtr<BitmapTexture>& sourceTexture, const Ref<const FilterOperation>& filter, bool defersLastPass)
 {
+#if PLATFORM(HAIKU)
+    // SUMMIT_LAYER_PAINT_TRACE: which filters a page has the compositor
+    // apply, how large and how often; one line a second for each kind.
+    static const bool traceFilters = std::getenv("SUMMIT_LAYER_PAINT_TRACE");
+    if (traceFilters && sourceTexture) {
+        static thread_local std::array<std::pair<bigtime_t, unsigned>, 16> seen;
+        auto& [reportedAt, count] = seen[static_cast<unsigned>(filter->type()) % seen.size()];
+        ++count;
+        bigtime_t now = system_time();
+        if (now - reportedAt >= 1000000) {
+            float radius = 0;
+            if (filter->type() == FilterOperation::Type::Blur)
+                radius = static_cast<const BlurFilterOperation&>(filter.get()).stdDeviation();
+            else if (filter->type() == FilterOperation::Type::DropShadow)
+                radius = static_cast<const DropShadowFilterOperation&>(filter.get()).stdDeviation();
+            std::fprintf(stderr, "Summit filter: type=%u surface=%dx%d radius=%.1f applied=%u since the last line\n",
+                static_cast<unsigned>(filter->type()), sourceTexture->size().width(), sourceTexture->size().height(), radius, count);
+            reportedAt = now;
+            count = 0;
+        }
+    }
+#endif
     switch (filter->type()) {
     case FilterOperation::Type::Grayscale:
     case FilterOperation::Type::Sepia:
@@ -1330,6 +1494,10 @@ void TextureMapper::bindDefaultSurface()
 
 void TextureMapper::bindSurface(BitmapTexture *surface)
 {
+#if PLATFORM(HAIKU)
+    if (s_countsDraws && surface)
+        ++s_drawStats.surfaceBinds;
+#endif
     if (!surface) {
         bindDefaultSurface();
         return;

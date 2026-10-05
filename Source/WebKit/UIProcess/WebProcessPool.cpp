@@ -144,6 +144,8 @@
 
 #if OS(LINUX)
 #include "MemoryPressureMonitor.h"
+#elif OS(HAIKU)
+#include "MemoryPressureMonitorHaiku.h"
 #endif
 
 #if PLATFORM(COCOA)
@@ -316,7 +318,7 @@ WebProcessPool::WebProcessPool(API::ProcessPoolConfiguration& configuration)
 
     platformInitialize(needsGlobalStaticInitialization);
 
-#if OS(LINUX) && !OS(ANDROID)
+#if (OS(LINUX) && !OS(ANDROID)) || OS(HAIKU)
     if (!MemoryPressureMonitor::disabled())
         MemoryPressureMonitor::singleton().start();
 #endif
@@ -471,7 +473,7 @@ void WebProcessPool::fullKeyboardAccessModeChanged(bool fullKeyboardAccessEnable
     sendToAllProcesses(Messages::WebProcess::FullKeyboardAccessModeChanged(fullKeyboardAccessEnabled));
 }
 
-#if OS(LINUX) && !OS(ANDROID)
+#if (OS(LINUX) && !OS(ANDROID)) || OS(HAIKU)
 void WebProcessPool::sendMemoryPressureEvent(bool isCritical)
 {
     sendToAllProcesses(Messages::AuxiliaryProcess::DidReceiveMemoryPressureEvent(isCritical));

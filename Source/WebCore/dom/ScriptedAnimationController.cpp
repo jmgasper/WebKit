@@ -42,6 +42,11 @@
 #include "UserGestureIndicator.h"
 #include <wtf/SystemTracing.h>
 
+#if PLATFORM(HAIKU)
+#include <cstdlib>
+#include <cstring>
+#endif
+
 namespace WebCore {
 
 ScriptedAnimationController::ScriptedAnimationController(Document& document)
@@ -106,6 +111,24 @@ bool ScriptedAnimationController::shouldRescheduleRequestAnimationFrame(ReducedR
     LOG_WITH_STREAM(RequestAnimationFrame, stream << "ScriptedAnimationController::shouldRescheduleRequestAnimationFrame - throttled relative to page " << isThrottledRelativeToPage()
         << ", last delta " << (timestamp - m_lastAnimationFrameTimestamp).milliseconds() << "ms, preferred interval " << preferredScriptedAnimationInterval().milliseconds() << ")");
 
+#if PLATFORM(HAIKU)
+    // Haiku has no display link: rendering updates also come from layer
+    // flushes, style changes and frames' loads, and each ran the callbacks,
+    // so pages saw 63-66 frames a second (xbitlabs.com's FPS test measured
+    // that as the refresh rate and the 60 frames a second after it as drops).
+    // Callbacks that ran less than half a frame ago wait for the next
+    // refresh. Half, not a whole frame: a refresh whose update had to wait
+    // for the compositor can be followed by one that did not, closer than a
+    // frame, and skipping that one would drop a frame.
+    // SUMMIT_RAF_MIN_INTERVAL_MS sets the gap (0 runs them in every update).
+    static const Seconds minimumInterval = [] {
+        const char* value = getenv("SUMMIT_RAF_MIN_INTERVAL_MS");
+        return value && *value ? Seconds::fromMilliseconds(std::max(0.0, atof(value))) : Seconds(-1);
+    }();
+    Seconds gap = minimumInterval >= 0_s ? minimumInterval : preferredScriptedAnimationInterval() / 2;
+    if (gap > 0_s && m_lastAnimationFrameTimestamp && timestamp - m_lastAnimationFrameTimestamp < gap)
+        return true;
+#endif
     return timestamp <= m_lastAnimationFrameTimestamp || (isThrottledRelativeToPage() && (timestamp - m_lastAnimationFrameTimestamp < preferredScriptedAnimationInterval()));
 }
 

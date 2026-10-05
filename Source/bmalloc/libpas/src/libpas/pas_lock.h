@@ -165,7 +165,7 @@ static inline void pas_lock_testing_assert_held(pas_lock* lock)
 
 PAS_END_EXTERN_C;
 
-#elif PAS_OS(LINUX) || PAS_OS(WINDOWS) || PAS_OS(FREEBSD)
+#elif PAS_OS(LINUX) || PAS_OS(WINDOWS) || PAS_OS(FREEBSD) || PAS_OS(HAIKU)
 
 PAS_BEGIN_EXTERN_C;
 

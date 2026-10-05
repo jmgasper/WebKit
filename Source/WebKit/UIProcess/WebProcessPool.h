@@ -374,7 +374,7 @@ public:
 #endif
 
     void fullKeyboardAccessModeChanged(bool fullKeyboardAccessEnabled);
-#if OS(LINUX) && !OS(ANDROID)
+#if (OS(LINUX) && !OS(ANDROID)) || OS(HAIKU)
     void sendMemoryPressureEvent(bool isCritical);
 #endif
     void textCheckerStateChanged();

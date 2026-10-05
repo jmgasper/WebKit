@@ -60,6 +60,7 @@
 #include "RenderSVGImage.h"
 #include "Settings.h"
 #include <JavaScriptCore/HeapCellInlines.h>
+#include <wtf/HashMap.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/Scope.h>
 #include <wtf/text/MakeString.h>
@@ -122,6 +123,28 @@ static ImageEventSender& loadEventSender()
     return sender;
 }
 
+#if PLATFORM(HAIKU)
+// A page that answers an image's error by setting the same URL again loads it
+// forever. When every attempt fails at once (Cloudflare answering Summit's
+// requests for Stack Overflow's sign-up logo with its challenge page, say),
+// that is a whole core, 47,000 error events a second. After three errors for
+// one URL within two seconds, each further one waits: 10 ms, doubling to 1 s.
+// The page still gets every event.
+struct RepeatedImageErrorHaiku {
+    URL url;
+    unsigned count { 0 };
+    MonotonicTime lastError;
+    bool dispatchNow { false };
+    std::unique_ptr<Timer> timer;
+};
+
+static HashMap<const ImageLoader*, RepeatedImageErrorHaiku>& repeatedImageErrorsHaiku()
+{
+    static NeverDestroyed<HashMap<const ImageLoader*, RepeatedImageErrorHaiku>> errors;
+    return errors;
+}
+#endif
+
 static inline bool NODELETE pageIsBeingDismissed(Document& document)
 {
     auto* frame = document.frame();
@@ -158,6 +181,9 @@ ImageLoader::ImageLoader(Element& element)
 
 ImageLoader::~ImageLoader()
 {
+#if PLATFORM(HAIKU)
+    repeatedImageErrorsHaiku().remove(this);
+#endif
     if (RefPtr image = m_image)
         image->removeClient(*this);
 
@@ -700,6 +726,39 @@ void ImageLoader::dispatchPendingLoadEvent()
         return;
     if (!m_image)
         return;
+#if PLATFORM(HAIKU)
+    // The load event reports a failed load as an error; see RepeatedImageErrorHaiku.
+    if (m_image->errorOccurred()) {
+        auto& errors = repeatedImageErrorsHaiku();
+        auto& state = errors.add(this, RepeatedImageErrorHaiku { }).iterator->value;
+        auto now = MonotonicTime::now();
+        if (std::exchange(state.dispatchNow, false))
+            state.lastError = now;
+        else {
+            if (state.timer && state.timer->isActive())
+                return;
+            if (state.url != m_image->url() || now - state.lastError > 2_s) {
+                state.url = m_image->url();
+                state.count = 0;
+            }
+            state.lastError = now;
+            if (++state.count > 3) {
+                if (!state.timer) {
+                    state.timer = makeUnique<Timer>([this] {
+                        auto it = repeatedImageErrorsHaiku().find(this);
+                        if (it == repeatedImageErrorsHaiku().end())
+                            return;
+                        it->value.dispatchNow = true;
+                        dispatchPendingLoadEvent();
+                    });
+                }
+                state.timer->startOneShot(std::min(10_ms * (1u << std::min(state.count - 4, 7u)), 1_s));
+                return;
+            }
+        }
+    } else
+        repeatedImageErrorsHaiku().remove(this);
+#endif
     m_hasPendingLoadEvent = false;
     Ref protectedElement = element();
     Ref document = protectedElement->document();

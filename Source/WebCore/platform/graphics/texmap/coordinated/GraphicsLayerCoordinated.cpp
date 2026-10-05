@@ -102,10 +102,50 @@ std::optional<PlatformLayerIdentifier> GraphicsLayerCoordinated::primaryLayerID(
     return m_platformLayer->id();
 }
 
+#if PLATFORM(HAIKU)
+// SUMMIT_FULL_REPAINT_TRACE=2: who asks for a layer of two megapixels and more to be painted again whole.
+static void traceWholeLayerRepaintHaiku(const GraphicsLayerCoordinated& layer, const FloatSize& size, const char* how)
+{
+    static const bool enabled = [] {
+        const char* value = getenv("SUMMIT_FULL_REPAINT_TRACE");
+        return value && value[0] == '2' && !value[1];
+    }();
+    if (!enabled || size.width() * size.height() < 2e6f)
+        return;
+    auto name = layer.name().utf8();
+    fprintf(stderr, "Summit full repaint: %s of layer %s %.0fx%.0f, asked by:\n", how, name.data() ? reinterpret_cast<const char*>(name.data()) : "", size.width(), size.height());
+    WTFReportBacktraceWithPrefix("    ");
+}
+#endif
+
+#if PLATFORM(HAIKU)
+bool GraphicsLayerCoordinated::shouldRepaintOnSizeChange() const
+{
+    // A layer that changes its size was painted again whole. A page that
+    // grows while it loads, by an entry of a list at a time, had its root
+    // layer painted again with each: 124 tiles, three times a second, under
+    // a video. The layer's content is in tiles that stay where they are.
+    // The backing store paints the tiles at the edge whose extent changes
+    // and the ones that are new, and renderers ask for what they changed,
+    // as they do for the tiled layers of the Core Animation port, which do
+    // not repaint on a change of size either.
+    // SUMMIT_REPAINT_ON_RESIZE=1 paints the whole layer again.
+    static const bool repaints = [] {
+        const char* value = getenv("SUMMIT_REPAINT_ON_RESIZE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    return repaints && GraphicsLayer::shouldRepaintOnSizeChange();
+}
+#endif
+
 void GraphicsLayerCoordinated::setNeedsDisplay()
 {
     if (!m_drawsContent || !m_contentsVisible || m_size.isEmpty())
         return;
+#if PLATFORM(HAIKU)
+    if (!m_dirtyRegion || m_dirtyRegion->mode() != Damage::Mode::Full)
+        traceWholeLayerRepaintHaiku(*this, m_size, "setNeedsDisplay()");
+#endif
 
     if (m_dirtyRegion) {
         if (m_dirtyRegion->mode() == Damage::Mode::Full)
@@ -133,6 +173,10 @@ void GraphicsLayerCoordinated::setNeedsDisplayInRect(const FloatRect& initialRec
 
     if (rect.isEmpty())
         return;
+#if PLATFORM(HAIKU)
+    if (rect.width() * rect.height() >= 0.8f * m_size.width() * m_size.height())
+        traceWholeLayerRepaintHaiku(*this, m_size, "setNeedsDisplayInRect() with most");
+#endif
 
     addRepaintRect(rect);
 
@@ -403,7 +447,7 @@ void GraphicsLayerCoordinated::setContentsNeedsDisplayInRect(const FloatRect& re
     noteLayerPropertyChanged(Change::ContentsBufferNeedsDisplay, ScheduleFlush::Yes);
 }
 
-#if ENABLE(VIDEO) && USE(GSTREAMER)
+#if ENABLE(VIDEO) && (USE(GSTREAMER) || PLATFORM(HAIKU))
 void GraphicsLayerCoordinated::setContentsToMediaPlayer(MediaPlayer* player, ContentsLayerPurpose)
 {
     // Never try to get or set the proxy on a player that doesn't support accelerated rendering (null media player).

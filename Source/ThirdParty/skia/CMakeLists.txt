@@ -1083,6 +1083,18 @@ target_compile_definitions(Skia PUBLIC
     SK_ASSUME_WEBGL=0
 )
 
+#
+# Haiku is a POSIX system, but it defines neither __unix__ nor __GLIBC__, so
+# SkFeatures.h falls through to SK_BUILD_FOR_MAC and pulls in Grand Central
+# Dispatch. Everything Skia wants here -- pthreads, mmap, dlopen, FreeType and
+# fontconfig -- is the Unix configuration. This has to be a command line
+# definition rather than one in the SK_USER_CONFIG_HEADER, because several
+# sources include SkFeatures.h before the user configuration is read.
+#
+if (HAIKU)
+    target_compile_definitions(Skia PUBLIC SK_BUILD_FOR_UNIX)
+endif ()
+
 if (WIN32)
     target_compile_definitions(Skia PRIVATE SK_TYPEFACE_FACTORY_DIRECTWRITE)
 else ()

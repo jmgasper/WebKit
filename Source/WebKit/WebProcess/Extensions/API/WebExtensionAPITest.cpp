@@ -30,6 +30,7 @@
 #if ENABLE(WK_WEB_EXTENSIONS)
 
 #include "MessageSenderInlines.h"
+#include "JSWebExtensionPromise.h"
 #include "WebExtensionAPINamespace.h"
 #include "WebExtensionAPIWebPageNamespace.h"
 #include "WebExtensionControllerMessages.h"
@@ -43,6 +44,7 @@
 #include <JavaScriptCore/ScriptCallStackFactory.h>
 #include <WebCore/DocumentPage.h>
 #include <WebCore/LocalFrameInlines.h>
+#include <wtf/WorkQueue.h>
 
 namespace WebKit {
 
@@ -291,6 +293,58 @@ void WebExtensionAPITest::assertEq(JSContextRef context, JSValueRef actualValue,
     assertEquals(context, strictEqual, expectedJSONValue, actualJSONValue, message, outExceptionString);
 }
 
+
+JSValueRef WebExtensionAPITest::assertRejects(JSContextRef context, JSValueRef promise, JSValueRef expectedError, const String& message)
+{
+    return transformWebExtensionPromise(context, promise, expectedError,
+        [this, protectedThis = Ref { *this }, message, hasExpectedError = !!expectedError](JSContextRef context, bool fulfilled, JSValueRef value, JSValueRef expectedError, JSValueRef& exception) -> JSValueRef {
+            String falseException;
+            if (fulfilled) {
+                assertEquals(context, false, hasExpectedError ? debugString(context, expectedError) : "(any error)"_s, debugString(context, value), combineMessages(message, "Promise did not reject with an error"_s), falseException);
+                exception = JSValueMakeUndefined(context);
+                return JSValueMakeUndefined(context);
+            }
+
+            Protected<JSValueRef> errorMessage(JSContextGetGlobalContext(context), webExtensionPromiseErrorMessage(context, value, exception));
+            if (exception)
+                return JSValueMakeUndefined(context);
+            if (JSValueIsUndefined(context, expectedError)) {
+                assertEquals(context, true, "(any error)"_s, debugString(context, errorMessage.get()), combineMessages(message, "Promise rejected with an error"_s), falseException);
+                return JSValueMakeUndefined(context);
+            }
+            if (isRegularExpression(context, expectedError)) {
+                JSValueRef result = invokeMethod<1>(context, expectedError, "test"_s, { errorMessage.get() }, &exception);
+                if (exception)
+                    return JSValueMakeUndefined(context);
+                assertEquals(context, JSValueToBoolean(context, result), debugString(context, expectedError), debugString(context, errorMessage.get()), combineMessages(message, "Promise rejected with an error that didn't match the regular expression"_s), falseException);
+                return JSValueMakeUndefined(context);
+            }
+            bool equal = JSValueIsEqual(context, expectedError, errorMessage.get(), &exception);
+            if (exception)
+                return JSValueMakeUndefined(context);
+            assertEquals(context, equal, debugString(context, expectedError), debugString(context, errorMessage.get()), combineMessages(message, "Promise rejected with an error that didn't equal"_s), falseException);
+            return JSValueMakeUndefined(context);
+        });
+}
+
+JSValueRef WebExtensionAPITest::assertResolves(JSContextRef context, JSValueRef promise, const String& message)
+{
+    if (!isThenable(context, promise))
+        return JSValueMakeNull(context);
+    return transformWebExtensionPromise(context, promise, nullptr,
+        [this, protectedThis = Ref { *this }, message](JSContextRef context, bool fulfilled, JSValueRef value, JSValueRef, JSValueRef& exception) -> JSValueRef {
+            if (fulfilled) {
+                succeed(context, "Promise resolved without an error"_s);
+                return value;
+            }
+            Protected<JSValueRef> errorMessage(JSContextGetGlobalContext(context), webExtensionPromiseErrorMessage(context, value, exception));
+            if (exception)
+                return JSValueMakeUndefined(context);
+            fail(context, combineMessages(message, makeString("Promise rejected with an error: "_s, debugString(context, errorMessage.get()))));
+            return JSValueMakeUndefined(context);
+        });
+}
+
 void WebExtensionAPITest::assertThrows(JSContextRef context, JSValueRef function, JSValueRef expectedError, const String& message, String& outExceptionString)
 {
     JSValueRef exceptionValue = nullptr;
@@ -361,6 +415,133 @@ JSValueRef WebExtensionAPITest::assertSafeResolve(JSContextRef context, JSValueR
         return result;
 
     return assertResolves(context, result, message);
+}
+
+static JSValueRef rejectedTestPromise(JSContextRef context, JSValueRef reason)
+{
+    return transformWebExtensionPromise(context, nullptr, reason,
+        [](JSContextRef context, bool, JSValueRef, JSValueRef reason, JSValueRef& exception) -> JSValueRef {
+            exception = reason;
+            return JSValueMakeUndefined(context);
+        });
+}
+
+JSValueRef WebExtensionAPITest::addTest(JSContextRef context, JSValueRef testFunction, String callingAPIName)
+{
+    auto reject = [&](const String& message) {
+        auto reason = toJSString(toErrorString(callingAPIName, nullString(), message));
+        return rejectedTestPromise(context, JSValueMakeString(context, reason.get()));
+    };
+    if (!isFunction(context, testFunction))
+        return reject("Error creating a new test."_s);
+
+    JSValueRef exception = nullptr;
+    auto functionObject = JSValueToObject(context, testFunction, &exception);
+    if (exception)
+        return rejectedTestPromise(context, exception);
+    auto rawName = JSObjectGetProperty(context, functionObject, toJSString("name"_s).get(), &exception);
+    if (exception)
+        return rejectedTestPromise(context, exception);
+    Protected<JSValueRef> nameValue(JSContextGetGlobalContext(context), rawName);
+    JSRetainPtr nameString(Adopt, JSValueToStringCopy(context, nameValue.get(), &exception));
+    if (exception)
+        return rejectedTestPromise(context, exception);
+    auto testName = toString(nameString.get());
+    if (testName.isEmpty())
+        return reject("The supplied test function must be named."_s);
+
+    RefPtr page = toWebPage(context);
+    if (!page)
+        return reject("Error creating a new test."_s);
+    RefPtr controller = page->webExtensionControllerProxy();
+    if (!controller)
+        return reject("Error creating a new test."_s);
+
+    JSObjectRef resolve = nullptr;
+    JSObjectRef rejectCallback = nullptr;
+    JSObjectRef result = JSObjectMakeDeferredPromise(context, &resolve, &rejectCallback, &exception);
+    if (exception)
+        return rejectedTestPromise(context, exception);
+    if (!result)
+        return nullptr;
+    auto globalContext = JSContextGetGlobalContext(context);
+    Protected<JSValueRef> protectedResult(globalContext, result);
+    Protected<JSValueRef> protectedResolve(globalContext, resolve);
+    Protected<JSValueRef> protectedReject(globalContext, rejectCallback);
+    auto location = scriptLocation(context);
+    auto identifier = controller->identifier();
+    m_testQueue.append({ testName, location, identifier, Protected(globalContext, testFunction), WTF::move(protectedResolve), WTF::move(protectedReject) });
+    WebProcess::singleton().send(Messages::WebExtensionController::TestAdded(testName, location.first, location.second), identifier);
+
+    if (!m_runningTest) {
+        m_runningTest = true;
+        WorkQueue::mainSingleton().dispatch([this, protectedThis = Ref { *this }] { startNextTest(); });
+    }
+    return result;
+}
+
+void WebExtensionAPITest::startNextTest()
+{
+    if (m_testQueue.isEmpty()) {
+        m_runningTest = false;
+        return;
+    }
+    auto test = m_testQueue.takeFirst();
+    auto context = test.testFunction.context().get();
+    m_hitAssertion = false;
+    m_assertionMessage = nullString();
+    WebProcess::singleton().send(Messages::WebExtensionController::TestStarted(test.testName, test.location.first, test.location.second), test.webExtensionControllerIdentifier);
+
+    JSValueRef exception = nullptr;
+    auto rawValue = callObjectWithArguments<0>(test.testFunction.get(), context, { }, &exception);
+    if (!rawValue && !exception) {
+        WebProcess::singleton().send(Messages::WebExtensionController::TestFinished(test.testName, false, "Test execution context is unavailable."_s, test.location.first, test.location.second), test.webExtensionControllerIdentifier);
+        if (m_testQueue.isEmpty())
+            m_runningTest = false;
+        else
+            WorkQueue::mainSingleton().dispatch([this, protectedThis = Ref { *this }] { startNextTest(); });
+        return;
+    }
+    Protected<JSValueRef> value(context, rawValue ? rawValue : JSValueMakeUndefined(context));
+    Protected<JSValueRef> thrown(context, exception ? exception : JSValueMakeUndefined(context));
+    Protected<JSValueRef> execution(context, exception ? rejectedTestPromise(context, thrown.get()) : value.get());
+    JSValueRef callbacks[] { test.resolveCallback.get(), test.rejectCallback.get() };
+    Protected<JSValueRef> callbackValues(context, JSObjectMakeArray(context, 2, callbacks, nullptr));
+
+    // Trace the running test's completion functions through the promise graph;
+    // only queued tests need the Protected values held by m_testQueue.
+    transformWebExtensionPromise(context, execution.get(), callbackValues.get(),
+        [this, protectedThis = Ref { *this }, testName = test.testName, location = test.location, identifier = test.webExtensionControllerIdentifier]
+        (JSContextRef context, bool fulfilled, JSValueRef value, JSValueRef callbacks, JSValueRef&) -> JSValueRef {
+            bool success = fulfilled && !m_hitAssertion;
+            String message;
+            if (success)
+                message = "Promise resolved without an error."_s;
+            else {
+                String errorMessage;
+                if (!fulfilled) {
+                    JSValueRef exception = nullptr;
+                    Protected<JSValueRef> reason(JSContextGetGlobalContext(context), webExtensionPromiseErrorMessage(context, value, exception));
+                    errorMessage = debugString(context, exception ? exception : reason.get());
+                } else if (!m_assertionMessage.isNull())
+                    errorMessage = m_assertionMessage;
+                message = errorMessage.isNull() ? "Promise rejected without an error"_s : combineMessages("Promise rejected with an error: "_s, errorMessage);
+            }
+            WebProcess::singleton().send(Messages::WebExtensionController::TestFinished(testName, success, message, location.first, location.second), identifier);
+            auto callbackArray = JSValueToObject(context, callbacks, nullptr);
+            auto callback = JSObjectGetPropertyAtIndex(context, callbackArray, success ? 0 : 1, nullptr);
+            if (success)
+                callObjectWithArguments<1>(callback, context, { value });
+            else
+                callObjectWithArguments<0>(callback, context, { });
+            m_hitAssertion = false;
+            m_assertionMessage = nullString();
+            if (m_testQueue.isEmpty())
+                m_runningTest = false;
+            else
+                WorkQueue::mainSingleton().dispatch([this, protectedThis = Ref { *this }] { startNextTest(); });
+            return JSValueMakeUndefined(context);
+        });
 }
 
 JSValueRef WebExtensionAPITest::addTest(JSContextRef context, JSValueRef testFunction)

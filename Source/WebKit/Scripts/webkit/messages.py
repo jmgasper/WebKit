@@ -720,6 +720,8 @@ def types_that_cannot_be_forward_declared():
         'WebKit::WebExtensionStorageAccessLevel',
         'WebKit::WebExtensionTabParameters',
         'WebKit::WebExtensionTabQueryParameters',
+        'WebKit::WebExtensionTabScriptParameters',
+        'WebKit::WebExtensionTabScriptTarget',
         'WebKit::WebExtensionWindowParameters',
         'WebKit::WebTransportSessionIdentifier',
         'WebKit::WebUndoStepID',
@@ -1151,6 +1153,7 @@ def headers_for_type(type, for_implementation_file=False):
     header_infos_and_types = class_template_headers(type)
 
     special_cases = {
+        'WebKit::WebExtensionTabScriptRunAt': ['"WebExtensionTabScriptParameters.h"'],
         'CVPixelBufferRef': ['<WebCore/CVUtilities.h>'],
         'GCGLint': ['<WebCore/GraphicsTypesGL.h>'],
         'GenericPromise::Result': ['<wtf/NativePromise.h>'],
@@ -2323,18 +2326,32 @@ def generate_message_names_implementation(receivers):
         if condition:
             result.append('#if %s\n' % condition)
         for enumerator in enumerators:
-            result.append('    MessageDescription { "%s"_s, ReceiverName::%s' % (enumerator, enumerator.receiver.name))
-            for attr_list in sorted(attributes_to_generate_validators.values()):
-                value = "true" if (set(attr_list).intersection(set(enumerator.messages[0].attributes).union(set(enumerator.receiver.attributes))) and not enumerator.messages[0].is_async_reply) else "false"
-                result.append(', %s' % value)
-            result.append(', %s' % ("true" if enumerator.messages[0].is_async_reply else "false"))
-            if enumerator.messages[0].is_async_reply:
-                result.append(', ProcessName::%s' % process_name_enumerator(enumerator.receiver.receiver_dispatched_to))
-                result.append(', ProcessName::%s' % process_name_enumerator(enumerator.receiver.receiver_dispatched_from))
-            else:
-                result.append(', ProcessName::%s' % process_name_enumerator(enumerator.receiver.receiver_dispatched_from))
-                result.append(', ProcessName::%s' % process_name_enumerator(enumerator.receiver.receiver_dispatched_to))
-            result.append(' },\n')
+            descriptions = []
+            for message in enumerator.messages:
+                attributes = message.attributes.union(enumerator.receiver.attributes)
+                flags = tuple(bool(attributes.intersection(attr_list)) and not message.is_async_reply
+                    for attr_list in sorted(attributes_to_generate_validators.values())) + (message.is_async_reply,)
+                descriptions.append((message, flags))
+            conditional_descriptions = any(flags != descriptions[0][1] for _, flags in descriptions)
+            if not conditional_descriptions:
+                descriptions = descriptions[:1]
+            for message, flags in descriptions:
+                # Conditional overloads share one enumerator, but their dispatch
+                # permissions must come from the active declaration.
+                if conditional_descriptions and message.condition:
+                    result.append('#if %s\n' % message.condition)
+                result.append('    MessageDescription { "%s"_s, ReceiverName::%s' % (enumerator, enumerator.receiver.name))
+                for flag in flags:
+                    result.append(', %s' % ("true" if flag else "false"))
+                if message.is_async_reply:
+                    result.append(', ProcessName::%s' % process_name_enumerator(enumerator.receiver.receiver_dispatched_to))
+                    result.append(', ProcessName::%s' % process_name_enumerator(enumerator.receiver.receiver_dispatched_from))
+                else:
+                    result.append(', ProcessName::%s' % process_name_enumerator(enumerator.receiver.receiver_dispatched_from))
+                    result.append(', ProcessName::%s' % process_name_enumerator(enumerator.receiver.receiver_dispatched_to))
+                result.append(' },\n')
+                if conditional_descriptions and message.condition:
+                    result.append('#endif\n')
         if condition:
             result.append('#endif\n')
     result.append('    MessageDescription { "<invalid message name>"_s, ReceiverName::Invalid%s, false, ProcessName::Unknown, ProcessName::Unknown }\n' % (", false" * len(attributes_to_generate_validators)))

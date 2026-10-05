@@ -40,6 +40,9 @@ typedef RetainPtr<CGPatternRef> PlatformPatternPtr;
 #elif USE(CAIRO)
 typedef struct _cairo_pattern cairo_pattern_t;
 typedef cairo_pattern_t* PlatformPatternPtr;
+#elif USE(HAIKU_GRAPHICS)
+#include <interface/GraphicsDefs.h>
+typedef pattern* PlatformPatternPtr;
 #elif USE(SKIA)
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 #include <skia/core/SkShader.h>

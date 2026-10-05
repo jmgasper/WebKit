@@ -81,8 +81,14 @@ bool WebExtensionAPINamespace::isPropertyAllowed(const ASCIILiteral& name, WebPa
         return page->corePage()->settings().webExtensionBookmarksEnabled() && extensionContext->hasPermission("bookmarks"_s);
 #endif
 
-    if (name == "commands"_s)
+    if (name == "commands"_s) {
+#if PLATFORM(HAIKU)
+        // getAll() is valid even when the extension has no declared commands.
+        return true;
+#else
         return doesDictionaryExist(extensionContext->manifest(), "commands"_s);
+#endif
+    }
 
     if (name == "declarativeNetRequest"_s)
         return extensionContext->hasPermission(name) || extensionContext->hasPermission("declarativeNetRequestWithHostAccess"_s);
@@ -96,6 +102,11 @@ bool WebExtensionAPINamespace::isPropertyAllowed(const ASCIILiteral& name, WebPa
 #else
     if (name == "devtools"_s)
         return false;
+#endif
+
+#if PLATFORM(HAIKU)
+    if (name == "notifications"_s || name == "idle"_s || name == "management"_s)
+        return extensionContext->hasPermission(name);
 #endif
 
     if (name == "notifications"_s) {
@@ -119,6 +130,11 @@ bool WebExtensionAPINamespace::isPropertyAllowed(const ASCIILiteral& name, WebPa
         return page && page->corePage() && page->corePage()->settings().webExtensionSidebarEnabled() && doesDictionaryExist(extensionContext->manifest(), "sidebar_action"_s, true);
 #endif // ENABLE(WK_WEB_EXTENSIONS_SIDEBAR)
 
+#if PLATFORM(HAIKU)
+    if (name == "menus"_s || name == "contextMenus"_s)
+        return extensionContext->hasPermission("menus"_s) || extensionContext->hasPermission("contextMenus"_s);
+#endif
+
     if (name == "storage"_s)
         return extensionContext->hasPermission(name) || extensionContext->hasPermission("unlimitedStorage"_s);
 
@@ -131,7 +147,6 @@ finish:
     return extensionContext->hasPermission(name);
 }
 
-#if PLATFORM(COCOA)
 WebExtensionAPIAction& WebExtensionAPINamespace::action()
 {
     // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/action
@@ -141,7 +156,6 @@ WebExtensionAPIAction& WebExtensionAPINamespace::action()
 
     return *m_action;
 }
-#endif
 
 WebExtensionAPIAlarms& WebExtensionAPINamespace::alarms()
 {
@@ -153,7 +167,6 @@ WebExtensionAPIAlarms& WebExtensionAPINamespace::alarms()
     return *m_alarms;
 }
 
-#if PLATFORM(COCOA)
 WebExtensionAPICommands& WebExtensionAPINamespace::commands()
 {
     // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/commands
@@ -162,6 +175,16 @@ WebExtensionAPICommands& WebExtensionAPINamespace::commands()
         m_commands = WebExtensionAPICommands::create(*this);
 
     return *m_commands;
+}
+
+WebExtensionAPIMenus& WebExtensionAPINamespace::menus()
+{
+    // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/menus
+
+    if (!m_menus)
+        m_menus = WebExtensionAPIMenus::create(*this);
+
+    return *m_menus;
 }
 
 WebExtensionAPICookies& WebExtensionAPINamespace::cookies()
@@ -174,6 +197,27 @@ WebExtensionAPICookies& WebExtensionAPINamespace::cookies()
     return *m_cookies;
 }
 
+WebExtensionAPIExtension& WebExtensionAPINamespace::extension()
+{
+    // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/extension
+
+    if (!m_extension)
+        m_extension = WebExtensionAPIExtension::create(*this);
+
+    return *m_extension;
+}
+
+
+WebExtensionAPILocalization& WebExtensionAPINamespace::i18n()
+{
+    // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/i18n
+
+    if (!m_i18n)
+        m_i18n = WebExtensionAPILocalization::create(*this);
+
+    return *m_i18n;
+}
+
 WebExtensionAPIDeclarativeNetRequest& WebExtensionAPINamespace::declarativeNetRequest()
 {
     // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/declarativeNetRequest
@@ -184,6 +228,7 @@ WebExtensionAPIDeclarativeNetRequest& WebExtensionAPINamespace::declarativeNetRe
     return *m_declarativeNetRequest;
 }
 
+#if PLATFORM(COCOA)
 #if ENABLE(INSPECTOR_EXTENSIONS)
 WebExtensionAPIDevTools& WebExtensionAPINamespace::devtools()
 {
@@ -206,35 +251,20 @@ WebExtensionAPIDOM& WebExtensionAPINamespace::dom()
     return *m_dom;
 }
 
-WebExtensionAPIExtension& WebExtensionAPINamespace::extension()
+
+
+
+WebExtensionAPINotifications& WebExtensionAPINamespace::notifications()
 {
-    // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/extension
+    // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/notifications
 
-    if (!m_extension)
-        m_extension = WebExtensionAPIExtension::create(*this);
+    if (!m_notifications)
+        m_notifications = WebExtensionAPINotifications::create(*this);
 
-    return *m_extension;
+    return *m_notifications;
 }
 
-WebExtensionAPILocalization& WebExtensionAPINamespace::i18n()
-{
-    // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/i18n
-
-    if (!m_i18n)
-        m_i18n = WebExtensionAPILocalization::create(*this);
-
-    return *m_i18n;
-}
-
-WebExtensionAPIMenus& WebExtensionAPINamespace::menus()
-{
-    // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/menus
-
-    if (!m_menus)
-        m_menus = WebExtensionAPIMenus::create(*this);
-
-    return *m_menus;
-}
+#endif // PLATFORM(COCOA)
 
 #if ENABLE(WK_WEB_EXTENSIONS_OFFSCREEN)
 WebExtensionAPIOffscreen& WebExtensionAPINamespace::offscreen()
@@ -248,15 +278,44 @@ WebExtensionAPIOffscreen& WebExtensionAPINamespace::offscreen()
 }
 #endif
 
-WebExtensionAPINotifications& WebExtensionAPINamespace::notifications()
+#if PLATFORM(HAIKU)
+WebExtensionAPIDownloads& WebExtensionAPINamespace::downloads()
 {
-    // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/notifications
+    // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/downloads
 
-    if (!m_notifications)
-        m_notifications = WebExtensionAPINotifications::create(*this);
-
-    return *m_notifications;
+    if (!m_downloads)
+        m_downloads = WebExtensionAPIDownloads::create(*this);
+    return *m_downloads;
 }
+
+WebExtensionAPIIdle& WebExtensionAPINamespace::idle()
+{
+    if (!m_idle)
+        m_idle = WebExtensionAPIIdle::create(*this);
+    return *m_idle;
+}
+
+WebExtensionAPIManagement& WebExtensionAPINamespace::management()
+{
+    if (!m_management)
+        m_management = WebExtensionAPIManagement::create(*this);
+    return *m_management;
+}
+
+WebExtensionAPINotificationsHaiku& WebExtensionAPINamespace::notificationsHaiku()
+{
+    if (!m_notificationsHaiku)
+        m_notificationsHaiku = WebExtensionAPINotificationsHaiku::create(*this);
+    return *m_notificationsHaiku;
+}
+
+WebExtensionAPIPrivacy& WebExtensionAPINamespace::privacy()
+{
+    if (!m_privacy)
+        m_privacy = WebExtensionAPIPrivacy::create(*this);
+    return *m_privacy;
+}
+#endif
 
 WebExtensionAPIPermissions& WebExtensionAPINamespace::permissions()
 {
@@ -290,6 +349,7 @@ WebExtensionAPIScripting& WebExtensionAPINamespace::scripting()
     return *m_scripting;
 }
 
+#if PLATFORM(COCOA)
 #if ENABLE(WK_WEB_EXTENSIONS_SIDEBAR)
 WebExtensionAPISidePanel& WebExtensionAPINamespace::sidePanel()
 {
@@ -324,15 +384,8 @@ WebExtensionAPIBookmarks& WebExtensionAPINamespace::bookmarks()
 }
 #endif
 
-WebExtensionAPIStorage& WebExtensionAPINamespace::storage()
-{
-    // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/storage
 
-    if (!m_storage)
-        m_storage = WebExtensionAPIStorage::create(*this);
-
-    return *m_storage;
-}
+#endif
 
 WebExtensionAPITabs& WebExtensionAPINamespace::tabs()
 {
@@ -343,27 +396,15 @@ WebExtensionAPITabs& WebExtensionAPINamespace::tabs()
 
     return *m_tabs;
 }
-#endif
 
-WebExtensionAPITest& WebExtensionAPINamespace::test()
+WebExtensionAPIStorage& WebExtensionAPINamespace::storage()
 {
-    // Documentation: None (Testing Only)
+    // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/storage
 
-    if (!m_test)
-        m_test = WebExtensionAPITest::create(*this);
+    if (!m_storage)
+        m_storage = WebExtensionAPIStorage::create(*this);
 
-    return *m_test;
-}
-
-#if PLATFORM(COCOA)
-WebExtensionAPIWindows& WebExtensionAPINamespace::windows()
-{
-    // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/windows
-
-    if (!m_windows)
-        m_windows = WebExtensionAPIWindows::create(*this);
-
-    return *m_windows;
+    return *m_storage;
 }
 
 WebExtensionAPIWebNavigation& WebExtensionAPINamespace::webNavigation()
@@ -385,7 +426,28 @@ WebExtensionAPIWebRequest& WebExtensionAPINamespace::webRequest()
 
     return *m_webRequest;
 }
-#endif
+
+WebExtensionAPITest& WebExtensionAPINamespace::test()
+{
+    // Documentation: None (Testing Only)
+
+    if (!m_test)
+        m_test = WebExtensionAPITest::create(*this);
+
+    return *m_test;
+}
+
+WebExtensionAPIWindows& WebExtensionAPINamespace::windows()
+{
+    // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/windows
+
+    if (!m_windows)
+        m_windows = WebExtensionAPIWindows::create(*this);
+
+    return *m_windows;
+}
+
+
 
 } // namespace WebKit
 

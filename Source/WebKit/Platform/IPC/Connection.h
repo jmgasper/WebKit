@@ -89,6 +89,10 @@
 #include <wtf/glib/GSocketMonitor.h>
 #endif
 
+#if PLATFORM(HAIKU)
+#include "SocketMonitorHaiku.h"
+#endif
+
 #if USE(UNIX_DOMAIN_SOCKETS)
 #include <wtf/unix/UnixFileDescriptor.h>
 #endif
@@ -801,6 +805,11 @@ private:
     Vector<RefPtr<AHardwareBuffer>, 2> m_incomingHardwareBuffers;
     Vector<RefPtr<AHardwareBuffer>, 2> m_outgoingHardwareBuffers;
 #endif
+#elif PLATFORM(HAIKU)
+    int socketDescriptor() const;
+    UnixFileDescriptor m_socketDescriptor;
+    std::unique_ptr<SocketMonitorHaiku> m_writeSocketMonitor;
+    bool m_hasPendingOutputMessage { false };
 #else
     bool processMessage();
     int socketDescriptor() const;
@@ -810,6 +819,8 @@ private:
 #endif
 #if PLATFORM(PLAYSTATION)
     RefPtr<WTF::Thread> m_socketMonitor;
+#elif PLATFORM(HAIKU)
+    std::unique_ptr<SocketMonitorHaiku> m_socketMonitor;
 #endif
 #elif OS(DARWIN)
     // Called on the connection queue.

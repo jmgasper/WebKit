@@ -139,6 +139,11 @@ private:
 
     void internalWheelEvent(WebCore::PageIdentifier, const WebWheelEvent&, WebCore::RectEdges<WebCore::RubberBandingBehavior> rubberBandableEdges, CompletionHandler<void(bool)>&&);
 
+#if PLATFORM(HAIKU) && ENABLE(ASYNC_SCROLLING) && ENABLE(SCROLLING_THREAD)
+    void scheduleHaikuScrollRefresh();
+    void refreshHaikuScrollingTrees();
+#endif
+
 #if ENABLE(IOS_TOUCH_EVENTS)
     void dispatchTouchEvents();
 #endif
@@ -175,6 +180,9 @@ private:
 #if ENABLE(ASYNC_SCROLLING) && ENABLE(SCROLLING_THREAD)
     Lock m_scrollingTreesLock;
     HashMap<WebCore::PageIdentifier, Ref<WebCore::ThreadedScrollingTree>> m_scrollingTrees WTF_GUARDED_BY_LOCK(m_scrollingTreesLock);
+#if PLATFORM(HAIKU)
+    bool m_haikuScrollRefreshScheduled { false };
+#endif
 #endif
     std::unique_ptr<WebCore::WheelEventDeltaFilter> m_recentWheelEventDeltaFilter;
 #if ENABLE(IOS_TOUCH_EVENTS)

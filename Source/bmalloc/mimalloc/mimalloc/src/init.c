@@ -755,6 +755,30 @@ static void mi_win_tls_slot_set(size_t slot, size_t extended_slot, void* value) 
   }
 }
 
+#elif MI_TLS_MODEL_DYNAMIC_HAIKU
+
+#include <support/TLS.h>
+
+mi_decl_hidden size_t _mi_theap_default_slot = 0;
+mi_decl_hidden size_t _mi_theap_cached_slot = 0;
+mi_decl_hidden mi_decl_thread mi_theap_t* __mi_theap_default = NULL;
+mi_decl_hidden mi_decl_thread mi_theap_t* __mi_theap_cached = NULL;
+
+static void mi_haiku_tls_slots_init(void) {
+  static mi_atomic_once_t tls_slots_init;
+  if (mi_atomic_once(&tls_slots_init)) {
+    const int32 default_slot = tls_allocate();
+    const int32 cached_slot = tls_allocate();
+    if (default_slot > 0 && cached_slot > 0) {
+      // carry over this thread's values (the slots of every thread start NULL)
+      mi_prim_tls_slot_set((size_t)default_slot, __mi_theap_default);
+      mi_prim_tls_slot_set((size_t)cached_slot, __mi_theap_cached);
+      _mi_theap_cached_slot = (size_t)cached_slot;
+      _mi_theap_default_slot = (size_t)default_slot;
+    }
+  }
+}
+
 #elif MI_TLS_MODEL_DYNAMIC_PTHREADS
 
 // only for pthreads for now
@@ -780,6 +804,10 @@ void _mi_theap_cached_set(mi_theap_t* theap) {
   #elif MI_TLS_MODEL_DYNAMIC_WIN32
     _mi_win_tls_slots_init();
     mi_win_tls_slot_set(_mi_theap_cached_slot, _mi_theap_cached_expansion_slot, theap);
+  #elif MI_TLS_MODEL_DYNAMIC_HAIKU
+    mi_haiku_tls_slots_init();
+    __mi_theap_cached = theap;
+    if (_mi_theap_cached_slot!=0) mi_prim_tls_slot_set(_mi_theap_cached_slot, theap);
   #elif MI_TLS_MODEL_DYNAMIC_PTHREADS
     _mi_tls_keys_init();
     if (_mi_theap_cached_key!=0) pthread_setspecific(_mi_theap_cached_key, theap);
@@ -796,6 +824,10 @@ void _mi_theap_default_set(mi_theap_t* theap)  {
   #elif MI_TLS_MODEL_DYNAMIC_WIN32
     _mi_win_tls_slots_init();
     mi_win_tls_slot_set(_mi_theap_default_slot, _mi_theap_default_expansion_slot, theap);
+  #elif MI_TLS_MODEL_DYNAMIC_HAIKU
+    mi_haiku_tls_slots_init();
+    __mi_theap_default = theap;
+    if (_mi_theap_default_slot!=0) mi_prim_tls_slot_set(_mi_theap_default_slot, theap);
   #elif MI_TLS_MODEL_DYNAMIC_PTHREADS
     _mi_tls_keys_init();
     if (_mi_theap_default_key!=0) pthread_setspecific(_mi_theap_default_key, theap);

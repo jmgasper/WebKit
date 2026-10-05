@@ -73,6 +73,10 @@ public:
     GIcon* icon() const { return m_icon.get(); };
 #endif
 
+#if PLATFORM(HAIKU)
+    WEBCORE_EXPORT static RefPtr<Icon> create(RefPtr<NativeImage>&&);
+#endif
+
 #if PLATFORM(COCOA)
     WEBCORE_EXPORT static RefPtr<Icon> create(CocoaImage *);
     WEBCORE_EXPORT static RefPtr<Icon> create(PlatformImagePtr&&);
@@ -95,6 +99,9 @@ private:
 #elif USE(GLIB)
     explicit Icon(GRefPtr<GIcon>&&);
     GRefPtr<GIcon> m_icon;
+#elif PLATFORM(HAIKU)
+    explicit Icon(RefPtr<NativeImage>&&);
+    RefPtr<NativeImage> m_image;
 #endif
 };
 

@@ -108,6 +108,9 @@ private:
 #endif
 #if USE(CURL)
     Box<Variant<Vector<uint8_t>, FileSystem::MappedFileData>> m_buffer;
+#if PLATFORM(HAIKU)
+    Box<FileSystem::FileHandle> m_fileHandle;
+#endif
 #endif
     bool m_isMap { false };
 };

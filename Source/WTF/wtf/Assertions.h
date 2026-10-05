@@ -56,6 +56,11 @@
 #include <wtf/spi/darwin/ReasonSPI.h>
 #endif
 
+#if OS(HAIKU)
+#include <kernel/OS.h>
+#include <stdio.h>
+#endif
+
 #if USE(OS_LOG)
 #include <os/log.h>
 #endif
@@ -350,6 +355,17 @@ WTF_EXPORT_PRIVATE bool WTFIsDebuggerAttached(void);
     WTFBreakpointTrapUnderConstexprContext(); \
     __builtin_unreachable(); \
 } while (0)
+#elif PLATFORM(HAIKU)
+
+#ifdef __cplusplus
+// Some WebKit namespaces define their own debugger or abort function. We need
+// to clarify which one to call.
+#define CRASH() (::debugger(__PRETTY_FUNCTION__), std::abort())
+#else
+#define CRASH() (debugger(__PRETTY_FUNCTION__), abort())
+#endif
+
+#define CRASH_UNDER_CONSTEXPR_CONTEXT() WTFBreakpointTrapUnderConstexprContext()
 #elif !ENABLE(DEVELOPER_MODE) && !OS(DARWIN)
 #ifdef __cplusplus
 #define CRASH() std::abort()
@@ -1054,12 +1070,20 @@ NO_RETURN_DUE_TO_CRASH ALWAYS_INLINE void WTFCrashWithInfo(int line, const char*
 
 #else
 
-inline void WTFCrashWithInfo(int, const char*, const char*)
+inline void WTFCrashWithInfo(int line, const char* filename, const char* function)
 #if COMPILER(CLANG)
     __attribute__((optnone))
 #endif
 {
+#if PLATFORM(HAIKU)
+    char* str = NULL;
+    asprintf(&str, "%s:%d: %s", filename, line, function);
+    debugger(str);
+    free(str);
+    abort();
+#else
     CRASH();
+#endif
 }
 
 #endif

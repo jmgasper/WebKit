@@ -29,7 +29,10 @@ webkit_platform_header: "IPCSemaphore.h"
 #if OS(WINDOWS)
     Win32Handle win32Handle();
 #endif
-#if USE(UNIX_DOMAIN_SOCKETS)
+#if OS(HAIKU)
+    [Validator='IPC::Semaphore::isValidDescriptor(*duplicateDescriptor)'] UnixFileDescriptor duplicateDescriptor();
+#endif
+#if USE(UNIX_DOMAIN_SOCKETS) && !OS(HAIKU)
     UnixFileDescriptor duplicateDescriptor();
 #endif
 };

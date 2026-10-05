@@ -109,7 +109,7 @@ static Vector<unsigned> serializeActions(const Vector<ContentExtensionRule>& rul
         // of the rule when we process them later.
         //
         // If we're tracking rule identifiers, we also cannot combine actions since the identifiers are unique.
-        if (!rule.trigger().conditions.isEmpty() || std::holds_alternative<IgnoreFollowingRulesAction>(actionData) || std::holds_alternative<ReportIdentifierAction>(actionData)) {
+        if (!rule.trigger().conditions.isEmpty() || !rule.trigger().urlConditionGroups.isEmpty() || std::holds_alternative<IgnoreFollowingRulesAction>(actionData) || std::holds_alternative<ReportIdentifierAction>(actionData)) {
             actionLocations.append(actions.size());
 
             actions.append(actionData.index());
@@ -322,20 +322,19 @@ std::error_code compileRuleList(ContentExtensionCompilationClient& client, Strin
         // High bits are used for flags. This should match how they are used in DFABytecodeCompiler::compileNode.
         ASSERT(!(~ActionFlagMask & (static_cast<uint64_t>(trigger.flags) << 32)));
         uint64_t actionLocationAndFlags = (static_cast<uint64_t>(trigger.flags) << 32) | static_cast<uint64_t>(actionLocations[ruleIndex]);
-        URLFilterParser::ParseStatus status = URLFilterParser::Ok;
-        status = urlFilterParser.addPattern(trigger.urlFilter, trigger.urlFilterIsCaseSensitive, actionLocationAndFlags);
-        if (status == URLFilterParser::MatchesEverything) {
-            universalActions.add(actionLocationAndFlags);
-            status = URLFilterParser::Ok;
-        }
-        if (status != URLFilterParser::Ok) {
-            dataLogLn("Error while parsing "_s, trigger.urlFilter, ": "_s, URLFilterParser::statusString(status));
+        auto status = compileTriggerURLFilters(trigger, actionLocations[ruleIndex], urlFilterParser, universalActions);
+        if (status != URLFilterParser::Ok)
             return ContentExtensionError::JSONInvalidRegex;
-        }
+        status = compileURLConditions(trigger.urlConditionGroups, actionLocations[ruleIndex],
+            urlFilterParser, universalActions, topURLFilterParser, topURLUniversalActions,
+            frameURLFilterParser, frameURLUniversalActions);
+        if (status != URLFilterParser::Ok)
+            return ContentExtensionError::JSONInvalidRegex;
 
         for (const String& condition : trigger.conditions) {
             switch (static_cast<ActionCondition>(trigger.flags & ActionConditionMask)) {
             case ActionCondition::None:
+            case ActionCondition::Conjunction:
                 ASSERT_NOT_REACHED();
                 break;
             case ActionCondition::IfTopURL:

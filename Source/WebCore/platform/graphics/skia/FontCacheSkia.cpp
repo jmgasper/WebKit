@@ -30,6 +30,7 @@
 #include "FontCustomPlatformData.h"
 #include "FontDescription.h"
 #include "StyleFontSizeFunctions.h"
+#include <limits>
 #include <wtf/Assertions.h>
 #include <wtf/text/CString.h>
 #include <wtf/text/CharacterProperties.h>
@@ -111,6 +112,13 @@ static SkFontStyle skiaFontStyle(const FontDescription& fontDescription)
     return SkFontStyle(skWeight, skWidth, skSlant);
 }
 
+static unsigned skiaFontStyleCacheKey(const SkFontStyle& style)
+{
+    return static_cast<unsigned>(style.weight())
+        | static_cast<unsigned>(style.width()) << 11
+        | static_cast<unsigned>(style.slant()) << 15;
+}
+
 static std::pair<bool, bool> computeSynthesisProperties(const SkTypeface& typeface, const FontDescription& fontDescription, OptionSet<FontLookupOptions> synthesisOptions)
 {
     if (FontPlatformData::skiaTypefaceHasAnySupportedColorTable(typeface))
@@ -189,13 +197,29 @@ Ref<Font> FontCache::lastResortFallbackFont(const FontDescription& fontDescripti
 
     // Passing nullptr as family name makes Skia use a weak match.
     auto typeface = fontManager().matchFamilyStyle(nullptr, skiaFontStyle(fontDescription));
+#if PLATFORM(HAIKU)
+    // A style no installed face offers makes both lookups above fail; any
+    // real face beats the empty one.
+    for (auto* family : { "sans-serif", "monospace" }) {
+        if (!typeface)
+            typeface = fontManager().matchFamilyStyle(family, SkFontStyle());
+    }
+#endif
     if (!typeface) {
         // LastResort is guaranteed to be non-null, so fallback to empty font with not glyphs.
         typeface = SkTypeface::MakeEmpty();
     }
 
+    auto size = fontDescription.usedSize();
+#if PLATFORM(HAIKU)
+    // The empty face at size zero is the font cache's empty hash key: using it
+    // for a zero-size element (common in ad and icon CSS) crashed the web
+    // process in FontCache::fontForPlatformData. It draws nothing at any size.
+    if (!size && !typeface->countGlyphs())
+        size = std::numeric_limits<float>::min();
+#endif
     auto [syntheticBold, syntheticOblique] = computeSynthesisProperties(*typeface, fontDescription, { });
-    FontPlatformData platformData(WTF::move(typeface), fontDescription.usedSize(), syntheticBold, syntheticOblique,
+    FontPlatformData platformData(WTF::move(typeface), size, syntheticBold, syntheticOblique,
         fontDescription.orientation(), fontDescription.widthVariant(), fontDescription.textRenderingMode(), computeFeatures(fontDescription, { }));
     return fontForPlatformData(platformData);
 }
@@ -417,7 +441,10 @@ std::unique_ptr<FontPlatformData> FontCache::createFontPlatformData(const FontDe
         return nullptr;
     auto familyName = getFamilyNameStringFromFamily(family);
     auto skFontStyle = skiaFontStyle(fontDescription);
-    auto typeface = fontManager().matchFamilyStyle(familyName.utf8().legacyCStringPointer(), skFontStyle);
+    auto addResult = m_skiaMatchedTypefaceCache.add({ familyName, skiaFontStyleCacheKey(skFontStyle) }, nullptr);
+    if (addResult.isNewEntry)
+        addResult.iterator->value = fontManager().matchFamilyStyle(familyName.utf8().legacyCStringPointer(), skFontStyle);
+    auto typeface = addResult.iterator->value;
     if (!typeface)
         return nullptr;
 
@@ -449,6 +476,7 @@ void FontCache::platformReleaseNoncriticalMemory()
 
 void FontCache::platformInvalidate()
 {
+    m_skiaMatchedTypefaceCache.clear();
 }
 
 void FontCache::platformPurgeInactiveFontData()

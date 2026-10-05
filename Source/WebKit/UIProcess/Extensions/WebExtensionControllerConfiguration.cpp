@@ -49,12 +49,14 @@ WebExtensionControllerConfiguration::WebExtensionControllerConfiguration(const W
 {
 }
 
-#if PLATFORM(COCOA)
 bool WebExtensionControllerConfiguration::operator==(const WebExtensionControllerConfiguration& other) const
 {
-    return this == &other || (m_identifier == other.m_identifier && m_storageDirectory == other.m_storageDirectory && m_webViewConfiguration == other.m_webViewConfiguration && m_defaultWebsiteDataStore == other.m_defaultWebsiteDataStore);
-}
+    return this == &other || (m_identifier == other.m_identifier && m_storageDirectory == other.m_storageDirectory
+#if PLATFORM(COCOA)
+        && m_webViewConfiguration == other.m_webViewConfiguration
 #endif
+        && m_defaultWebsiteDataStore == other.m_defaultWebsiteDataStore);
+}
 
 WebsiteDataStore& WebExtensionControllerConfiguration::defaultWebsiteDataStore() const
 {

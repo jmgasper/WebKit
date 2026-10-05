@@ -39,6 +39,13 @@
 #include "RenderObjectInlines.h"
 #include "TextBoxTrimmer.h"
 
+#if PLATFORM(HAIKU)
+namespace WebCore {
+// Layout reuse for flex and grid items lives in RenderBlock.cpp.
+void summitSetNeedsLayoutByContainer(RenderBox&);
+}
+#endif
+
 namespace WebCore {
 namespace LayoutIntegration {
 
@@ -57,12 +64,20 @@ static void layoutRendererWithOverridingBorderBoxSize(RenderBox& renderer, std::
 {
     if (overridingBorderBoxLogicalWidth) {
         renderer.setOverridingBorderBoxLogicalWidth(*overridingBorderBoxLogicalWidth);
+#if PLATFORM(HAIKU)
+        summitSetNeedsLayoutByContainer(renderer);
+#else
         renderer.setNeedsLayout(MarkingBehavior::MarkOnlyThis);
+#endif
     }
 
     if (overridingBorderBoxLogicalHeight) {
         renderer.setOverridingBorderBoxLogicalHeight(*overridingBorderBoxLogicalHeight);
+#if PLATFORM(HAIKU)
+        summitSetNeedsLayoutByContainer(renderer);
+#else
         renderer.setNeedsLayout(MarkingBehavior::MarkOnlyThis);
+#endif
     }
 
     renderer.layoutIfNeeded();
@@ -101,7 +116,6 @@ void layoutGridItemWithFormattingContext(const Layout::ElementBox& box, std::opt
     // against it below rather than against the grid container's content box.
     renderer->setGridAreaContentLogicalWidth(gridAreaInlineSize);
     layoutRendererAndUpdateBoxGeometry(box, renderer.get(), overridingBorderBoxLogicalWidth, overridingBorderBoxLogicalHeight, gridAreaInlineSize, layoutState);
-    renderer->clearGridAreaContentSize();
 }
 
 static inline void populateRootRendererWithFloatsFromIFC(auto& rootBlockContainer, auto& placedFloats)

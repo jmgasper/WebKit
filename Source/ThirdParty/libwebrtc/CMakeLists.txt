@@ -25,7 +25,9 @@ endif ()
 # use-after-free of the GPU-process encoder callback blocks.
 add_compile_options("$<$<COMPILE_LANGUAGE:OBJC,OBJCXX>:-fobjc-arc>")
 
-if (NOT APPLE)
+# Haiku: no ALSA (WebKit's LibWebRTCAudioModule drives audio), no libevent
+# (the stdlib task queue is used), and the bundled Opus is built below.
+if (NOT APPLE AND NOT HAIKU)
     find_package(LibEvent)
     if (NOT LIBEVENT_FOUND)
         message(FATAL_ERROR "libevent is needed for USE_LIBWEBRTC.")
@@ -2516,27 +2518,54 @@ else ()
         Source/third_party/libyuv/source/scale.cc
         Source/third_party/libyuv/source/scale_neon.cc
         Source/third_party/libyuv/source/scale_neon64.cc
-
-        Source/webrtc/modules/audio_device/linux/alsasymboltable_linux.cc
-        Source/webrtc/modules/audio_device/linux/audio_device_alsa_linux.cc
-        Source/webrtc/modules/audio_device/linux/audio_mixer_manager_alsa_linux.cc
-        Source/webrtc/modules/audio_device/linux/latebindingsymboltable_linux.cc
     )
 
-    find_package(LibPulse)
-    if (NOT LIBPULSE_FOUND)
-        message(STATUS "libpulse is not found, not building support.")
-    else()
+    if (NOT HAIKU)
         list(APPEND webrtc_SOURCES
-            Source/webrtc/modules/audio_device/linux/audio_device_pulse_linux.cc
-            Source/webrtc/modules/audio_device/linux/audio_mixer_manager_pulse_linux.cc
-            Source/webrtc/modules/audio_device/linux/pulseaudiosymboltable_linux.cc
+            Source/webrtc/modules/audio_device/linux/alsasymboltable_linux.cc
+            Source/webrtc/modules/audio_device/linux/audio_device_alsa_linux.cc
+            Source/webrtc/modules/audio_device/linux/audio_mixer_manager_alsa_linux.cc
+            Source/webrtc/modules/audio_device/linux/latebindingsymboltable_linux.cc
         )
+
+        find_package(LibPulse)
+        if (NOT LIBPULSE_FOUND)
+            message(STATUS "libpulse is not found, not building support.")
+        else()
+            list(APPEND webrtc_SOURCES
+                Source/webrtc/modules/audio_device/linux/audio_device_pulse_linux.cc
+                Source/webrtc/modules/audio_device/linux/audio_mixer_manager_pulse_linux.cc
+                Source/webrtc/modules/audio_device/linux/pulseaudiosymboltable_linux.cc
+            )
+        endif ()
     endif ()
 endif ()
 
-if (APPLE)
+# Haiku, like Apple, leaves out the tests, tools and fuzzers.
+if (APPLE OR HAIKU)
     list(REMOVE_ITEM webrtc_SOURCES ${webrtc_SOURCES_NOT_IN_XCODE})
+endif ()
+
+if (HAIKU)
+    # The WebM muxer, for MediaRecorder (MediaRecorderPrivateHaiku).
+    list(APPEND webrtc_SOURCES
+        Source/third_party/libwebm/mkvmuxer/mkvmuxer.cc
+        Source/third_party/libwebm/mkvmuxer/mkvmuxerutil.cc
+        Source/third_party/libwebm/mkvmuxer/mkvwriter.cc
+    )
+    # H.264 encoding through the system's OpenH264, loaded when first needed
+    # (h264_encoder_haiku.cc); the API headers are OpenH264 2.4.1's.
+    list(APPEND webrtc_SOURCES
+        Source/webrtc/modules/video_coding/codecs/h264/h264_encoder_haiku.cc
+        Source/webrtc/modules/video_coding/codecs/h264/h264_encoder_impl.cc
+    )
+    set_source_files_properties(
+        Source/webrtc/modules/video_coding/codecs/h264/h264_encoder_haiku.cc
+        Source/webrtc/modules/video_coding/codecs/h264/h264_encoder_impl.cc
+        PROPERTIES COMPILE_DEFINITIONS WEBRTC_USE_H264 SKIP_PRECOMPILE_HEADERS ON)
+endif ()
+
+if (APPLE)
     add_library(webrtc SHARED ${webrtc_SOURCES})
 else ()
     add_library(webrtc STATIC ${webrtc_SOURCES})
@@ -2636,6 +2665,29 @@ if (APPLE)
     else ()
         target_compile_definitions(webrtc PRIVATE WEBRTC_IOS)
     endif ()
+elseif (HAIKU)
+    # POSIX without WEBRTC_LINUX: select() socket server, no prctl, epoll or
+    # /proc. BoringSSL's symbols get a prefix: the same images load the
+    # system's OpenSSL (curl, WebCrypto), and an unprefixed archive member
+    # could satisfy a reference meant for it.
+    target_compile_definitions(webrtc PRIVATE
+        BORINGSSL_PREFIX=webrtc_bssl
+        WEBRTC_ARCH_LITTLE_ENDIAN
+    )
+    if (WTF_CPU_ARM64)
+        # No getauxval(): take the CPU features the compiler targets (NEON;
+        # the Raspberry Pi 4's Cortex-A72 has no crypto extensions).
+        target_compile_definitions(webrtc PRIVATE OPENSSL_STATIC_ARMCAP)
+    endif ()
+    # getifaddrs() and endian.h are in libbsd.
+    find_path(HAIKU_BSD_HEADERS_DIR ifaddrs.h PATHS /boot/system/develop/headers/bsd NO_DEFAULT_PATH)
+    if (HAIKU_BSD_HEADERS_DIR)
+        target_include_directories(webrtc SYSTEM PRIVATE ${HAIKU_BSD_HEADERS_DIR})
+    endif ()
+    target_include_directories(webrtc PRIVATE
+        Source/third_party/libvpx/source/libvpx
+        Source/third_party/libwebm
+    )
 else ()
     target_compile_definitions(webrtc PRIVATE
         SCTP_PROCESS_LEVEL_LOCKS
@@ -2712,6 +2764,8 @@ if (APPLE)
     if (ENABLE_AV1)
         target_link_libraries(webrtc aom dav1d)
     endif ()
+elseif (HAIKU)
+    target_link_libraries(webrtc opus bsd network)
 else ()
     target_link_libraries(webrtc ${LIBEVENT_LIBRARY})
     target_link_libraries(webrtc ${LIBOPUS_LIBRARY})
@@ -2806,7 +2860,12 @@ target_include_directories(libsrtp PRIVATE
     Source/third_party/libsrtp/include
 )
 
-if (APPLE)
+if (HAIKU)
+    target_compile_definitions(libsrtp PRIVATE BORINGSSL_PREFIX=webrtc_bssl)
+endif ()
+
+# Opus is built from the bundled sources on Apple and Haiku.
+if (APPLE OR HAIKU)
     set(opus_SOURCES
         Source/third_party/opus/src/celt/kiss_fft.c
         Source/third_party/opus/src/celt/rate.c
@@ -3022,7 +3081,19 @@ if (APPLE)
             OPUS_ARM_PRESUME_NEON_INTR
         )
     endif ()
+    if (HAIKU AND WTF_CPU_X86_64)
+        # SSE and SSE2 are part of x86_64; the SSE4.1 file is left to its
+        # run-time check, which this build does not do.
+        target_compile_definitions(opus PRIVATE
+            OPUS_X86_MAY_HAVE_SSE
+            OPUS_X86_MAY_HAVE_SSE2
+            OPUS_X86_PRESUME_SSE
+            OPUS_X86_PRESUME_SSE2
+        )
+    endif ()
+endif ()
 
+if (APPLE)
     add_library(yuv STATIC
         Source/third_party/libvpx/source/libvpx/third_party/libyuv/source/scale.cc
         Source/third_party/libvpx/source/libvpx/third_party/libyuv/source/compare.cc
@@ -3626,7 +3697,32 @@ if (APPLE)
     )
 endif ()
 
-if (WTF_CPU_X86_64)
+if (HAIKU)
+    # Each SIMD file gets its own instruction set, as in libvpx's own build:
+    # the run-time dispatch (vpx_dsp_rtcd) chooses what the CPU has, so the
+    # rest of the library stays baseline x86_64 or ARMv8.0 (the Raspberry Pi
+    # 4's Cortex-A72 has no dot product instructions; vpx_config.h turns that
+    # code off on Haiku).
+    if (WTF_CPU_ARM64)
+        list(FILTER vpx_SOURCES EXCLUDE REGEX "_neon_dotprod\\.c$")
+    endif ()
+    foreach (_vpx_source IN LISTS vpx_SOURCES)
+        if (_vpx_source MATCHES "_avx2\\.c$")
+            set_source_files_properties(${_vpx_source} PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
+        elseif (_vpx_source MATCHES "_avx\\.c$")
+            set_source_files_properties(${_vpx_source} PROPERTIES COMPILE_OPTIONS "-mavx")
+        elseif (_vpx_source MATCHES "_sse4\\.c$")
+            set_source_files_properties(${_vpx_source} PROPERTIES COMPILE_OPTIONS "-msse4.1")
+        elseif (_vpx_source MATCHES "_ssse3\\.c$")
+            set_source_files_properties(${_vpx_source} PROPERTIES COMPILE_OPTIONS "-mssse3")
+        endif ()
+    endforeach ()
+    if (WTF_CPU_X86_64)
+        add_library(vpx OBJECT ${vpx_SOURCES} ${vpx_ASSEMBLY_SOURCES})
+    else ()
+        add_library(vpx OBJECT ${vpx_SOURCES})
+    endif ()
+elseif (WTF_CPU_X86_64)
     add_library(vpx OBJECT ${vpx_SOURCES} ${vpx_ASSEMBLY_SOURCES})
     target_compile_options(vpx PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-mavx2>)
     target_compile_options(vpx PRIVATE $<$<COMPILE_LANGUAGE:C>:-mavx2>)
@@ -3637,6 +3733,16 @@ elseif (WTF_CPU_ARM64)
 endif ()
 
 target_include_directories(vpx PRIVATE ${vpx_INCLUDE_DIRECTORIES})
+
+if (HAIKU)
+    # Kept inside the engine: the processes also load the system's libvpx,
+    # libopus and libsrtp users (FFmpeg through the Media Kit), which must not
+    # bind to these copies.
+    set_target_properties(vpx libsrtp PROPERTIES C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden)
+    if (TARGET opus)
+        set_target_properties(opus PROPERTIES C_VISIBILITY_PRESET hidden)
+    endif ()
+endif ()
 target_compile_options(vpx PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-cast-align> $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-incompatible-pointer-types>)
 
 # libaom static library, mirrors libwebrtc.xcodeproj's libaom target.

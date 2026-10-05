@@ -42,6 +42,22 @@
 
 namespace WebKit {
 
+// C++ bindings retain the existing Cocoa implementations.
+void WebExtensionAPIWindowsEvent::addListener(WebCore::FrameIdentifier frame, RefPtr<WebExtensionCallbackHandler> listener, RefPtr<JSON::Value> info, String& exception)
+{
+    auto infoValue = info ? parseJSON(info->toJSONString().createNSString().get(), JSONOptions::FragmentsAllowed) : nil;
+    auto infoObject = dynamic_objc_cast<NSDictionary>(infoValue);
+    if (infoValue && !infoObject) {
+        exception = "options must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    addListener(frame, WTF::move(listener), infoObject, &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+
 void WebExtensionAPIWindowsEvent::invokeListenersWithArgument(id argument, OptionSet<WindowTypeFilter> windowTypeFilter)
 {
     if (m_listeners.isEmpty())

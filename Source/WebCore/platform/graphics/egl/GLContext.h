@@ -25,8 +25,20 @@
 #include <wtf/TZoneMalloc.h>
 #include <wtf/ThreadSafeWeakPtr.h>
 
-#if !PLATFORM(GTK) && !PLATFORM(WPE)
+#if PLATFORM(HAIKU) && defined(__egl_h_) && !defined(EPOXY_EGL_H)
+// ANGLE's EGL headers came first (WebGL's translation units, as on GTK and
+// WPE), and epoxy's cannot follow them. Mesa's Haiku EGL platform declares
+// EGLNativeWindowType as khronos_uintptr_t, which is this type.
+typedef unsigned long GLNativeWindowType;
+#elif !PLATFORM(GTK) && !PLATFORM(WPE)
+// Haiku's libepoxy declares the Khronos types itself rather than including
+// KHR/khrplatform.h, so whichever of the two is seen first wins and the other
+// conflicts. Everywhere else in WebCore epoxy is preferred when it is in use.
+#if USE(LIBEPOXY)
+#include <epoxy/egl.h>
+#else
 #include <EGL/eglplatform.h>
+#endif
 typedef EGLNativeWindowType GLNativeWindowType;
 #else
 typedef uint64_t GLNativeWindowType;

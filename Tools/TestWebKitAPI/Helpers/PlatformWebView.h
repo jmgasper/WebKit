@@ -63,6 +63,9 @@ typedef UIWindow *PlatformWindow;
 #elif PLATFORM(GTK)
 typedef WKViewRef PlatformWKView;
 typedef GtkWidget *PlatformWindow;
+#elif PLATFORM(HAIKU)
+typedef BView* PlatformWKView;
+typedef BWindow* PlatformWindow;
 #elif PLATFORM(WPE)
 typedef WKViewRef PlatformWKView;
 typedef void* PlatformWindow;

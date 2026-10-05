@@ -26,12 +26,19 @@
 #include "config.h"
 #include "Exception.h"
 
+#include "ErrorInstance.h"
+
 #include "Interpreter.h"
 #include "JSCJSValueInlines.h"
 #include "JSObjectInlines.h"
 #include "StructureCreateInlines.h"
 #include "JSWebAssemblyException.h"
 #include "WasmTag.h"
+#if PLATFORM(HAIKU)
+#include "JSString.h"
+#include <cstdio>
+#include <cstdlib>
+#endif
 
 namespace JSC {
 
@@ -83,10 +90,53 @@ void Exception::finishCreation(VM& vm, StackCaptureAction action)
     Base::finishCreation(vm);
 
     Vector<StackFrame> stackTrace;
-    if (action == StackCaptureAction::CaptureStack)
+    if (action == StackCaptureAction::CaptureStack) {
+#if PLATFORM(HAIKU)
+        // A thrown Error has just walked the stack for its own trace (a
+        // SyntaxError from JSON.parse, `throw new Error`): its frames serve
+        // the exception too, as Chrome reports an uncaught error with the
+        // stack of where it was made. Walking it twice made each throw from
+        // 60 calls deep cost 9 us; pages that throw by the thousand (a
+        // content blocker trying JSON.parse on every response, issue #22)
+        // spent most of a second in it.
+        auto* error = dynamicDowncast<ErrorInstance>(m_value.get());
+        if (auto* errorStack = error ? error->stackTrace() : nullptr; errorStack && !errorStack->isEmpty()) {
+            stackTrace.reserveInitialCapacity(std::min<size_t>(errorStack->size(), Options::exceptionStackTraceLimit()));
+            for (auto& frame : *errorStack) {
+                if (stackTrace.size() >= Options::exceptionStackTraceLimit())
+                    break;
+                stackTrace.append(frame);
+            }
+            vm.writeBarrier(this);
+        } else
+#endif
         vm.interpreter.getStackTrace(this, stackTrace, 0, Options::exceptionStackTraceLimit());
+    }
     m_stack = WTF::move(stackTrace);
     vm.heap.reportExtraMemoryAllocated(this, m_stack.sizeInBytes());
+#if PLATFORM(HAIKU)
+    // SUMMIT_JS_THROW_TRACE=N: every Nth exception thrown in this process,
+    // with its value and where it was thrown (pages that throw thousands).
+    static const unsigned traceEvery = [] {
+        const char* value = getenv("SUMMIT_JS_THROW_TRACE");
+        return value ? static_cast<unsigned>(strtoul(value, nullptr, 10)) : 0u;
+    }();
+    if (traceEvery) [[unlikely]] {
+        static unsigned thrown;
+        if (!(++thrown % traceEvery)) {
+            String name = "value"_s;
+            String value;
+            if (auto* error = dynamicDowncast<ErrorInstance>(m_value.get())) {
+                name = error->sanitizedNameString(error->realm());
+                value = error->sanitizedMessageString(error->realm());
+            } else if (m_value.get().isString())
+                value = asString(m_value.get())->tryGetValue();
+            fprintf(stderr, "Summit throw: %u thrown, %s: %s\n", thrown, name.utf8().legacyCStringPointer(), value.left(120).utf8().legacyCStringPointer());
+            for (size_t i = 0; i < m_stack.size() && i < 24; ++i)
+                fprintf(stderr, "Summit throw:   %s\n", m_stack[i].toString(vm).left(200).utf8().legacyCStringPointer());
+        }
+    }
+#endif
 }
 
 #if ENABLE(WEBASSEMBLY)

@@ -63,6 +63,10 @@
 #include <wtf/ProcessID.h>
 #include <wtf/SystemTracing.h>
 #include <wtf/TZoneMallocInlines.h>
+#if PLATFORM(HAIKU)
+#include <cstdio>
+#include <cstdlib>
+#endif
 #include <wtf/text/MakeString.h>
 #include <wtf/text/TextStream.h>
 
@@ -91,6 +95,14 @@ void AsyncScrollingCoordinator::scrollingStateTreePropertiesChanged()
 
 void AsyncScrollingCoordinator::scrollingThreadAddedPendingUpdate()
 {
+#if PLATFORM(HAIKU)
+    static bool traceLayerUpdates = [] {
+        const char* value = std::getenv("SUMMIT_LAYER_UPDATE_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    if (traceLayerUpdates)
+        std::fprintf(stderr, "Summit layer update: scrolling-thread-pending\n");
+#endif
     scheduleRenderingUpdate();
 }
 

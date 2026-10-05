@@ -40,7 +40,8 @@ std::optional<EventSignalPair> createEventSignalPair();
 // The wait operation will be interrupted if the Signal instance is
 // destroyed (including if the remote process that owns it crashes or is
 // killed).
-// FIXME: Write proper interruptible implementations for non-COCOA platforms.
+// Haiku detects peer closure within 100 ms, draining queued signals first.
+// FIXME: Write proper interruptible implementations for other non-COCOA platforms.
 class Signal {
     WTF_MAKE_TZONE_ALLOCATED_INLINE(Signal);
     WTF_MAKE_NONCOPYABLE(Signal);
@@ -59,6 +60,10 @@ public:
     }
 
     const Semaphore& semaphore() const LIFETIME_BOUND { return m_semaphore; }
+#if OS(HAIKU)
+    UnixFileDescriptor takeConnection() { return WTF::move(m_connection); }
+    static bool isValidConnection(const UnixFileDescriptor&);
+#endif
 #endif
 
 private:
@@ -70,6 +75,11 @@ private:
     Signal(MachSendRight&& sendRight)
         : m_sendRight(WTF::move(sendRight))
     { }
+#elif OS(HAIKU)
+    Signal(Semaphore&& semaphore, UnixFileDescriptor&& connection)
+        : m_semaphore(WTF::move(semaphore))
+        , m_connection(WTF::move(connection))
+    { }
 #else
     Signal(Semaphore&& semaphore)
         : m_semaphore(WTF::move(semaphore))
@@ -80,6 +90,9 @@ private:
     MachSendRight m_sendRight;
 #else
     Semaphore m_semaphore;
+#if OS(HAIKU)
+    UnixFileDescriptor m_connection;
+#endif
 #endif
 };
 
@@ -106,6 +119,11 @@ public:
 
     bool wait();
     bool waitFor(Timeout);
+#elif OS(HAIKU)
+    Event(Event&&) = default;
+    Event& operator=(Event&&) = default;
+    bool wait();
+    bool waitFor(Timeout);
 #else
     Event(Event&& other) = default;
     Event& operator=(Event&& other) = default;
@@ -128,6 +146,11 @@ private:
     Event(mach_port_t port)
         : m_receiveRight(port)
     { }
+#elif OS(HAIKU)
+    Event(Semaphore&& semaphore, UnixFileDescriptor&& connection)
+        : m_semaphore(WTF::move(semaphore))
+        , m_connection(WTF::move(connection))
+    { }
 #else
     Event(Semaphore&& semaphore)
         : m_semaphore(WTF::move(semaphore))
@@ -139,6 +162,10 @@ private:
     bool m_peerDied { false };
 #else
     Semaphore m_semaphore;
+#if OS(HAIKU)
+    UnixFileDescriptor m_connection;
+    bool m_peerDied { false };
+#endif
 #endif
 };
 
@@ -147,7 +174,7 @@ struct EventSignalPair {
     Signal signal;
 };
 
-#if !PLATFORM(COCOA)
+#if !PLATFORM(COCOA) && !PLATFORM(HAIKU)
 inline std::optional<EventSignalPair> createEventSignalPair()
 {
     Semaphore event;

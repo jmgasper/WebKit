@@ -39,6 +39,10 @@ typedef struct CGRect CGRect;
 typedef struct CGRect NSRect;
 #endif // PLATFORM(MAC)
 
+#if PLATFORM(HAIKU)
+class BRect;
+#endif
+
 #if USE(CAIRO)
 typedef struct _cairo_rectangle cairo_rectangle_t;
 #endif
@@ -235,6 +239,11 @@ public:
 #if USE(CG)
     WEBCORE_EXPORT FloatRect(const CGRect&);
     WEBCORE_EXPORT operator CGRect() const;
+#endif
+
+#if PLATFORM(HAIKU)
+    FloatRect(const BRect&);
+    operator BRect() const;
 #endif
 
 #if USE(SKIA)

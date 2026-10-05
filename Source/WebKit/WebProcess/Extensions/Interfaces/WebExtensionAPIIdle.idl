@@ -1,0 +1,12 @@
+/* Copyright (C) 2026 KunanyiOS contributors. SPDX-License-Identifier: BSD-2-Clause */
+
+[
+    Conditional=WK_WEB_EXTENSIONS,
+    MainWorldOnly,
+    ReturnsPromiseWhenCallbackIsOmitted,
+    UseCPPAPI
+] interface WebExtensionAPIIdle {
+    [RaisesStringException] void queryState(double detectionIntervalInSeconds, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void setDetectionInterval(double intervalInSeconds);
+    readonly attribute WebExtensionAPIEvent onStateChanged;
+};

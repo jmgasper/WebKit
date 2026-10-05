@@ -28,6 +28,7 @@
 
 #include "config.h"
 #include "LayerTreeHost.h"
+#include <WebCore/LayerTreeAsTextOptions.h>
 
 #if USE(COORDINATED_GRAPHICS)
 #include "CoordinatedSceneState.h"
@@ -53,11 +54,20 @@
 #include <WebCore/SkiaPaintingEngine.h>
 #include <WebCore/ThreadedScrollingTree.h>
 #include <WebCore/WindowEventLoop.h>
+#include <wtf/Scope.h>
 #include <wtf/SetForScope.h>
+#include <wtf/MonotonicTime.h>
 #include <wtf/SystemTracing.h>
 #include <wtf/TZoneMallocInlines.h>
+#include <wtf/WallTime.h>
 #include <wtf/glib/RunLoopSourcePriority.h>
 #include <wtf/text/StringToIntegerConversion.h>
+#if PLATFORM(HAIKU)
+#include <cstdio>
+#include <cstdlib>
+#include <unistd.h>
+#include <WebCore/RenderingStallHaiku.h>
+#endif
 
 namespace WebKit {
 using namespace WebCore;
@@ -91,7 +101,15 @@ std::unique_ptr<LayerTreeHost> LayerTreeHost::create(WebPage& webPage)
 LayerTreeHost::LayerTreeHost(WebPage& webPage)
     : m_webPage(webPage)
     , m_sceneState(CoordinatedSceneState::create())
+#if PLATFORM(HAIKU)
+    , m_stallWatchdogHaiku(RunLoop::mainSingleton(), "LayerTreeHost::StallWatchdog"_s, this, &LayerTreeHost::checkRenderingStallHaiku)
+    , m_livenessTimerHaiku(RunLoop::mainSingleton(), "LayerTreeHost::Liveness"_s, this, &LayerTreeHost::checkLivenessHaiku)
+    , m_lastRenderingUpdateHaiku(MonotonicTime::now())
+#endif
 {
+#if PLATFORM(HAIKU)
+    m_livenessTimerHaiku.startRepeating(1_s);
+#endif
     {
         auto& rootLayer = m_sceneState->rootLayer();
 #if ENABLE(DAMAGE_TRACKING)
@@ -148,16 +166,128 @@ void LayerTreeHost::scheduleRenderingUpdate()
 {
     WTFEmitSignpost(this, LayerTreeHostScheduleRenderingUpdate, "isWaitingForRenderer %s", m_isWaitingForRenderer ? "yes" : "no");
 
+#if PLATFORM(HAIKU)
+    m_lastScheduleRequestHaiku = MonotonicTime::now();
+    static bool traceLayerUpdates = [] {
+        const char* value = std::getenv("SUMMIT_LAYER_UPDATE_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    if (traceLayerUpdates)
+        std::fprintf(stderr, "Summit layer update: schedule waiting=%d queued=%d frozen=%d suspended=%d\n",
+            m_isWaitingForRenderer, m_scheduledWhileWaitingForRenderer, m_layerTreeStateIsFrozen, m_isSuspended);
+#endif
+
     if (m_layerTreeStateIsFrozen || m_isSuspended || m_webPage->size().isEmpty())
         return;
 
     if (m_isWaitingForRenderer) {
         m_scheduledWhileWaitingForRenderer = true;
+#if PLATFORM(HAIKU)
+        checkRenderingStallHaiku();
+#endif
         return;
     }
 
     scheduleRenderingUpdateRunLoopObserver();
 }
+
+#if PLATFORM(HAIKU)
+// A page that still runs but has waited seconds for the composition it asked
+// for has stopped drawing (typing showed only after a tab switch). Asking for
+// another update while one is pending does not come back here, so the first
+// request that finds the page waiting starts a watchdog that checks every
+// second until a composition arrives. The compositor first says why it is
+// stuck and restarts itself; if the page is still waiting two seconds later,
+// it stops waiting.
+void LayerTreeHost::checkRenderingStallHaiku()
+{
+    if (!m_isWaitingForRenderer || m_isSuspended || m_layerTreeStateIsFrozen) {
+        m_stallRecoveryStartedAtHaiku = std::nullopt;
+        return;
+    }
+    auto now = MonotonicTime::now();
+    Seconds waited = now - m_waitingForRendererSinceHaiku;
+    if (waited < 2_s) {
+        if (!m_stallWatchdogHaiku.isActive())
+            m_stallWatchdogHaiku.startOneShot(2_s - waited);
+        return;
+    }
+    if (!m_stallRecoveryStartedAtHaiku)
+        m_stallRecoveryStartedAtHaiku = now;
+    if (now - *m_stallRecoveryStartedAtHaiku < 2_s) {
+        m_compositor->recoverFromStallHaiku(waited);
+        m_stallWatchdogHaiku.startOneShot(1_s);
+        return;
+    }
+    std::fprintf(stderr, "Summit layer tree stall: pid=%d no composition for %.1f s; updating the page without it\n",
+        static_cast<int>(getpid()), waited.seconds());
+    m_stallRecoveryStartedAtHaiku = std::nullopt;
+    m_isWaitingForRenderer = false;
+    m_scheduledWhileWaitingForRenderer = false;
+    scheduleRenderingUpdateRunLoopObserver();
+}
+
+// Once a second: a page in view that something asked to draw but that has had
+// no rendering update for two seconds has stalled somewhere between WebCore's
+// refresh timer, this host's update observer and the compositor (typed text
+// on GitHub showed only after a tab switch, and the stall report above never
+// came: nothing reached it). Say what is pending at each step, once per
+// stall, then restart each of them.
+void LayerTreeHost::checkLivenessHaiku()
+{
+    Ref webPage = m_webPage;
+    RefPtr corePage = webPage->corePage();
+    if (!corePage || m_isUpdatingRendering || !webPage->isVisible()) {
+        m_blockedInViewSinceHaiku = std::nullopt;
+        return;
+    }
+    auto now = MonotonicTime::now();
+    if (m_isSuspended || m_layerTreeStateIsFrozen) {
+        // A page in view whose rendering stays suspended (or frozen longer
+        // than a slow load would keep it) draws nothing. Only reported: the
+        // drawing area keeps its own record of the suspension.
+        if (!m_blockedInViewSinceHaiku)
+            m_blockedInViewSinceHaiku = now;
+        Seconds blocked = now - *m_blockedInViewSinceHaiku;
+        // A page that a navigation to another site left in the back/forward
+        // cache (WebPage::suspendForProcessSwap()) is frozen for good and
+        // still thinks it is in view; it is not the one being shown.
+        auto freezeReasons = webPage->layerTreeFreezeReasons();
+        if (freezeReasons.contains(WebPage::LayerTreeFreezeReason::PageSuspended))
+            return;
+        if (blocked >= (m_isSuspended ? 2_s : 10_s) && !std::exchange(m_reportedLivenessStallHaiku, true)) {
+            std::fprintf(stderr, "Summit page stall: pid=%d in view but rendering %s for %.1f s (freeze reasons %#x); WebCore scheduler: %s\n",
+                static_cast<int>(getpid()), m_isSuspended ? "suspended" : "frozen", blocked.seconds(), freezeReasons.toRaw(),
+                describeRenderingUpdateSchedulerHaiku(*corePage).utf8().data());
+        }
+        return;
+    }
+    m_blockedInViewSinceHaiku = std::nullopt;
+    Seconds sinceUpdate = now - m_lastRenderingUpdateHaiku;
+    if (sinceUpdate < 2_s)
+        return;
+    bool refreshPending = isRenderingUpdateSchedulerPendingHaiku(*corePage);
+    bool requested = m_lastScheduleRequestHaiku > m_lastRenderingUpdateHaiku;
+    bool observerScheduled = m_renderingUpdateRunLoopObserver->isScheduled();
+    if (!refreshPending && !requested && !observerScheduled && !m_isWaitingForRenderer)
+        return;
+    if (!std::exchange(m_reportedLivenessStallHaiku, true)) {
+        std::fprintf(stderr, "Summit page stall: pid=%d no rendering update for %.1f s; WebCore scheduler: %s; drawing asked for %s; update observer %s; waiting for the compositor %s\n",
+            static_cast<int>(getpid()), sinceUpdate.seconds(), describeRenderingUpdateSchedulerHaiku(*corePage).utf8().data(),
+            requested ? "since the last update" : "not since the last update", observerScheduled ? "pending" : "not pending",
+            m_isWaitingForRenderer ? "yes" : "no");
+    }
+    if (m_isWaitingForRenderer) {
+        checkRenderingStallHaiku();
+        return;
+    }
+    if (refreshPending)
+        restartRenderingUpdateSchedulerHaiku(*corePage);
+    if (m_renderingUpdateRunLoopObserver->isScheduled())
+        m_renderingUpdateRunLoopObserver->invalidate();
+    scheduleRenderingUpdateRunLoopObserver();
+}
+#endif
 
 void LayerTreeHost::scheduleRenderingUpdateRunLoopObserver()
 {
@@ -174,20 +304,63 @@ bool LayerTreeHost::canUpdateRendering() const
 
 void LayerTreeHost::updateRendering()
 {
+#if PLATFORM(HAIKU)
+    static bool traceRenderPhases = [] {
+        const char* value = std::getenv("SUMMIT_RENDER_UPDATE_PHASE_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    auto phaseStart = traceRenderPhases ? MonotonicTime::now() : MonotonicTime { };
+    auto afterPageUpdate = phaseStart;
+    auto afterFinalize = phaseStart;
+    auto afterSceneFlush = phaseStart;
+    static bool traceLayerUpdates = [] {
+        const char* value = std::getenv("SUMMIT_LAYER_UPDATE_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    if (traceLayerUpdates)
+        std::fprintf(stderr, "Summit layer update: begin waiting=%d queued=%d\n",
+            m_isWaitingForRenderer, m_scheduledWhileWaitingForRenderer);
+#endif
     invalidateRenderingUpdateRunLoopObserver();
 
     RELEASE_ASSERT(!m_isUpdatingRendering);
     if (m_layerTreeStateIsFrozen)
         return;
+#if PLATFORM(HAIKU)
+    m_lastRenderingUpdateHaiku = MonotonicTime::now();
+    m_reportedLivenessStallHaiku = false;
+#endif
 
+#if PLATFORM(HAIKU)
+    // Runs after reentrancyProtector has been destroyed (declared before it).
+    auto scheduleRequestedWhileUpdating = makeScopeExit([this] {
+        if (!std::exchange(m_renderingUpdateRequestedWhileUpdatingHaiku, false))
+            return;
+        static bool traceLayerUpdates = [] {
+            const char* value = std::getenv("SUMMIT_LAYER_UPDATE_TRACE");
+            return value && value[0] == '1' && !value[1];
+        }();
+        if (traceLayerUpdates)
+            std::fprintf(stderr, "Summit layer update: requested while updating\n");
+        scheduleRenderingUpdate();
+    });
+#endif
     SetForScope<bool> reentrancyProtector(m_isUpdatingRendering, true);
+
 
     TraceScope traceScope(LayerTreeHostRenderingUpdateStart, LayerTreeHostRenderingUpdateEnd);
 
     Ref page = m_webPage;
     page->updateRendering();
+#if PLATFORM(HAIKU)
+    if (traceRenderPhases)
+        afterPageUpdate = MonotonicTime::now();
+#endif
     page->flushPendingEditorStateUpdate();
+#if PLATFORM(MAC) || PLATFORM(WPE) || PLATFORM(GTK)
+    // ThemeColorChanged is declared for those ports only.
     page->flushPendingThemeColorChange();
+#endif
 
     if (m_overlayCompositingLayer)
         m_overlayCompositingLayer->flushCompositingState(visibleContentsRect());
@@ -200,6 +373,32 @@ void LayerTreeHost::updateRendering()
     flags.add(FinalizeRenderingUpdateFlags::ApplyScrollingTreeLayerPositions);
 #endif
     page->finalizeRenderingUpdate(flags);
+#if PLATFORM(HAIKU)
+    if (traceRenderPhases)
+        afterFinalize = MonotonicTime::now();
+    // SUMMIT_LAYER_TREE_DUMP=1: the page's layer tree as text (positions,
+    // sizes, what each layer draws, opacity, painting phases), whenever it
+    // changed, at most once a second. Finds what the compositor is told to
+    // draw when a page shows less than it should.
+    static const bool dumpLayerTree = [] {
+        const char* value = getenv("SUMMIT_LAYER_TREE_DUMP");
+        return value && value[0] == '1' && !value[1];
+    }();
+    if (dumpLayerTree && m_rootCompositingLayer) {
+        static MonotonicTime lastDump;
+        static String lastTree;
+        if (MonotonicTime::now() - lastDump > 1_s) {
+            lastDump = MonotonicTime::now();
+            auto tree = m_rootCompositingLayer->layerTreeAsText({ WebCore::LayerTreeAsTextOptions::Debug, WebCore::LayerTreeAsTextOptions::IncludeVisibleRects,
+                WebCore::LayerTreeAsTextOptions::IncludePaintingPhases, WebCore::LayerTreeAsTextOptions::IncludeContentLayers,
+                WebCore::LayerTreeAsTextOptions::IncludeClipping, WebCore::LayerTreeAsTextOptions::IncludeRootLayerProperties });
+            if (tree != lastTree) {
+                lastTree = tree;
+                fprintf(stderr, "Summit layer tree (pid %d):\n%s\n", getpid(), tree.utf8().legacyCStringPointer());
+            }
+        }
+    }
+#endif
 
     if (m_pendingResize) {
         m_compositor->setSize(page->size(), page->deviceScaleFactor());
@@ -219,6 +418,10 @@ void LayerTreeHost::updateRendering()
         drawingArea->dispatchPendingCallbacksAfterEnsuringDrawing();
 
     bool didChangeSceneState = m_sceneState->flush();
+#if PLATFORM(HAIKU)
+    if (traceRenderPhases)
+        afterSceneFlush = MonotonicTime::now();
+#endif
     if (m_compositionRequired || m_pendingResize || m_forceFrameSync || didChangeSceneState)
         requestCompositionForRenderingUpdate();
 
@@ -237,6 +440,17 @@ void LayerTreeHost::updateRendering()
         m_sceneState->waitUntilPaintingComplete();
         m_waitUntilPaintingComplete = false;
     }
+#if PLATFORM(HAIKU)
+    if (traceRenderPhases) {
+        auto finished = MonotonicTime::now();
+        if (finished - phaseStart >= 2_ms)
+            std::fprintf(stderr, "Summit render phases: wall=%.3f total=%.1f page=%.1f finalize=%.1f scene=%.1f finish=%.1f changed=%d\n",
+                WallTime::now().secondsSinceEpoch().milliseconds(),
+                (finished - phaseStart).milliseconds(), (afterPageUpdate - phaseStart).milliseconds(),
+                (afterFinalize - afterPageUpdate).milliseconds(), (afterSceneFlush - afterFinalize).milliseconds(),
+                (finished - afterSceneFlush).milliseconds(), didChangeSceneState);
+    }
+#endif
 }
 
 void LayerTreeHost::updateRootLayer()
@@ -322,6 +536,12 @@ void LayerTreeHost::suspend()
 
 void LayerTreeHost::resume()
 {
+#if PLATFORM(HAIKU)
+    // Time spent hidden is not time spent waiting.
+    m_waitingForRendererSinceHaiku = MonotonicTime::now();
+    m_lastRenderingUpdateHaiku = m_waitingForRendererSinceHaiku;
+    m_stallRecoveryStartedAtHaiku = std::nullopt;
+#endif
     m_compositor->resume();
     FrameRenderer::resume();
 }
@@ -447,8 +667,24 @@ void LayerTreeHost::didRenderFrame()
 
 void LayerTreeHost::requestCompositionForRenderingUpdate()
 {
+#if PLATFORM(HAIKU)
+    static bool traceLayerUpdates = [] {
+        const char* value = std::getenv("SUMMIT_LAYER_UPDATE_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    if (traceLayerUpdates)
+        std::fprintf(stderr, "Summit layer update: request-composite\n");
+#endif
     m_isWaitingForRenderer = true;
+#if PLATFORM(HAIKU)
+    m_waitingForRendererSinceHaiku = MonotonicTime::now();
+    m_stallRecoveryStartedAtHaiku = std::nullopt;
+#endif
     m_compositor->requestCompositionForRenderingUpdate([this] {
+#if PLATFORM(HAIKU)
+        if (traceLayerUpdates)
+            std::fprintf(stderr, "Summit layer update: did-composite queued=%d\n", m_scheduledWhileWaitingForRenderer);
+#endif
         WTFBeginSignpost(this, DidComposite);
 
         if (!m_pendingForceRepaint && m_forcedRepaintAsyncCallback)

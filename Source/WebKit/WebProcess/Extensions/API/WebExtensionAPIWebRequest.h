@@ -39,7 +39,6 @@ class WebExtensionAPIWebRequest : public WebExtensionAPIObject, public JSWebExte
     WEB_EXTENSION_DECLARE_JS_WRAPPER_CLASS(WebExtensionAPIWebRequest, webRequest, webRequest);
 
 public:
-#if PLATFORM(COCOA)
     WebExtensionAPIWebRequestEvent& onBeforeRequest();
     WebExtensionAPIWebRequestEvent& onBeforeSendHeaders();
     WebExtensionAPIWebRequestEvent& onSendHeaders();
@@ -49,6 +48,21 @@ public:
     WebExtensionAPIWebRequestEvent& onResponseStarted();
     WebExtensionAPIWebRequestEvent& onCompleted();
     WebExtensionAPIWebRequestEvent& onErrorOccurred();
+    RefPtr<JSON::Object> onBeforeRequestOptions();
+    RefPtr<JSON::Object> onBeforeSendHeadersOptions();
+    RefPtr<JSON::Object> onSendHeadersOptions();
+    RefPtr<JSON::Object> onHeadersReceivedOptions();
+    RefPtr<JSON::Object> onAuthRequiredOptions();
+    RefPtr<JSON::Object> onResponseStartedOptions();
+    RefPtr<JSON::Object> onBeforeRedirectOptions();
+    RefPtr<JSON::Object> onCompletedOptions();
+    RefPtr<JSON::Object> onErrorOccurredOptions();
+    RefPtr<JSON::Object> resourceTypes();
+
+#if PLATFORM(HAIKU)
+    // Listeners are consulted for every request, so there is no cached decision to discard.
+    void handlerBehaviorChanged(Ref<WebExtensionCallbackHandler>&& callback) { callback->call(); }
+#endif
 
 private:
     RefPtr<WebExtensionAPIWebRequestEvent> m_onBeforeRequestEvent;
@@ -61,7 +75,6 @@ private:
     RefPtr<WebExtensionAPIWebRequestEvent> m_onCompletedEvent;
     RefPtr<WebExtensionAPIWebRequestEvent> m_onErrorOccurredEvent;
 
-#endif
 };
 
 } // namespace WebKit

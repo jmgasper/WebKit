@@ -118,6 +118,9 @@ private:
 #endif // ENABLE(INSPECTOR_NETWORK_THROTTLING)
 
     void notifyDidReceiveResponse(WebCore::ResourceResponse&&, NegotiatedLegacyTLS, PrivateRelayed, ResponseCompletionHandler&&);
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    void continueDidReceiveChallengeHaiku(WebCore::AuthenticationChallenge&&, NegotiatedLegacyTLS, ChallengeCompletionHandler&&);
+#endif
 
     WeakPtr<NetworkLoadClient> m_client;
     const Ref<NetworkProcess> m_networkProcess;

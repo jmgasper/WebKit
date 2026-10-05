@@ -31,16 +31,30 @@
 #include "WebExtensionAPIEvent.h"
 #include "WebExtensionAPIObject.h"
 #include "WebExtensionMenuItemParameters.h"
+#if PLATFORM(HAIKU)
+#include "WebExtensionMenuClickHandlerStore.h"
+#endif
 
 OBJC_CLASS NSDictionary;
 OBJC_CLASS NSString;
 
 namespace WebKit {
 
+class WebExtensionMenuClickHandlerStore;
+
 class WebExtensionAPIMenus : public WebExtensionAPIObject, public JSWebExtensionWrappable {
     WEB_EXTENSION_DECLARE_JS_WRAPPER_CLASS(WebExtensionAPIMenus, menus, menus);
 
 public:
+    JSValueRef createMenu(WebPage&, WebFrame&, JSContextRef, JSValueRef properties, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void update(WebPage&, WebFrame&, JSContextRef, JSValueRef identifier, JSValueRef properties, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void remove(JSContextRef, JSValueRef identifier, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void removeAll(Ref<WebExtensionCallbackHandler>&&);
+    WebExtensionAPIEvent& onClicked();
+    double actionMenuTopLevelLimit() const { return webExtensionActionMenuItemTopLevelLimit; }
+#if PLATFORM(HAIKU)
+    ~WebExtensionAPIMenus();
+#endif
 #if PLATFORM(COCOA)
     using ClickHandlerMap = HashMap<String, Ref<WebExtensionCallbackHandler>>;
 
@@ -48,11 +62,6 @@ public:
     void update(WebPage&, WebFrame&, id identifier, NSDictionary *properties, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
 
     void remove(id identifier, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
-    void removeAll(Ref<WebExtensionCallbackHandler>&&);
-
-    WebExtensionAPIEvent& onClicked();
-
-    double actionMenuTopLevelLimit() const { return webExtensionActionMenuItemTopLevelLimit; }
 
     const ClickHandlerMap& clickHandlers() const LIFETIME_BOUND { return m_clickHandlerMap; }
 
@@ -61,8 +70,13 @@ private:
     bool parseCreateAndUpdateProperties(ForUpdate, NSDictionary *, const URL& baseURL, std::optional<WebExtensionMenuItemParameters>&, RefPtr<WebExtensionCallbackHandler>&, NSString **outExceptionString);
 
     Markable<WebCore::FrameIdentifier> m_frameIdentifier;
-    RefPtr<WebExtensionAPIEvent> m_onClicked;
     ClickHandlerMap m_clickHandlerMap;
+#endif
+private:
+    RefPtr<WebExtensionAPIEvent> m_onClicked;
+#if PLATFORM(HAIKU)
+    RefPtr<WebExtensionMenuClickHandlerStore> ensureClickHandlerStore(JSContextRef, WebFrame&, String& exception);
+    Vector<Ref<WebExtensionMenuClickHandlerStore>> m_clickHandlerStores;
 #endif
 };
 

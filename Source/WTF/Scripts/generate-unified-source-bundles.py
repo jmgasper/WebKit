@@ -142,6 +142,7 @@ class BundleManager:
         self.extension = extension
         self.suffix = suffix
         self.file_count = 0
+        self.empty_count = 0
         self.bundle_count = 0
         self.current_bundle_text = ""
         self.max_count = max_count
@@ -169,15 +170,18 @@ class BundleManager:
         return "{}UnifiedSource{}{}".format(self._args.bundle_filename_prefix, id_str, self.suffix)
 
     def flush(self) -> None:
-        self.bundle_count += 1
-        bundle_file = self.bundle_file_name()
-        self._generated_sources.append(str(self._args.unified_source_output_path / bundle_file))
-        if self.max_count is not None and self.bundle_count > self.max_count:
-            self.extra_files.append(bundle_file)
+        if self.empty_count != self.file_count:
+            self.bundle_count += 1
+            bundle_file = self.bundle_file_name()
+            self._generated_sources.append(str(self._args.unified_source_output_path / bundle_file))
+            if self.max_count is not None and self.bundle_count > self.max_count:
+                self.extra_files.append(bundle_file)
 
-        self.write_file(bundle_file)
+            self.write_file(bundle_file)
+
         self.current_bundle_text = ""
         self.file_count = 0
+        self.empty_count = 0
 
     def flush_to_max(self) -> None:
         assert self.max_count is not None
@@ -200,8 +204,19 @@ class BundleManager:
         if self.file_count > 0 and self.file_count + source_file.cost > bundle_size:
             log(self._args, "Flushing because new bundle is full ({} sources)".format(self.file_count))
             self.flush()
-        self.current_bundle_text += '#include "{}"\n'.format(source_file)
-        self.file_count += source_file.cost
+        if source_file.unifiable:
+            self.current_bundle_text += '#include "{}"\n'.format(source_file)
+            self.file_count += source_file.cost
+        else:
+            saved_bundle_text = self.current_bundle_text
+            saved_file_count = self.file_count
+            saved_empty_count = self.empty_count
+            self.empty_count = 0
+            self.current_bundle_text = '#include "{}"\n'.format(source_file)
+            self.flush()
+            self.current_bundle_text = saved_bundle_text
+            self.file_count = saved_file_count + 1
+            self.empty_count = saved_empty_count + 1
 
 
 def process_file_for_unified_source_generation(source_file: SourceFile, args, bundle_managers: dict[str, BundleManager], generated_sources: list[str], input_sources: list[str]) -> None:
@@ -211,7 +226,7 @@ def process_file_for_unified_source_generation(source_file: SourceFile, args, bu
     if not bundle:
         log(args, "No bundle for {} files, building {} standalone".format(source_file.bundle_manager_key, source_file.path))
         generated_sources.append(str(source_file))
-    elif not source_file.unifiable:
+    elif not (source_file.unifiable or source_file.derived):
         log(args, "Not allowed to unify {}, building standalone".format(source_file.path))
         generated_sources.append(str(source_file))
     else:

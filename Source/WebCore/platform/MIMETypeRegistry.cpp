@@ -54,6 +54,15 @@
 #include "ArchiveFactory.h"
 #endif
 
+#if PLATFORM(HAIKU)
+#include <Entry.h>
+#include <Node.h>
+#include <NodeInfo.h>
+#include <String.h>
+#include <TranslatorFormats.h>
+#include <TranslatorRoster.h>
+#endif
+
 #if HAVE(AVASSETREADER)
 #include "ContentType.h"
 #include "ImageDecoderAVFObjC.h"
@@ -418,6 +427,26 @@ String MIMETypeRegistry::mediaMIMETypeForExtension(StringView extension)
 
 String MIMETypeRegistry::mimeTypeForPath(StringView path)
 {
+#if PLATFORM(HAIKU)
+    // On Haiku, files don't usually have an extension. But files usually
+    // have a mime type file attribute.
+    // If this is a local path, get an entry while also resolving symbolic
+    // links and get the mime type info.
+    BString localPath(path.utf8().legacyCStringPointer());
+    int offset = 0;
+    if (localPath.FindFirst("file://") == 0 && localPath.Length() > 7) {
+        offset = 7;
+    }
+    BEntry entry(localPath.String() + offset, true);
+    if (entry.Exists()) {
+        BNode node(&entry);
+        BNodeInfo nodeInfo(&node);
+        char mimeType[B_MIME_TYPE_LENGTH];
+        if (nodeInfo.GetType(mimeType) == B_OK) {
+            return String::fromUTF8(mimeType);
+        }
+    }
+#endif
     auto position = path.reverseFind('.');
     if (position != notFound) {
         auto result = mimeTypeForExtension(path.substring(position + 1));

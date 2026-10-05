@@ -28,6 +28,9 @@
 #if ENABLE(WK_WEB_EXTENSIONS)
 
 #include "APIData.h"
+#if PLATFORM(HAIKU)
+#include "ContentWorldShared.h"
+#endif
 #include "WebExtensionContext.h"
 #include "WebExtensionContextIdentifier.h"
 #include "WebExtensionStorageAccessLevel.h"
@@ -44,6 +47,9 @@ struct WebExtensionContextParameters {
 
     URL baseURL;
     String uniqueIdentifier;
+#if PLATFORM(HAIKU)
+    std::optional<ContentWorldIdentifier> contentScriptWorldIdentifier;
+#endif
     HashSet<String> unsupportedAPIs;
 
     HashMap<String, WallTime> grantedPermissions;

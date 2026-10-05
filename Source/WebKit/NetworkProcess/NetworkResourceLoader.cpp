@@ -110,6 +110,14 @@
 #include "WebParentalControlsURLFilter.h"
 #endif
 
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+#include <WebCore/AuthenticationChallenge.h>
+#include <WebCore/Credential.h>
+#include <WebCore/HTTPHeaderMap.h>
+#include <wtf/Box.h>
+#include <wtf/SetForScope.h>
+#endif
+
 #if PLATFORM(COCOA)
 #include "PathsBlockedForSandboxExtensions.h"
 #include <wtf/cocoa/RuntimeApplicationChecksCocoa.h>
@@ -286,6 +294,10 @@ void NetworkResourceLoader::startRequest(const ResourceRequest& newRequest)
                 },
                 [protectedThis] (ResourceRequest& request) {
                     LOADER_RELEASE_LOG_WITH_THIS(protectedThis, "start: NetworkLoadChecker::check is done");
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+                    protectedThis->continueStartRequestHaiku(WTF::move(request));
+                    return;
+#endif
                     if (protectedThis->canUseCache(request)) {
                         protectedThis->retrieveCacheEntry(request);
                         return;
@@ -298,6 +310,10 @@ void NetworkResourceLoader::startRequest(const ResourceRequest& newRequest)
         return;
     }
     // FIXME: Remove that code path once m_networkLoadChecker is used for all network loads.
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    continueStartRequestHaiku(ResourceRequest { canUseCache(newRequest) ? originalRequest() : newRequest });
+    return;
+#endif
     if (canUseCache(newRequest)) {
         retrieveCacheEntry(originalRequest());
         return;
@@ -371,6 +387,13 @@ void NetworkResourceLoader::retrieveCacheEntry(const ResourceRequest& request)
 
         LOADER_RELEASE_LOG_WITH_THIS(protectedThis, "retrieveCacheEntry: Done checking the HTTP disk cache (foundCachedEntry=%d)", !!entry);
         protectedThis->logSlowCacheRetrieveIfNeeded(info);
+#if OS(HAIKU)
+        // SUMMIT_NET_TRACE=1: how long the disk cache took to answer, which on
+        // BFS competes with the cache's own writes during a large load.
+        static const bool netTrace = [] { const char* value = getenv("SUMMIT_NET_TRACE"); return value && !strcmp(value, "1"); }();
+        if (netTrace)
+            fprintf(stderr, "Summit net: cache %s in %.0f ms %s\n", entry ? "hit" : "miss", (info.completionTime - info.startTime).milliseconds(), request.url().string().left(160).utf8().legacyCStringPointer());
+#endif
 
         if (!entry) {
             protectedThis->startNetworkLoad(WTF::move(request), FirstLoad::Yes);
@@ -516,6 +539,160 @@ void NetworkResourceLoader::startNetworkLoad(ResourceRequest&& request, FirstLoa
     if (weakThis && networkLoad)
         LOADER_RELEASE_LOG("startNetworkLoad: Going to the network (description=%" PUBLIC_LOG_STRING ")", networkLoad->description().utf8().legacyCStringPointer());
 }
+
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+bool NetworkResourceLoader::shouldConsultWebRequestHaiku(uint8_t phase) const
+{
+    // Fast path: no IPC unless this page has extensions and some extension
+    // currently has a blocking listener for this phase. Synchronous loads are
+    // never held: their WebProcess is blocked and may host the listener.
+    if (!m_parameters.pageHasLoadedWebExtensions || isSynchronous())
+        return false;
+    return m_connection->networkProcess().webRequestBlockingPhasesHaiku() & webExtensionWebRequestPhaseBitHaiku(phase);
+}
+
+void NetworkResourceLoader::consultWebRequestHaiku(uint8_t phase, const ResourceRequest& request, const ResourceResponse* response, const AuthenticationChallenge* challenge, CompletionHandler<void(WebExtensionWebRequestGateResultHaiku&&)>&& completionHandler)
+{
+    // Listener details describe the request being decided, which differs from
+    // the original request after redirects.
+    auto loadInfo = resourceLoadInfo();
+    loadInfo.originalURL = request.url();
+    loadInfo.originalHTTPMethod = request.httpMethod();
+
+    std::optional<IPC::FormDataReference> httpBody;
+    if (phase == webExtensionWebRequestBeforeRequestPhaseHaiku) {
+        if (RefPtr formData = request.httpBody()) {
+            static constexpr auto maxSerializedRequestSize = 1024 * 1024;
+            if (formData->lengthInBytes() <= maxSerializedRequestSize)
+                httpBody = IPC::FormDataReference { WTF::move(formData) };
+        }
+    }
+
+    RefPtr connection = protect(connectionToWebProcess().networkProcess())->parentProcessConnection();
+    if (!connection)
+        return completionHandler({ });
+    // SUMMIT_WEBREQUEST_TRACE=1: how long each blocking decision took (the
+    // request waits for the UI process and every extension's listeners).
+    static const bool traceDecisions = [] {
+        const char* value = getenv("SUMMIT_WEBREQUEST_TRACE");
+        return value && !strcmp(value, "1");
+    }();
+    if (traceDecisions) {
+        completionHandler = [completionHandler = WTF::move(completionHandler), phase, start = MonotonicTime::now(), url = request.url().string().left(100).isolatedCopy()](WebExtensionWebRequestGateResultHaiku&& result) mutable {
+            fprintf(stderr, "Summit webRequest: [%.3f] phase %u %.1f ms%s %s\n", MonotonicTime::now().secondsSinceEpoch().seconds(), phase,
+                (MonotonicTime::now() - start).milliseconds(), result.cancel ? " cancel" : "", url.utf8().legacyCStringPointer());
+            completionHandler(WTF::move(result));
+        };
+    }
+    // The UI process always replies, at the latest after its listener timeout;
+    // a closed connection replies with an empty (fail-open) result.
+    connection->sendWithAsyncReply(Messages::NetworkProcessProxy::ResourceLoadWebRequestDecisionHaiku(webPageProxyID(), phase, loadInfo, request, httpBody,
+        response ? std::optional { *response } : std::nullopt, challenge ? std::optional { *challenge } : std::nullopt), WTF::move(completionHandler));
+}
+
+void NetworkResourceLoader::continueStartRequestHaiku(ResourceRequest&& request)
+{
+    applyBeforeRequestWebRequestHaiku(WTF::move(request), [weakThis = WeakPtr { *this }](ResourceRequest&& request) {
+        RefPtr protectedThis = weakThis.get();
+        if (!protectedThis)
+            return;
+        if (protectedThis->canUseCache(request)) {
+            protectedThis->retrieveCacheEntry(request);
+            return;
+        }
+        protectedThis->startNetworkLoad(WTF::move(request), FirstLoad::Yes);
+    }, [] { });
+}
+
+void NetworkResourceLoader::applyBeforeRequestWebRequestHaiku(ResourceRequest&& request, Function<void(ResourceRequest&&)>&& proceed, Function<void()>&& abandon)
+{
+    if (!shouldConsultWebRequestHaiku(webExtensionWebRequestBeforeRequestPhaseHaiku)) {
+        applyBeforeSendHeadersWebRequestHaiku(WTF::move(request), WTF::move(proceed), WTF::move(abandon));
+        return;
+    }
+
+    auto requestForExtensions = request;
+    consultWebRequestHaiku(webExtensionWebRequestBeforeRequestPhaseHaiku, requestForExtensions, nullptr, nullptr, [weakThis = WeakPtr { *this }, request = WTF::move(request), proceed = WTF::move(proceed), abandon = WTF::move(abandon)](WebExtensionWebRequestGateResultHaiku&& result) mutable {
+        RefPtr protectedThis = weakThis.get();
+        if (!protectedThis)
+            return abandon();
+        if (result.cancel) {
+            LOADER_RELEASE_LOG_WITH_THIS(protectedThis, "applyBeforeRequestWebRequestHaiku: cancelled by a blocking webRequest listener");
+            abandon();
+            protectedThis->didFailLoading(blockedByContentBlockerError(request));
+            return;
+        }
+        if (result.redirectURL) {
+            LOADER_RELEASE_LOG_WITH_THIS(protectedThis, "applyBeforeRequestWebRequestHaiku: redirected by a blocking webRequest listener");
+            abandon();
+            protectedThis->startWebRequestRedirectHaiku(WTF::move(request), *result.redirectURL);
+            return;
+        }
+        protectedThis->applyBeforeSendHeadersWebRequestHaiku(WTF::move(request), WTF::move(proceed), WTF::move(abandon));
+    });
+}
+
+void NetworkResourceLoader::applyBeforeSendHeadersWebRequestHaiku(ResourceRequest&& request, Function<void(ResourceRequest&&)>&& proceed, Function<void()>&& abandon)
+{
+    if (!shouldConsultWebRequestHaiku(webExtensionWebRequestBeforeSendHeadersPhaseHaiku)) {
+        proceed(WTF::move(request));
+        return;
+    }
+
+    auto requestForExtensions = request;
+    consultWebRequestHaiku(webExtensionWebRequestBeforeSendHeadersPhaseHaiku, requestForExtensions, nullptr, nullptr, [weakThis = WeakPtr { *this }, request = WTF::move(request), proceed = WTF::move(proceed), abandon = WTF::move(abandon)](WebExtensionWebRequestGateResultHaiku&& result) mutable {
+        RefPtr protectedThis = weakThis.get();
+        if (!protectedThis)
+            return abandon();
+        if (result.cancel) {
+            LOADER_RELEASE_LOG_WITH_THIS(protectedThis, "applyBeforeSendHeadersWebRequestHaiku: cancelled by a blocking webRequest listener");
+            abandon();
+            protectedThis->didFailLoading(blockedByContentBlockerError(request));
+            return;
+        }
+        if (result.headers) {
+            HTTPHeaderMap headers;
+            for (auto& header : *result.headers)
+                headers.add(header.first, header.second);
+            request.setHTTPHeaderFields(WTF::move(headers));
+        }
+        proceed(WTF::move(request));
+    });
+}
+
+void NetworkResourceLoader::startWebRequestRedirectHaiku(ResourceRequest&& request, const URL& destination)
+{
+    // Bound redirect chains even for loads without a NetworkLoadChecker, which
+    // enforces its own limit of 20 in checkRedirection().
+    static constexpr unsigned maximumRedirectCount = 20;
+    if (m_redirectCount >= maximumRedirectCount) {
+        didFailLoading(ResourceError { String { }, 0, request.url(), "Too many redirects"_s, ResourceError::Type::General });
+        return;
+    }
+
+    // Chrome/Firefox model the extension redirect as an internal 307 so that the
+    // method and body are preserved and CORS requests can follow it.
+    ResourceResponse redirectResponse;
+    redirectResponse.setURL(URL { request.url() });
+    redirectResponse.setHTTPStatusCode(307);
+    redirectResponse.setHTTPStatusText("Internal Redirect"_s);
+    redirectResponse.setHTTPVersion("HTTP/1.1"_s);
+    redirectResponse.setHTTPHeaderField(HTTPHeaderName::Location, destination.string());
+    redirectResponse.setHTTPHeaderField(HTTPHeaderName::CacheControl, "no-store"_s);
+    redirectResponse.setHTTPHeaderField("Non-Authoritative-Reason"_s, "WebRequest API"_s);
+    if (auto origin = request.httpOrigin(); !origin.isEmpty()) {
+        redirectResponse.setHTTPHeaderField(HTTPHeaderName::AccessControlAllowOrigin, origin);
+        redirectResponse.setHTTPHeaderField(HTTPHeaderName::AccessControlAllowCredentials, "true"_s);
+    }
+
+    auto redirectRequest = request.redirectedRequest(redirectResponse, parameters().shouldClearReferrerOnHTTPSToHTTPRedirect);
+    // Behaves like a cached redirect: once the WebProcess accepts it the load
+    // restarts through continueWillSendRequest(), which consults webRequest for
+    // the new URL again (redirect count bounds extension redirect loops).
+    m_isWaitingContinueWillSendRequestForCachedRedirect = true;
+    willSendRedirectedRequest(WTF::move(request), WTF::move(redirectRequest), WTF::move(redirectResponse), [](auto) { });
+}
+#endif
 
 ResourceLoadInfo NetworkResourceLoader::resourceLoadInfo()
 {
@@ -1042,7 +1219,7 @@ ResourceRequest NetworkResourceLoader::constructPreconnectRequest(const Resource
 
 void NetworkResourceLoader::startPreconnectTask(const URL& baseURL, const LinkHeader& header, const ContentSecurityPolicy& contentSecurityPolicy)
 {
-#if ENABLE(SERVER_PRECONNECT)
+#if ENABLE(SERVER_PRECONNECT) || PLATFORM(HAIKU)
     if (!parameters().linkPreconnectEarlyHintsEnabled)
         return;
 
@@ -1081,6 +1258,46 @@ void NetworkResourceLoader::startPreconnectTask(const URL& baseURL, const LinkHe
 
 void NetworkResourceLoader::didReceiveResponse(ResourceResponse&& receivedResponse, PrivateRelayed privateRelayed, ResponseCompletionHandler&& completionHandler)
 {
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    // Blocking onHeadersReceived runs before anything observes the response.
+    // Revalidation responses (304 for a cache entry) are not offered.
+    if (!m_isApplyingWebRequestResponseHaiku && !m_cacheEntryForValidation && shouldConsultWebRequestHaiku(webExtensionWebRequestHeadersReceivedPhaseHaiku)) {
+        auto request = m_networkLoad ? m_networkLoad->currentRequest() : originalRequest();
+        auto responseForExtensions = receivedResponse;
+        auto continuation = [weakThis = WeakPtr { *this }, receivedResponse = WTF::move(receivedResponse), privateRelayed, completionHandler = WTF::move(completionHandler)](WebExtensionWebRequestGateResultHaiku&& result) mutable {
+            RefPtr protectedThis = weakThis.get();
+            if (!protectedThis)
+                return completionHandler(PolicyAction::Ignore);
+            if (result.cancel) {
+                LOADER_RELEASE_LOG_WITH_THIS(protectedThis, "didReceiveResponse: cancelled by a blocking webRequest listener");
+                auto error = blockedByContentBlockerError(protectedThis->m_networkLoad ? protectedThis->m_networkLoad->currentRequest() : protectedThis->originalRequest());
+                completionHandler(PolicyAction::Ignore);
+                RunLoop::mainSingleton().dispatch([protectedThis, error = WTF::move(error)] {
+                    if (protectedThis->m_networkLoad)
+                        protectedThis->didFailLoading(error);
+                });
+                return;
+            }
+            if (result.headers) {
+                auto originalContentType = receivedResponse.httpHeaderField(HTTPHeaderName::ContentType);
+                HTTPHeaderMap headers;
+                for (auto& header : *result.headers)
+                    headers.add(header.first, header.second);
+                receivedResponse.setHTTPHeaderFields(WTF::move(headers));
+                // Keep the derived MIME type and charset in step with a replaced Content-Type.
+                auto contentType = receivedResponse.httpHeaderField(HTTPHeaderName::ContentType);
+                if (contentType != originalContentType && !contentType.isEmpty()) {
+                    receivedResponse.setMimeType(extractMIMETypeFromMediaType(contentType));
+                    receivedResponse.setTextEncodingName(extractCharsetFromMediaType(contentType).toString());
+                }
+            }
+            SetForScope applying { protectedThis->m_isApplyingWebRequestResponseHaiku, true };
+            protectedThis->didReceiveResponse(WTF::move(receivedResponse), privateRelayed, WTF::move(completionHandler));
+        };
+        consultWebRequestHaiku(webExtensionWebRequestHeadersReceivedPhaseHaiku, request, &responseForExtensions, nullptr, WTF::move(continuation));
+        return;
+    }
+#endif
 #if HAVE(BROKEN_MULTIPART_RESPONSE_FLOW_CONTROL)
     if (m_isProcessingResponse) {
         m_deferredMessages.append(DeferredResponse { WTF::move(receivedResponse), privateRelayed, WTF::move(completionHandler) });
@@ -1521,6 +1738,32 @@ void NetworkResourceLoader::didReceiveChallenge(const AuthenticationChallenge& c
         protect(connectionToWebProcess().networkProcess())->parentProcessConnection()->send(Messages::NetworkProcessProxy::ResourceLoadDidReceiveChallenge(webPageProxyID(), resourceLoadInfo(), challenge), 0);
 }
 
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+void NetworkResourceLoader::decideAuthenticationChallengeHaiku(const AuthenticationChallenge& challenge, CompletionHandler<void(std::optional<Credential>&&)>&& completionHandler)
+{
+    auto statusCode = challenge.failureResponse().httpStatusCode();
+    if ((statusCode != 401 && statusCode != 407)
+        || m_webRequestCredentialAttemptsHaiku >= webExtensionWebRequestMaximumCredentialAttemptsHaiku
+        || !shouldConsultWebRequestHaiku(webExtensionWebRequestAuthRequiredPhaseHaiku))
+        return completionHandler(std::nullopt);
+
+    auto request = m_networkLoad ? m_networkLoad->currentRequest() : originalRequest();
+    consultWebRequestHaiku(webExtensionWebRequestAuthRequiredPhaseHaiku, request, &challenge.failureResponse(), &challenge, [weakThis = WeakPtr { *this }, completionHandler = WTF::move(completionHandler)](WebExtensionWebRequestGateResultHaiku&& result) mutable {
+        RefPtr protectedThis = weakThis.get();
+        if (!protectedThis)
+            return completionHandler(std::nullopt);
+        // Like Chrome, cancelling authentication exposes the 401/407 response.
+        if (result.cancel)
+            return completionHandler(Credential { });
+        if (result.credentials) {
+            ++protectedThis->m_webRequestCredentialAttemptsHaiku;
+            return completionHandler(Credential { result.credentials->first, result.credentials->second, CredentialPersistence::ForSession });
+        }
+        completionHandler(std::nullopt);
+    });
+}
+#endif
+
 std::optional<Seconds> NetworkResourceLoader::validateCacheEntryForMaxAgeCapValidation(const ResourceRequest& request, const ResourceRequest& redirectRequest, const ResourceResponse& redirectResponse)
 {
     bool existingCacheEntryMatchesNewResponse = false;
@@ -1778,6 +2021,15 @@ void NetworkResourceLoader::restartNetworkLoad(WebCore::ResourceRequest&& newReq
 
     completionHandler({ });
 
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    if (!newRequest.isEmpty()) {
+        applyBeforeRequestWebRequestHaiku(WTF::move(newRequest), [weakThis = WeakPtr { *this }](ResourceRequest&& request) {
+            if (RefPtr protectedThis = weakThis.get())
+                protectedThis->startNetworkLoad(WTF::move(request), FirstLoad::No);
+        }, [] { });
+    }
+    return;
+#endif
     if (!newRequest.isEmpty())
         startNetworkLoad(WTF::move(newRequest), FirstLoad::No);
 }
@@ -1866,6 +2118,18 @@ void NetworkResourceLoader::continueWillSendRequest(ResourceRequest&& newRequest
         LOG(NetworkCache, "(NetworkProcess) Retrieving cached redirect");
         LOADER_RELEASE_LOG("continueWillSendRequest: m_isWaitingContinueWillSendRequestForCachedRedirect was set");
 
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+        applyBeforeRequestWebRequestHaiku(WTF::move(newRequest), [weakThis = WeakPtr { *this }](ResourceRequest&& request) {
+            RefPtr protectedThis = weakThis.get();
+            if (!protectedThis)
+                return;
+            if (protectedThis->canUseCachedRedirect(request))
+                protectedThis->retrieveCacheEntry(request);
+            else
+                protectedThis->startNetworkLoad(WTF::move(request), FirstLoad::Yes);
+        }, [] { });
+        return completionHandler({ });
+#endif
         if (canUseCachedRedirect(newRequest))
             retrieveCacheEntry(newRequest);
         else
@@ -1876,6 +2140,27 @@ void NetworkResourceLoader::continueWillSendRequest(ResourceRequest&& newRequest
     if (m_networkLoad) {
         LOADER_RELEASE_LOG("continueWillSendRequest: Telling NetworkLoad to proceed with the redirect");
 
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+        if (!newRequest.isNull()) {
+            // Exactly one of the two continuations below runs.
+            auto redirectCompletion = Box<CompletionHandler<void(WebCore::ResourceRequest&&)>>::create(WTF::move(completionHandler));
+            applyBeforeRequestWebRequestHaiku(WTF::move(newRequest), [weakThis = WeakPtr { *this }, redirectCompletion](ResourceRequest&& request) {
+                RefPtr protectedThis = weakThis.get();
+                if (!protectedThis || !protectedThis->m_networkLoad)
+                    return (*redirectCompletion)({ });
+                if (protectedThis->shouldSendResourceLoadMessages())
+                    protect(protectedThis->connectionToWebProcess().networkProcess())->parentProcessConnection()->send(Messages::NetworkProcessProxy::ResourceLoadDidPerformHTTPRedirection(protectedThis->webPageProxyID(), protectedThis->resourceLoadInfo(), protectedThis->m_redirectResponse, request), 0);
+                (*redirectCompletion)(WTF::move(request));
+            }, [weakThis = WeakPtr { *this }, redirectCompletion] {
+                if (RefPtr protectedThis = weakThis.get()) {
+                    if (RefPtr networkLoad = std::exchange(protectedThis->m_networkLoad, nullptr))
+                        networkLoad->clearClient();
+                }
+                (*redirectCompletion)({ });
+            });
+            return;
+        }
+#endif
         if (shouldSendResourceLoadMessages() && !newRequest.isNull())
             protect(connectionToWebProcess().networkProcess())->parentProcessConnection()->send(Messages::NetworkProcessProxy::ResourceLoadDidPerformHTTPRedirection(webPageProxyID(), resourceLoadInfo(), m_redirectResponse, newRequest), 0);
 

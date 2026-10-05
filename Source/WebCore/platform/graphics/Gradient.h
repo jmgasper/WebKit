@@ -53,6 +53,12 @@ typedef struct CGContext* CGContextRef;
 
 #if USE(CAIRO)
 typedef struct _cairo_pattern cairo_pattern_t;
+typedef void* PlatformGradient;
+#endif
+
+#if PLATFORM(HAIKU)
+#include <Gradient.h>
+#include <memory>
 #endif
 
 namespace WTF {
@@ -115,6 +121,10 @@ public:
     RefPtr<cairo_pattern_t> createPattern(float globalAlpha, const AffineTransform&);
 #endif
 
+#if USE(HAIKU_GRAPHICS)
+    const BGradient& getHaikuGradient();
+#endif
+
 #if USE(CG)
     void paint(GraphicsContext&);
     void paint(CGContextRef, std::optional<ColorSpace> = { });
@@ -142,6 +152,10 @@ private:
 
 #if USE(CG)
     std::optional<GradientRendererCG> m_platformRenderer;
+#endif
+
+#if USE(HAIKU_GRAPHICS)
+    std::unique_ptr<BGradient> m_gradient;
 #endif
 
     mutable WeakHashSet<RenderingResourceObserver> m_observers;

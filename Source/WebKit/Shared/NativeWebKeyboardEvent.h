@@ -45,6 +45,10 @@ typedef union _GdkEvent GdkEvent;
 #endif
 #endif
 
+#if PLATFORM(HAIKU)
+#include <Message.h>
+#endif
+
 #if PLATFORM(WPE) && ENABLE(WPE_PLATFORM)
 typedef struct _WPEEvent WPEEvent;
 #endif
@@ -93,12 +97,16 @@ public:
     static Ref<NativeWebKeyboardEvent> create(struct wpe_input_keyboard_event*, const String&, bool isAutoRepeat, HandledByInputMethod, std::optional<Vector<WebCore::CompositionUnderline>>&&, std::optional<EditingRange>&&);
 #elif PLATFORM(WIN)
     static Ref<NativeWebKeyboardEvent> create(HWND, UINT message, WPARAM, LPARAM, Vector<MSG>&& pendingCharEvents);
+#elif PLATFORM(HAIKU)
+    static RefPtr<NativeWebKeyboardEvent> create(const BMessage&);
 #endif
 
 #if USE(APPKIT)
     NSEvent *nativeEvent() const { return m_nativeEvent.get(); }
 #elif PLATFORM(GTK)
     GdkEvent* nativeEvent() const { return m_nativeEvent.get(); }
+#elif PLATFORM(HAIKU)
+    const BMessage* nativeEvent() const LIFETIME_BOUND { return &m_nativeEvent; }
 #elif PLATFORM(IOS_FAMILY)
     ::WebEvent* nativeEvent() const { return m_nativeEvent.get(); }
 #elif PLATFORM(WIN)
@@ -121,6 +129,9 @@ private:
     NativeWebKeyboardEvent(WebKeyboardEventInit&&, GdkEvent*);
 
     GUniquePtr<GdkEvent> m_nativeEvent;
+#elif PLATFORM(HAIKU)
+    NativeWebKeyboardEvent(WebKeyboardEventInit&&, const BMessage&);
+    BMessage m_nativeEvent;
 #elif PLATFORM(IOS_FAMILY)
     NativeWebKeyboardEvent(WebKeyboardEventInit&&, ::WebEvent *);
 

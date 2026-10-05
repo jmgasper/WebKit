@@ -120,6 +120,9 @@
 #include <WebCore/LocalFrameView.h>
 #include <WebCore/NotImplemented.h>
 #include <WebCore/PointerLockController.h>
+#if PLATFORM(HAIKU) && ENABLE(WEBGL)
+#include <WebCore/PlatformDisplay.h>
+#endif
 #include <WebCore/PopupMenuClient.h>
 #include <WebCore/RegistrableDomain.h>
 #include <WebCore/RemoteFrame.h>
@@ -268,6 +271,8 @@ FloatRect WebChromeClient::windowRect() const
 #if PLATFORM(MAC)
     if (page->hasCachedWindowFrame())
         return page->windowFrameInUnflippedScreenCoordinates();
+#elif PLATFORM(HAIKU)
+    return page->windowFrameHaiku();
 #endif
 
     auto sendResult = protect(WebProcess::singleton().parentProcessConnection())->sendSync(Messages::WebPageProxy::GetWindowFrame(), page->identifier());
@@ -1215,6 +1220,12 @@ RefPtr<GraphicsContextGL> WebChromeClient::createGraphicsContextGL(const Graphic
 #if PLATFORM(GTK)
     WebProcess::singleton().initializePlatformDisplayIfNeeded();
     WebProcess::singleton().initializeVulkanIfNeeded();
+#endif
+#if PLATFORM(HAIKU)
+    // Without an EGL display (no GL driver) there is no WebGL: getContext()
+    // returns null rather than the shared display asserting.
+    if (!WebCore::PlatformDisplay::sharedDisplayIfExists())
+        return nullptr;
 #endif
 #if ENABLE(GPU_PROCESS)
     if (WebProcess::singleton().shouldUseRemoteRenderingForWebGL()) {
@@ -2282,7 +2293,7 @@ void WebChromeClient::setMockWebAuthenticationConfiguration(const MockWebAuthent
 }
 #endif
 
-#if PLATFORM(PLAYSTATION)
+#if PLATFORM(PLAYSTATION) || PLATFORM(HAIKU)
 void WebChromeClient::postAccessibilityNotification(WebCore::AccessibilityObject&, WebCore::AXNotification)
 {
     notImplemented();

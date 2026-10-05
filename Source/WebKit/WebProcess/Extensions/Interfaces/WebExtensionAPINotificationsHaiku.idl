@@ -1,0 +1,19 @@
+/* Copyright (C) 2026 KunanyiOS contributors. SPDX-License-Identifier: BSD-2-Clause */
+
+[
+    Conditional=WK_WEB_EXTENSIONS,
+    MainWorldOnly,
+    ReturnsPromiseWhenCallbackIsOmitted,
+    UseCPPAPI
+] interface WebExtensionAPINotificationsHaiku {
+    [RaisesStringException, ImplementedAs=createNotification] void create([Optional] DOMString identifier, [JSONValue] any options, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void update(DOMString identifier, [JSONValue] any options, [Optional, CallbackHandler] function callback);
+    void clear(DOMString identifier, [Optional, CallbackHandler] function callback);
+    void getAll([Optional, CallbackHandler] function callback);
+    void getPermissionLevel([Optional, CallbackHandler] function callback);
+
+    readonly attribute WebExtensionAPIEvent onButtonClicked;
+    readonly attribute WebExtensionAPIEvent onClicked;
+    readonly attribute WebExtensionAPIEvent onClosed;
+    readonly attribute WebExtensionAPIEvent onShown;
+};

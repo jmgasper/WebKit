@@ -83,6 +83,36 @@ typedef void* SockOptArg;
 typedef char* SockOptArg;
 #endif
 
+#if defined(__HAIKU__)
+// WEBRTC_WEBKIT_BUILD change: socket options Haiku does not have. These
+// numbers are no option of Haiku's, so setsockopt() fails with them as it
+// does on a platform without the option, and no control message matches.
+#if !defined(IPV6_TCLASS)
+#define IPV6_TCLASS -10001
+#endif
+#if !defined(IPV6_RECVTCLASS)
+#define IPV6_RECVTCLASS -10002
+#endif
+#if !defined(IP_RECVTOS)
+#define IP_RECVTOS -10003
+#endif
+#if !defined(SO_TIMESTAMP)
+#define SO_TIMESTAMP -10004
+#endif
+#if !defined(SCM_TIMESTAMP)
+#define SCM_TIMESTAMP SO_TIMESTAMP
+#endif
+#if !defined(TCP_KEEPCNT)
+#define TCP_KEEPCNT -10005
+#endif
+#if !defined(TCP_KEEPIDLE)
+#define TCP_KEEPIDLE -10006
+#endif
+#if !defined(TCP_KEEPINTVL)
+#define TCP_KEEPINTVL -10007
+#endif
+#endif  // defined(__HAIKU__)
+
 #if defined(WEBRTC_LINUX)
 // POLLRDHUP / EPOLLRDHUP are only defined starting with Linux 2.6.17.
 #if !defined(POLLRDHUP)
@@ -445,7 +475,7 @@ int PhysicalSocket::SetOption(Option opt, int value) {
 int PhysicalSocket::Send(const void* pv, size_t cb) {
   int sent = DoSend(
       s_, reinterpret_cast<const char*>(pv), static_cast<int>(cb),
-#if defined(WEBRTC_LINUX) && !defined(WEBRTC_ANDROID)
+#if (defined(WEBRTC_LINUX) && !defined(WEBRTC_ANDROID)) || defined(__HAIKU__)
       // Suppress SIGPIPE. Without this, attempting to send on a socket whose
       // other end is closed will result in a SIGPIPE signal being raised to
       // our process, which by default will terminate the process, which we
@@ -474,7 +504,7 @@ int PhysicalSocket::SendTo(const void* buffer,
   size_t len = addr.ToSockAddrStorage(&saddr);
   int sent =
       DoSendTo(s_, static_cast<const char*>(buffer), static_cast<int>(length),
-#if defined(WEBRTC_LINUX) && !defined(WEBRTC_ANDROID)
+#if (defined(WEBRTC_LINUX) && !defined(WEBRTC_ANDROID)) || defined(__HAIKU__)
                // Suppress SIGPIPE. See above for explanation.
                MSG_NOSIGNAL,
 #else
@@ -759,6 +789,10 @@ int PhysicalSocket::TranslateOption(Option opt, int* slevel, int* sopt) {
 #elif defined(WEBRTC_MAC) || defined(BSD)
       RTC_LOG(LS_WARNING) << "Socket::OPT_DONTFRAGMENT not supported.";
       return -1;
+#elif defined(__HAIKU__)
+      *slevel = IPPROTO_IP;
+      *sopt = IP_DONTFRAG;
+      break;
 #elif defined(WEBRTC_POSIX)
       *slevel = IPPROTO_IP;
       *sopt = IP_MTU_DISCOVER;
@@ -884,7 +918,7 @@ SocketDispatcher::~SocketDispatcher() {
 
 bool SocketDispatcher::Initialize() {
   RTC_DCHECK(s_ != INVALID_SOCKET);
-#if defined(WEBRTC_WEBKIT_BUILD)
+#if defined(WEBRTC_WEBKIT_BUILD) && !defined(WEBRTC_USE_POLL)
   if (s_ < 0 || s_ >= FD_SETSIZE) {
     RTC_LOG_ERR(LS_ERROR) << "SocketDispatcher::Initialize, file descriptor is invalid";
     return false;

@@ -145,6 +145,18 @@ private:
     bool m_waitUntilPaintingComplete { false };
     bool m_isWaitingForRenderer { false };
     bool m_scheduledWhileWaitingForRenderer { false };
+#if PLATFORM(HAIKU)
+    void checkRenderingStallHaiku();
+    void checkLivenessHaiku();
+    MonotonicTime m_waitingForRendererSinceHaiku;
+    std::optional<MonotonicTime> m_stallRecoveryStartedAtHaiku;
+    RunLoop::Timer m_stallWatchdogHaiku;
+    RunLoop::Timer m_livenessTimerHaiku;
+    MonotonicTime m_lastRenderingUpdateHaiku;
+    MonotonicTime m_lastScheduleRequestHaiku;
+    bool m_reportedLivenessStallHaiku { false };
+    std::optional<MonotonicTime> m_blockedInViewSinceHaiku;
+#endif
     bool m_forceFrameSync { false };
     bool m_compositionRequired { false };
 #if ENABLE(SCROLLING_THREAD)

@@ -281,6 +281,10 @@ messages -> WebPage WantsAsyncDispatchMessage {
 #endif
 
     RunJavaScriptInFrameInScriptWorld(struct WebKit::RunJavaScriptParameters parameters, std::optional<WebCore::FrameIdentifier> frameID, struct WebKit::ContentWorldData world, bool wantsResult) -> (std::expected<WebKit::JavaScriptEvaluationResult, std::optional<WebCore::ExceptionDetails>> result)
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    WaitForExtensionTabScript(WebKit::WebExtensionContextIdentifier contextIdentifier, WebKit::ContentWorldIdentifier worldIdentifier, struct WebKit::WebExtensionTabScriptTarget target, enum:uint8_t WebKit::WebExtensionTabScriptRunAt runAt) -> (std::expected<WebKit::WebExtensionTabScriptTarget, String> result)
+    ExecuteExtensionTabScript(WebKit::WebExtensionContextIdentifier contextIdentifier, struct WebKit::ContentWorldData world, struct WebKit::WebExtensionTabScriptTarget target, URL authorizedURL, bool matchAboutBlank, String source, URL sourceURL, bool userGesture) -> (std::expected<RefPtr<WebCore::SerializedScriptValue>, String> result)
+#endif
 
     ClearContentWorld(WebKit::ContentWorldIdentifier worldIdentifier) -> ()
 
@@ -616,6 +620,9 @@ messages -> WebPage WantsAsyncDispatchMessage {
     SetCompositionAsync(String text, Vector<WebCore::CompositionUnderline> underlines, Vector<WebCore::CompositionHighlight> highlights, HashMap<String, Vector<WebCore::CharacterRange>> annotations, struct WebKit::EditingRange selectionRange, struct WebKit::EditingRange replacementRange)
     SetWritingSuggestion(String text, struct WebKit::EditingRange selectionRange)
     ConfirmCompositionAsync()
+#endif
+#if PLATFORM(HAIKU)
+    SetWindowFrameHaiku(WebCore::FloatRect windowFrame)
 #endif
 #if PLATFORM(MAC)
     AttributedSubstringForCharacterRangeAsync(struct WebKit::EditingRange range) -> (struct WebCore::AttributedString string, struct WebKit::EditingRange range)

@@ -33,6 +33,11 @@ OBJC_CLASS NSView;
 OBJC_CLASS NSEvent;
 #endif
 
+#if PLATFORM(HAIKU)
+#include <Message.h>
+#include <Point.h>
+#endif
+
 #if PLATFORM(GTK)
 #include "GRefPtrGtk.h"
 #include "GUniquePtrGtk.h"
@@ -78,12 +83,16 @@ public:
     static Ref<NativeWebWheelEvent> create(struct wpe_input_axis_event*, float deviceScaleFactor, WebWheelEvent::Phase, WebWheelEvent::Phase momentumPhase);
 #elif PLATFORM(WIN)
     static Ref<NativeWebWheelEvent> create(HWND, UINT message, WPARAM, LPARAM, float deviceScaleFactor);
+#elif PLATFORM(HAIKU)
+    static RefPtr<NativeWebWheelEvent> create(const BMessage&, BPoint viewPosition, BPoint screenPosition);
 #endif
 
 #if USE(APPKIT)
     NSEvent* nativeEvent() const { return m_nativeEvent.get(); }
 #elif PLATFORM(GTK)
     GdkEvent* nativeEvent() const { return m_nativeEvent.get(); }
+#elif PLATFORM(HAIKU)
+    const BMessage* nativeEvent() const LIFETIME_BOUND { return &m_nativeEvent; }
 #elif PLATFORM(WIN)
     const MSG* nativeEvent() const LIFETIME_BOUND { return &m_nativeEvent; }
 #else
@@ -103,6 +112,9 @@ private:
     NativeWebWheelEvent(WebWheelEventInit&&, GdkEvent*);
 
     GUniquePtr<GdkEvent> m_nativeEvent;
+#elif PLATFORM(HAIKU)
+    NativeWebWheelEvent(WebWheelEventInit&&, const BMessage&);
+    BMessage m_nativeEvent;
 #elif PLATFORM(WIN)
     NativeWebWheelEvent(WebWheelEventInit&&, const MSG&);
 

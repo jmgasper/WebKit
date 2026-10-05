@@ -61,6 +61,14 @@ public:
 
     void displayDidRefresh(PlatformDisplayID) override;
 
+#if PLATFORM(HAIKU)
+    // Haiku has no display link to service scroll animations. The web process
+    // drives displayDidRefresh() from a timer and installs this to restart it
+    // whenever an animation starts, whether a wheel event, a key, script or a
+    // wheel event handed back by the main thread started it.
+    WEBCORE_EXPORT static void setScrollAnimationStartedCallback(Function<void()>&&);
+#endif
+
     void NODELETE didScheduleRenderingUpdate();
     void willStartRenderingUpdate();
     virtual void didCompleteRenderingUpdate();
@@ -106,6 +114,12 @@ protected:
 
     RefPtr<AsyncScrollingCoordinator> m_scrollingCoordinator;
     mutable Lock m_layerHitTestMutex;
+#if PLATFORM(HAIKU)
+    MonotonicTime m_layersLockedForHitTestingAtHaiku;
+    // Set by a scroll on the scrolling thread, cleared when layer positions
+    // are applied or a rendering update completes.
+    std::atomic<bool> m_scrolledSincePositionsAppliedHaiku { false };
+#endif
 
 private:
     bool isThreadedScrollingTree() const override { return true; }
@@ -132,6 +146,9 @@ private:
 
     void lockLayersForHitTesting() final WTF_ACQUIRES_LOCK(m_layerHitTestMutex);
     void unlockLayersForHitTesting() final WTF_RELEASES_LOCK(m_layerHitTestMutex);
+#if PLATFORM(HAIKU)
+    bool canHitTestWithoutWaitingHaiku() final;
+#endif
 
     void scrollingTreeNodeScrollUpdated(ScrollingTreeScrollingNode&, ScrollUpdateType);
 

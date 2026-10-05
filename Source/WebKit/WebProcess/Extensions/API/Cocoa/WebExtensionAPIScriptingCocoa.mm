@@ -150,6 +150,86 @@ String toWebAPI(WebExtension::InjectionTime injectionTime)
     }
 }
 
+// C++ bindings delegate to the existing Cocoa API implementations.
+static id scriptingJSONValue(RefPtr<JSON::Value> value)
+{
+    return value ? parseJSON(value->toJSONString().createNSString().get(), JSONOptions::FragmentsAllowed) : nil;
+}
+
+template<typename NativeType, typename Function>
+static void callScriptingImplementation(RefPtr<JSON::Value> value, bool optional, ASCIILiteral expectation, String& exception, NOESCAPE const Function& function)
+{
+    id object = scriptingJSONValue(value);
+    auto *typedObject = dynamic_objc_cast<NativeType>(object);
+    if ((object || !optional) && !typedObject) {
+        exception = expectation;
+        return;
+    }
+    NSString *nativeException = nil;
+    function(typedObject, &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+RefPtr<JSON::Object> WebExtensionAPIScripting::executionWorlds()
+{
+    Ref worlds = JSON::Object::create();
+    for (NSString *key in executionWorld())
+        worlds->setString(String(key), String(key));
+    return worlds;
+}
+
+void WebExtensionAPIScripting::executeScript(JSContextRef context, JSValueRef details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    // Keep the top-level values: 'func' is a JSValue the JSON conversions would drop.
+    NSString *nativeException = nil;
+    executeScript(toNSDictionary(context, details, NullValuePolicy::NotAllowed), WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPIScripting::insertCSS(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    callScriptingImplementation<NSDictionary>(details, false, "details must be an object"_s, exception, [&](NSDictionary *object, NSString **nativeException) {
+        insertCSS(object, WTF::move(callback), nativeException);
+    });
+}
+
+void WebExtensionAPIScripting::removeCSS(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    callScriptingImplementation<NSDictionary>(details, false, "details must be an object"_s, exception, [&](NSDictionary *object, NSString **nativeException) {
+        removeCSS(object, WTF::move(callback), nativeException);
+    });
+}
+
+void WebExtensionAPIScripting::registerContentScripts(RefPtr<JSON::Value> scripts, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    callScriptingImplementation<NSArray>(scripts, false, "scripts must be an array"_s, exception, [&](NSArray *object, NSString **nativeException) {
+        registerContentScripts(object, WTF::move(callback), nativeException);
+    });
+}
+
+void WebExtensionAPIScripting::getRegisteredContentScripts(RefPtr<JSON::Value> filter, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    callScriptingImplementation<NSDictionary>(filter, true, "filter must be an object"_s, exception, [&](NSDictionary *object, NSString **nativeException) {
+        getRegisteredContentScripts(object, WTF::move(callback), nativeException);
+    });
+}
+
+void WebExtensionAPIScripting::updateContentScripts(RefPtr<JSON::Value> scripts, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    callScriptingImplementation<NSArray>(scripts, false, "scripts must be an array"_s, exception, [&](NSArray *object, NSString **nativeException) {
+        updateContentScripts(object, WTF::move(callback), nativeException);
+    });
+}
+
+void WebExtensionAPIScripting::unregisterContentScripts(RefPtr<JSON::Value> filter, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    callScriptingImplementation<NSDictionary>(filter, true, "filter must be an object"_s, exception, [&](NSDictionary *object, NSString **nativeException) {
+        unregisterContentScripts(object, WTF::move(callback), nativeException);
+    });
+}
+
 SUPPRESS_NODELETE NSDictionary *WebExtensionAPIScripting::executionWorld()
 {
     // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/scripting/ExecutionWorld

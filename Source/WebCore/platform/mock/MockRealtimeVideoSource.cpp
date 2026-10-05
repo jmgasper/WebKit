@@ -60,7 +60,13 @@
 
 namespace WebCore {
 
-#if !PLATFORM(MAC) && !PLATFORM(IOS_FAMILY) && !USE(GSTREAMER)
+#if PLATFORM(HAIKU)
+// The mock sources render per platform; Haiku has none.
+CaptureSourceOrError MockRealtimeVideoSource::create(String&&, AtomString&&, MediaDeviceHashSalts&&, const MediaConstraints*, std::optional<PageIdentifier>)
+{
+    return CaptureSourceOrError({ "Mock capture is not available"_s, MediaAccessDenialReason::HardwareError });
+}
+#elif !PLATFORM(MAC) && !PLATFORM(IOS_FAMILY) && !USE(GSTREAMER)
 CaptureSourceOrError MockRealtimeVideoSource::create(String&& deviceID, AtomString&& name, MediaDeviceHashSalts&& hashSalts, const MediaConstraints* constraints, std::optional<PageIdentifier> pageIdentifier)
 {
 #ifndef NDEBUG

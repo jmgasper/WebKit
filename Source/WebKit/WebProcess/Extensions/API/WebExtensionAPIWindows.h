@@ -33,6 +33,7 @@
 #include "WebExtensionWindow.h"
 #include "WebExtensionWindowIdentifier.h"
 #include "WebPageProxyIdentifier.h"
+#include <wtf/JSONValues.h>
 
 OBJC_CLASS NSDictionary;
 OBJC_CLASS NSString;
@@ -45,11 +46,18 @@ class WebExtensionAPIWindows : public WebExtensionAPIObject, public JSWebExtensi
     WEB_EXTENSION_DECLARE_JS_WRAPPER_CLASS(WebExtensionAPIWindows, windows, windows);
 
 public:
-#if PLATFORM(COCOA)
     using PopulateTabs = WebExtensionWindow::PopulateTabs;
     using WindowTypeFilter = WebExtensionWindow::TypeFilter;
 
+    void get(WebPageProxyIdentifier, double windowID, RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void getCurrent(WebPageProxyIdentifier, RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void getLastFocused(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void getAll(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void createWindow(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void update(double windowID, RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void remove(double windowID, Ref<WebExtensionCallbackHandler>&&, String& exception);
     bool isPropertyAllowed(const ASCIILiteral& propertyName, WebPage*);
+#if PLATFORM(COCOA)
 
     void createWindow(NSDictionary *data, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
 
@@ -60,6 +68,8 @@ public:
 
     void update(double windowID, NSDictionary *info, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
     void remove(double windowID, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
+
+#endif
 
     double windowIdentifierNone() const { return WebExtensionWindowConstants::None; }
     double windowIdentifierCurrent() const { return WebExtensionWindowConstants::Current; }
@@ -72,6 +82,7 @@ private:
     friend class WebExtensionAPITabs;
     friend class WebExtensionAPIWindowsEvent;
 
+#if PLATFORM(COCOA)
     static bool parsePopulateTabs(NSDictionary *, PopulateTabs&, NSString *sourceKey, NSString **outExceptionString);
     static bool parseWindowTypesFilter(NSDictionary *, OptionSet<WindowTypeFilter>&, NSString *sourceKey, NSString **outExceptionString);
     static bool parseWindowTypeFilter(NSString *, OptionSet<WindowTypeFilter>&, NSString *sourceKey, NSString **outExceptionString);
@@ -79,10 +90,11 @@ private:
     bool parseWindowCreateOptions(NSDictionary *, WebExtensionWindowParameters&, NSString *sourceKey, NSString **outExceptionString);
     static bool parseWindowUpdateOptions(NSDictionary *, WebExtensionWindowParameters&, NSString *sourceKey, NSString **outExceptionString);
 
+#endif
+
     RefPtr<WebExtensionAPIWindowsEvent> m_onCreated;
     RefPtr<WebExtensionAPIWindowsEvent> m_onRemoved;
     RefPtr<WebExtensionAPIWindowsEvent> m_onFocusChanged;
-#endif
 };
 
 bool isValid(std::optional<WebExtensionWindowIdentifier>, NSString **outExceptionString);

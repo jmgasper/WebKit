@@ -247,6 +247,9 @@ void WebUserContentController::removeAllUserScripts(const Vector<ContentWorldIde
 
 void WebUserContentController::addUserStyleSheets(Vector<WebUserStyleSheetData>&& userStyleSheets)
 {
+#if PLATFORM(HAIKU)
+    bool addedSheetForEveryPage = false;
+#endif
     for (auto& userStyleSheetData : userStyleSheets) {
         addContentWorldIfNecessary(userStyleSheetData.worldData);
         RefPtr world = worldMap().get(userStyleSheetData.worldData.identifier);
@@ -256,9 +259,21 @@ void WebUserContentController::addUserStyleSheets(Vector<WebUserStyleSheetData>&
         }
         
         UserStyleSheet sheet = userStyleSheetFromData(WTF::move(userStyleSheetData.userStyleSheet));
+#if PLATFORM(HAIKU)
+        if (!sheet.pageID())
+            addedSheetForEveryPage = true;
+#endif
         addUserStyleSheetInternal(*world, userStyleSheetData.identifier, WTF::move(sheet));
     }
 
+#if PLATFORM(HAIKU)
+    // A sheet for one page (an extension's tabs.insertCSS()) was given to that page's documents
+    // above (Page::injectUserStyleSheet()) and is in no other document's injected sheets: making
+    // every document of every page in this process build its injected sheets and resolve all its
+    // styles again was work for nothing, and undid the page's own incremental update.
+    if (!addedSheetForEveryPage)
+        return;
+#endif
     invalidateInjectedStyleSheetCacheInAllFramesInAllPages();
 }
 

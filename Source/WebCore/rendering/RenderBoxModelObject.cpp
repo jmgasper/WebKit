@@ -313,7 +313,18 @@ DecodingMode RenderBoxModelObject::decodingModeForImageDraw(const Image& image, 
     }
 
     // Large image case.
-    if (!(bitmapImage->isLargeForDecoding() && settings().largeImageAsyncDecodingEnabled()))
+#if PLATFORM(HAIKU)
+    // Any picture bigger than a small icon (32 KB decoded, about 90x90): an
+    // element's first image is then decoded on the decoder's thread rather
+    // than in the paint on the main thread. A news front page decodes dozens
+    // of AVIF and WebP thumbnails (The Guardian: about 100 ms of the main
+    // thread in dav1d while it loads). Pictures an element already shows
+    // are still decoded in place (defaultDecodingMode()), so none flickers.
+    bool decodesAsLarge = bitmapImage->isLargeForDecoding() || bitmapImage->size().area() * sizeof(uint32_t) > 32 * KB;
+#else
+    bool decodesAsLarge = bitmapImage->isLargeForDecoding();
+#endif
+    if (!(decodesAsLarge && settings().largeImageAsyncDecodingEnabled()))
         return DecodingMode::Synchronous;
 
     // Choose a decodingMode such that the image does not flicker.

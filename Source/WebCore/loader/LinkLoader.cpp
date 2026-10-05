@@ -465,10 +465,11 @@ RefPtr<LinkPreloadResourceClient> LinkLoader::preloadIfNeeded(const LinkLoadPara
 
 void LinkLoader::prefetchIfNeeded(const LinkLoadParameters& params, Document& document)
 {
-    if (!params.href.isValid() || !document.frame())
+    // A parsed link can outlive a preference change. Check again when starting
+    // the request, rather than relying on its cached rel classification.
+    if (!document.settings().linkPrefetchEnabled() || !params.href.isValid() || !document.frame())
         return;
 
-    ASSERT(document.settings().linkPrefetchEnabled());
     std::optional<ResourceLoadPriority> priority;
     CachedResource::Type type = CachedResource::Type::LinkPrefetch;
 

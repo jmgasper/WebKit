@@ -28,6 +28,7 @@
 
 #include "NetworkProcess.h"
 #include "NetworkStorageSession.h"
+#include <WebCore/CookieJarDB.h>
 #include <WebCore/HTTPCookieAcceptPolicy.h>
 
 namespace WebKit {
@@ -57,5 +58,28 @@ void WebCookieManager::platformSetHTTPCookieAcceptPolicy(PAL::SessionID sessionI
 
     completionHandler();
 }
+
+#if PLATFORM(HAIKU)
+void WebCookieManager::setCookieWithResult(PAL::SessionID sessionID, const Cookie& cookie, uint64_t cookiesVersion, CompletionHandler<void(bool, std::optional<Cookie>&&)>&& completionHandler)
+{
+    CheckedPtr storageSession = protect(m_process)->storageSession(sessionID);
+    if (!storageSession) {
+        completionHandler(false, std::nullopt);
+        return;
+    }
+    std::optional<Cookie> storedCookie;
+    bool success = storageSession->cookieDatabase().setCookieWithResult(cookie, storedCookie);
+    // The operation has finished even when the database rejects the write.
+    // Release waiting loads without presenting failure as a stored cookie.
+    storageSession->setCookiesVersion(cookiesVersion);
+    completionHandler(success, WTF::move(storedCookie));
+}
+
+void WebCookieManager::deleteCookieWithResult(PAL::SessionID sessionID, const Cookie& cookie, CompletionHandler<void(bool)>&& completionHandler)
+{
+    CheckedPtr storageSession = protect(m_process)->storageSession(sessionID);
+    completionHandler(storageSession && storageSession->cookieDatabase().deleteCookie(cookie));
+}
+#endif
 
 } // namespace WebKit

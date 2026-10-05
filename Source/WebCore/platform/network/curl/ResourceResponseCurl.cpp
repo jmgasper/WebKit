@@ -140,6 +140,24 @@ String ResourceResponse::platformSuggestedFilename() const
     return contentDisposition.toString();
 }
 
+
+bool ResourceResponse::shouldRedirect()
+{
+    auto statusCode = httpStatusCode();
+    if (statusCode < 300 || 400 <= statusCode)
+        return false;
+
+    // Some 3xx status codes aren't actually redirects.
+    if (statusCode == 300 || statusCode == 304 || statusCode == 305 || statusCode == 306)
+        return false;
+
+    if (httpHeaderField(HTTPHeaderName::Location).isEmpty())
+        return false;
+
+    return true;
+}
+
+
 }
 
 #endif

@@ -55,8 +55,12 @@ bool AVIFImageReader::parseHeader(const SharedBuffer& data, bool allDataReceived
     if (avifDecoderSetIOMemory(m_avifDecoder.get(), dataSpan.data(), dataSpan.size()) != AVIF_RESULT_OK)
         return allDataReceived ? m_decoder->setFailed() : false;
 
-    if (avifDecoderParse(m_avifDecoder.get()) != AVIF_RESULT_OK
-        || avifDecoderNextImage(m_avifDecoder.get()) != AVIF_RESULT_OK)
+    // avifDecoderParse() fills in the image's size (and depth, format and
+    // alpha) without decoding it. Decoding the first image here as well (with
+    // avifDecoderNextImage()) cost a full AV1 decode on the main thread for
+    // every AVIF image, once more than decodeFrame() needs: about 90 ms of the
+    // main thread while The Guardian's front page loads.
+    if (avifDecoderParse(m_avifDecoder.get()) != AVIF_RESULT_OK || !m_avifDecoder->image->width || !m_avifDecoder->image->height)
         return allDataReceived ? m_decoder->setFailed() : false;
 
     if (!m_dataParsed && allDataReceived)

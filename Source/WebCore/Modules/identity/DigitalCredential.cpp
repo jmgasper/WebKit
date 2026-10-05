@@ -50,7 +50,7 @@
 #include "Settings.h"
 #include <JavaScriptCore/ConsoleTypes.h>
 #include <JavaScriptCore/JSONObject.h>
-#include <Logging.h>
+#include "Logging.h"
 #include <wtf/JSONValues.h>
 #include <wtf/UUID.h>
 #include <wtf/text/Base64.h>

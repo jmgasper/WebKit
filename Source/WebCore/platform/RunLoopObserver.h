@@ -35,6 +35,8 @@
 #if USE(GLIB_EVENT_LOOP)
 #include <wtf/Lock.h>
 #include <wtf/glib/ActivityObserver.h>
+#elif PLATFORM(HAIKU)
+#include <wtf/Lock.h>
 #endif
 
 #if USE(CF)
@@ -43,6 +45,11 @@ using PlatformRunLoop = struct __CFRunLoop*;
 #elif USE(GLIB)
 using PlatformRunLoopObserver = ActivityObserver;
 using PlatformRunLoop = RefPtr<RunLoop>;
+#elif PLATFORM(HAIKU)
+// The compositor schedules its observers on the main run loop from its own
+// thread, so the run loop that is asked for has to be carried through.
+using PlatformRunLoopObserver = void*;
+using PlatformRunLoop = RunLoop*;
 #else
 using PlatformRunLoopObserver = void*;
 using PlatformRunLoop = void*;
@@ -107,6 +114,14 @@ private:
     WellKnownOrder m_order { WellKnownOrder::GraphicsCommit };
     mutable Lock m_runLoopObserverLock;
     RefPtr<ActivityObserver> m_runLoopObserver WTF_GUARDED_BY_LOCK(m_runLoopObserverLock);
+#elif PLATFORM(HAIKU)
+    // A zero delay timer stands in for the CF and GLib observers. It must be a
+    // timer rather than RunLoop::dispatch(): see the implementation. It is
+    // armed from one thread and fires on another, so both it and the flag that
+    // answers isScheduled() are held under a lock, as they are for GLib.
+    mutable Lock m_timerLock;
+    bool m_isScheduled WTF_GUARDED_BY_LOCK(m_timerLock) { false };
+    RefPtr<RunLoop::DispatchTimer> m_timer WTF_GUARDED_BY_LOCK(m_timerLock);
 #endif
 };
 

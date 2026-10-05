@@ -27,10 +27,15 @@
 
 #if USE(COORDINATED_GRAPHICS)
 
+#if USE(LIBEPOXY)
+#include <epoxy/egl.h>
+#endif
 #include "MessageReceiver.h"
 #include <WebCore/Color.h>
 #include <WebCore/CoordinatedCompositionReason.h>
+#if USE(GBM) || OS(ANDROID)
 #include <WebCore/DMABufBuffer.h>
+#endif
 #include <WebCore/Damage.h>
 #include <WebCore/IntSize.h>
 #include <atomic>
@@ -83,6 +88,9 @@ class AcceleratedSurface;
 }
 
 namespace WebKit {
+#if PLATFORM(HAIKU)
+class DirectPresenterHaiku;
+#endif
 class WebPage;
 
 // Whether the target holds the frame it was meant to hold once rendering ends. A frame that painted
@@ -94,7 +102,7 @@ enum class TargetContents : bool {
 };
 
 class AcceleratedSurface final : public ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr<AcceleratedSurface, WTF::DestructionThread::MainRunLoop>, public CanMakeThreadSafeCheckedPtr<AcceleratedSurface>
-#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM) || PLATFORM(HAIKU)
     , public IPC::MessageReceiver
 #endif
 {
@@ -109,7 +117,7 @@ public:
     static Ref<AcceleratedSurface> create(WebPage&, Function<void()>&& frameCompleteHandler, RenderingPurpose);
     ~AcceleratedSurface();
 
-#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM) || PLATFORM(HAIKU)
     void ref() const final { ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr::ref(); }
     void deref() const final { ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr::deref(); }
 #endif
@@ -118,11 +126,12 @@ public:
     uint64_t surfaceID() const { return m_id; }
     bool shouldPaintMirrored() const;
 
-#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM) || PLATFORM(HAIKU)
     bool usesGL() const { return m_renderingPurpose == RenderingPurpose::Composited || m_hardwareAccelerationEnabled; }
 #elif PLATFORM(WPE)
     constexpr bool usesGL() const { return true; }
 #endif
+
 
     SkCanvas* canvas();
 
@@ -155,22 +164,37 @@ public:
     void visibilityDidChange(bool);
     void backgroundColorDidChange();
 
+#if PLATFORM(HAIKU)
+    // Whether a frame of this size can be painted without the swap chain
+    // growing past its limit. Compositing thread.
+    bool hasRenderTargetFor(const WebCore::IntSize& size) const { return m_swapChain.canProvideTarget(size); }
+    // Runs on the compositing thread whenever the UI process gives a buffer back.
+    void setRenderTargetReleasedHandler(Function<void()>&& handler) { m_renderTargetReleasedHandler = WTF::move(handler); }
+    // Runs on the compositing thread when the UI process wants the page on
+    // the screen again in full (DirectPresentHaiku.h): asks for a frame.
+    void setRedisplayHandlerHaiku(Function<void()>&& handler) { m_redisplayHandlerHaiku = WTF::move(handler); }
+#endif
+
 private:
     AcceleratedSurface(WebPage&, Function<void()>&& frameCompleteHandler, RenderingPurpose);
 
     RenderingPurpose renderingPurpose() const { return m_renderingPurpose; }
-#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM) || PLATFORM(HAIKU)
     bool hardwareAccelerationEnabled() const { return m_hardwareAccelerationEnabled; }
 #endif
     bool useSkia() const { return m_useSkia; }
     bool isOpaque() const;
     std::optional<WebCore::Color> backgroundColor();
 
-#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM) || PLATFORM(HAIKU)
     // IPC::MessageReceiver.
     void didReceiveMessage(IPC::Connection&, IPC::Decoder&) override;
 
     void releaseBuffer(uint64_t, WTF::UnixFileDescriptor&&);
+#endif
+#if PLATFORM(HAIKU)
+    void setDirectPresentTarget(int32_t area);
+    void redisplayDirect();
 #endif
     void frameDone();
     void releaseUnusedBuffersTimerFired();
@@ -192,6 +216,16 @@ private:
 
         virtual void sync(bool) { }
         virtual void setReleaseFenceFD(UnixFileDescriptor&&) { }
+#if PLATFORM(HAIKU) && ENABLE(DAMAGE_TRACKING)
+        // What changed in this target since it was last current: all a target
+        // read back into shared memory needs to copy (nullopt: everything).
+        virtual void setReadbackDamage(std::optional<WebCore::Damage>&&) { }
+#endif
+#if PLATFORM(HAIKU)
+        // Copies the frame straight into the screen when the UI process has
+        // given it a place there; true if it went, and then nothing is read back.
+        virtual bool presentDirectlyHaiku(DirectPresenterHaiku*, const std::optional<WebCore::Damage>&) { return false; }
+#endif
 
         SkSurface* skiaSurface() const { return m_skiaSurface.get(); }
 
@@ -223,7 +257,7 @@ private:
         sk_sp<SkSurface> m_skiaSurface;
     };
 
-#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM) || PLATFORM(HAIKU)
     class RenderTargetShareableBuffer : public RenderTarget {
         WTF_MAKE_TZONE_ALLOCATED(RenderTargetShareableBuffer);
     public:
@@ -319,10 +353,27 @@ private:
     private:
         bool supportsExplicitSync() const override { return false; }
         void didRenderFrame() override;
+#if PLATFORM(HAIKU)
+        bool readBackThroughPixelBuffer();
+        bool presentDirectlyHaiku(DirectPresenterHaiku*, const std::optional<WebCore::Damage>&) override;
+        void sendFrame(Vector<WebCore::IntRect, 1>&&) override;
+        unsigned m_pixelBuffer { 0 };
+        // The last frame went into the screen, not into m_bitmap.
+        bool m_presentedDirectly { false };
+        // m_bitmap is older than what was presented since: read it all next time.
+        bool m_bitmapStale { false };
+#if ENABLE(DAMAGE_TRACKING)
+        void setReadbackDamage(std::optional<WebCore::Damage>&& damage) override { m_readbackDamage = WTF::move(damage); }
+        std::optional<WebCore::Damage> m_readbackDamage;
+#endif
+#endif
 
         const Ref<WebCore::ShareableBitmap> m_bitmap;
     };
 
+    // Exports the framebuffer as a DMA-BUF, so it stays with the platforms that
+    // have one; Haiku uses RenderTargetSHMImage above.
+#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
     class RenderTargetTexture final : public RenderTargetShareableBuffer {
     public:
         static std::unique_ptr<RenderTarget> create(AcceleratedSurface&, const WebCore::IntSize&);
@@ -334,7 +385,8 @@ private:
 
         Ref<WebCore::BitmapTexture> m_texture;
     };
-#endif // PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+#endif
+#endif // PLATFORM(GTK) || ENABLE(WPE_PLATFORM) || PLATFORM(HAIKU)
 
 #if USE(WPE_RENDERER)
     class RenderTargetWPEBackend final : public RenderTarget {
@@ -361,7 +413,7 @@ private:
 
         enum class Type {
             Invalid,
-#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM) || PLATFORM(HAIKU)
 #if USE(GBM) || OS(ANDROID)
             EGLImage,
 #endif
@@ -379,6 +431,10 @@ private:
         const WebCore::IntSize& size() const LIFETIME_BOUND { return m_size; }
         RenderTarget* nextTarget();
         void releaseTarget(uint64_t, UnixFileDescriptor&& releaseFence);
+#if PLATFORM(HAIKU)
+        // A new size resets the chain; otherwise a target is free or may still be made.
+        bool canProvideTarget(const WebCore::IntSize& size) const { return size != m_size || !m_freeTargets.isEmpty() || m_lockedTargets.size() < s_maximumBuffers; }
+#endif
         void reset();
         void releaseUnusedBuffers();
 
@@ -392,7 +448,7 @@ private:
         }
 #endif
 
-#if (PLATFORM(GTK) || ENABLE(WPE_PLATFORM)) && (USE(GBM) || OS(ANDROID))
+#if (PLATFORM(GTK) || ENABLE(WPE_PLATFORM) || PLATFORM(HAIKU)) && (USE(GBM) || OS(ANDROID))
         void setupBufferFormat();
 #endif
 
@@ -413,7 +469,7 @@ private:
         Vector<std::unique_ptr<RenderTarget>, s_maximumBuffers> m_freeTargets;
         Vector<std::unique_ptr<RenderTarget>, s_maximumBuffers> m_lockedTargets;
         bool m_initialTargetsCreated { false };
-#if (PLATFORM(GTK) || ENABLE(WPE_PLATFORM)) && (USE(GBM) || OS(ANDROID))
+#if (PLATFORM(GTK) || ENABLE(WPE_PLATFORM) || PLATFORM(HAIKU)) && (USE(GBM) || OS(ANDROID))
         mutable Lock m_bufferFormatLock;
         BufferFormat m_bufferFormat WTF_GUARDED_BY_LOCK(m_bufferFormatLock);
         bool m_bufferFormatChanged WTF_GUARDED_BY_LOCK(m_bufferFormatLock) { false };
@@ -475,10 +531,24 @@ private:
 
     const WeakRef<WebPage> m_webPage;
     Function<void()> m_frameCompleteHandler;
+#if PLATFORM(HAIKU)
+    Function<void()> m_renderTargetReleasedHandler;
+    Function<void()> m_redisplayHandlerHaiku;
+    std::unique_ptr<DirectPresenterHaiku> m_directPresenter;
+    // Frames presented directly since one last went through app_server, and
+    // when that was (didRenderFrame()).
+    bool m_directPagesPendingHaiku { false };
+    // When the screen first got a frame app_server's copy does not have.
+    MonotonicTime m_directPagesPendingSinceHaiku;
+    MonotonicTime m_lastFrameThroughAppServerHaiku;
+    // What frames presented directly have changed since one last went
+    // through app_server, which that one draws there (didRenderFrame()).
+    WebCore::Region m_directDamageHaiku;
+#endif
     bool m_useSkia { false };
     uint64_t m_id { 0 };
     RenderingPurpose m_renderingPurpose { RenderingPurpose::Composited };
-#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM) || PLATFORM(HAIKU)
     bool m_hardwareAccelerationEnabled { true };
 #endif
     mutable Lock m_backgroundColorLock;

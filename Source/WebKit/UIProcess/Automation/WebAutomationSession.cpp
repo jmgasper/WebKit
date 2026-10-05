@@ -68,7 +68,7 @@
 #include <wtf/text/TextBreakIterator.h>
 #endif
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(HAIKU)
 #include "VirtualAuthenticatorManager.h"
 #include <WebCore/AuthenticatorTransport.h>
 #endif
@@ -2177,7 +2177,7 @@ CommandResult<void> WebAutomationSession::setSessionPermissions(Ref<JSON::Array>
     return { };
 }
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(HAIKU)
 static WebCore::AuthenticatorTransport NODELETE toAuthenticatorTransport(Inspector::Protocol::Automation::AuthenticatorTransport transport)
 {
     switch (transport) {
@@ -2198,7 +2198,7 @@ static WebCore::AuthenticatorTransport NODELETE toAuthenticatorTransport(Inspect
 
 CommandResult<String /* authenticatorId */> WebAutomationSession::addVirtualAuthenticator(const String& browsingContextHandle, Ref<JSON::Object>&& authenticator)
 {
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(HAIKU)
     auto protocol = authenticator->getString("protocol"_s);
     SYNC_FAIL_WITH_PREDEFINED_ERROR_AND_DETAILS_IF(!protocol, InvalidParameter, "The parameter 'protocol' is missing or invalid."_s);
 
@@ -2237,7 +2237,7 @@ CommandResult<String /* authenticatorId */> WebAutomationSession::addVirtualAuth
 
 CommandResult<void> WebAutomationSession::removeVirtualAuthenticator(const String& browsingContextHandle, const String& authenticatorId)
 {
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(HAIKU)
     auto page = webPageProxyForHandle(browsingContextHandle);
     SYNC_FAIL_WITH_PREDEFINED_ERROR_IF(!page, WindowNotFound);
 

@@ -45,6 +45,8 @@
 #include "MediaStreamTrackAudioSourceProviderCocoa.h"
 #elif ENABLE(WEB_AUDIO) && ENABLE(MEDIA_STREAM) && USE(GSTREAMER)
 #include "AudioSourceProviderGStreamer.h"
+#elif ENABLE(WEB_AUDIO) && PLATFORM(HAIKU)
+#include "MediaStreamTrackAudioSourceProviderHaiku.h"
 #else
 #include "WebAudioSourceProvider.h"
 #endif
@@ -548,6 +550,8 @@ RefPtr<WebAudioSourceProvider> MediaStreamTrackPrivate::createAudioSourceProvide
     return MediaStreamTrackAudioSourceProviderCocoa::create(*this);
 #elif USE(GSTREAMER)
     return AudioSourceProviderGStreamer::create(*this);
+#elif PLATFORM(HAIKU)
+    return MediaStreamTrackAudioSourceProviderHaiku::create(*this);
 #else
     return nullptr;
 #endif

@@ -45,6 +45,7 @@ struct WebExtensionTabQueryParameters {
 
     std::optional<bool> active;
     std::optional<bool> audible;
+    std::optional<bool> discarded;
     std::optional<bool> hidden;
     std::optional<bool> loading;
     std::optional<bool> muted;

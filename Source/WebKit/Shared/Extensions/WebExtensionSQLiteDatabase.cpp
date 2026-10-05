@@ -154,9 +154,13 @@ bool WebExtensionSQLiteDatabase::openWithAccessType(AccessType accessType, RefPt
     ASSERT(!m_db);
 
     String databasePath;
-    if (m_url == inMemoryDatabaseURL())
+    if (m_url == inMemoryDatabaseURL()) {
         databasePath = WebExtensionSQLiteInMemoryDatabaseName;
-    else if (m_url == privateOnDiskDatabaseURL())
+        // "file::memory:" is a URI. A SQLite built without SQLITE_USE_URI (as
+        // on Haiku) opened it as a file of that name in the working directory,
+        // shared by every extension's storage.session and kept across launches.
+        flags |= SQLITE_OPEN_URI;
+    } else if (m_url == privateOnDiskDatabaseURL())
         databasePath = ""_s;
     else {
         ASSERT(!m_url.isEmpty());

@@ -113,25 +113,7 @@ auto ContentExtensionsBackend::actionsFromContentRuleList(const ContentExtension
     auto actionLocations = contentExtension.interpretURLFilters(urlString, flags);
     auto& topURLActions = contentExtension.topURLActions(resourceLoadInfo.mainDocumentURL);
     auto& frameURLActions = contentExtension.frameURLActions(resourceLoadInfo.frameURL);
-
-    actionLocations.removeIf([&](uint64_t actionAndFlags) {
-        ResourceFlags flags = actionAndFlags >> 32;
-        auto actionCondition = static_cast<ActionCondition>(flags & ActionConditionMask);
-        switch (actionCondition) {
-        case ActionCondition::None:
-            return false;
-        case ActionCondition::IfTopURL:
-            return !topURLActions.contains(actionAndFlags);
-        case ActionCondition::UnlessTopURL:
-            return topURLActions.contains(actionAndFlags);
-        case ActionCondition::IfFrameURL:
-            return !frameURLActions.contains(actionAndFlags);
-        case ActionCondition::UnlessFrameURL:
-            return frameURLActions.contains(actionAndFlags);
-        }
-        ASSERT_NOT_REACHED();
-        return false;
-    });
+    filterActionsByURLConditions(actionLocations, topURLActions, frameURLActions);
 
     auto serializedActions = compiledExtension.serializedActions();
 
@@ -146,6 +128,10 @@ auto ContentExtensionsBackend::actionsFromContentRuleList(const ContentExtension
             return static_cast<uint32_t>(actionLocation);
         });
         std::ranges::sort(vector);
+        // An unflagged action can match both a specific URL alternative and
+        // a universal alternative. These collections share serialized action
+        // locations; a single action must only be deserialized and applied once.
+        removeRepeatedElements(vector);
 
         // We need to handle IgnoreFollowingRules...
         for (size_t i = 0; i < vector.size(); i++) {

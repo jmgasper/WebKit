@@ -800,7 +800,7 @@ RefPtr<ImageData> HTMLCanvasElement::getImageData()
 
 RefPtr<VideoFrame> HTMLCanvasElement::toVideoFrame()
 {
-#if PLATFORM(COCOA) || USE(GSTREAMER)
+#if PLATFORM(COCOA) || USE(GSTREAMER) || PLATFORM(HAIKU)
     Ref document = this->document();
 #if ENABLE(WEBGL)
     if (RefPtr context = dynamicDowncast<WebGLRenderingContextBase>(m_context.get())) {

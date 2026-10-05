@@ -29,6 +29,7 @@
 #include "DrawingAreaCoordinatedGraphics.h"
 
 #include "DrawingAreaProxyMessages.h"
+#include "LayerTreeHost.h"
 #include "MessageSenderInlines.h"
 #include "UpdateInfo.h"
 #include "WebDisplayRefreshMonitor.h"

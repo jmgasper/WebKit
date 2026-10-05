@@ -48,6 +48,10 @@
 #include <unistd.h>
 #endif
 
+#if PLATFORM(HAIKU) && !defined(MAP_FILE)
+#define MAP_FILE 0
+#endif
+
 #if HAVE(STD_FILESYSTEM) || HAVE(STD_EXPERIMENTAL_FILESYSTEM)
 #include <wtf/StdFilesystem.h>
 #endif
@@ -843,17 +847,15 @@ String pathByAppendingComponents(StringView path, std::span<const StringView> co
 String createTemporaryDirectory()
 {
     std::error_code ec;
-    std::string tempDir = std::filesystem::temp_directory_path(ec);
+    auto tempDir = std::filesystem::temp_directory_path(ec);
     if (ec)
         return String();
 
-    std::string newTempDirTemplate = tempDir + "XXXXXXXX";
-
-    Vector<char> newTempDir(std::span<const char> { newTempDirTemplate });
-    if (!mkdtemp(newTempDir.mutableSpan().data()))
+    auto newTempDir = (tempDir / "XXXXXXXX").string();
+    if (!mkdtemp(newTempDir.data()))
         return String();
 
-    return stringFromFileSystemRepresentation(newTempDir.span().data());
+    return stringFromFileSystemRepresentation(newTempDir.c_str());
 }
 
 #endif // !OS(WINDOWS) && !PLATFORM(COCOA)

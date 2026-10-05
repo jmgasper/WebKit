@@ -32,6 +32,8 @@
 #include "PlacedGridItem.h"
 #include "StylePrimitiveNumericTypes+Evaluation.h"
 #include "TrackSizingFunctions.h"
+#include <memory>
+#include <wtf/HashMap.h>
 
 namespace WebCore {
 namespace Layout {
@@ -110,13 +112,27 @@ GridItemSizingFunctions GridItemSizingFunctions::inlineAxis(const IntegrationUti
 
 GridItemSizingFunctions GridItemSizingFunctions::blockAxis(const GridFormattingContext& formattingContext)
 {
+    // Both block-axis intrinsic contribution paths currently lay out the item at
+    // the same inline constraint and return its automatic block size. Track
+    // sizing queries each path for an auto row, so keep that result only for
+    // this invocation of the track sizing algorithm. A later grid layout gets
+    // a new cache, and a changed column size has a different constraint.
+    struct CachedContribution {
+        LayoutUnit inlineAxisConstraint;
+        LayoutUnit value;
+    };
+    auto contributions = std::make_shared<HashMap<const PlacedGridItem*, CachedContribution>>();
+    auto blockContribution = [&formattingContext, contributions](const PlacedGridItem& gridItem, LayoutUnit inlineAxisConstraint) {
+        auto iterator = contributions->find(&gridItem);
+        if (iterator != contributions->end() && iterator->value.inlineAxisConstraint == inlineAxisConstraint)
+            return iterator->value.value;
+        auto value = GridLayoutUtils::blockAxisMinContentContribution(gridItem, inlineAxisConstraint, formattingContext);
+        contributions->set(&gridItem, CachedContribution { inlineAxisConstraint, value });
+        return value;
+    };
     return {
-        [&formattingContext](const PlacedGridItem& gridItem, LayoutUnit inlineAxisConstraint) {
-            return GridLayoutUtils::blockAxisMinContentContribution(gridItem, inlineAxisConstraint, formattingContext);
-        },
-        [&formattingContext](const PlacedGridItem& gridItem, LayoutUnit inlineAxisConstraint) {
-            return GridLayoutUtils::blockAxisMaxContentContribution(gridItem, inlineAxisConstraint, formattingContext);
-        },
+        [blockContribution](const PlacedGridItem& gridItem, LayoutUnit inlineAxisConstraint) { return blockContribution(gridItem, inlineAxisConstraint); },
+        [blockContribution](const PlacedGridItem& gridItem, LayoutUnit inlineAxisConstraint) { return blockContribution(gridItem, inlineAxisConstraint); },
         // This mirrors GridLayoutUtils::blockMinimumSize(), but is evaluated while track sizing is in
         // progress: the available space is not yet known, so it is absent for the automatic minimum size
         // and percentage/calc() minimum sizes resolve against a zero containing block size.

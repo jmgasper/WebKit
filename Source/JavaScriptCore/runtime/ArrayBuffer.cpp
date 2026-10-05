@@ -139,9 +139,18 @@ static RefPtr<BufferMemoryHandle> tryAllocateResizableMemory(VM* vm, size_t size
         return nullptr;
     }
 
-    constexpr bool readable = false;
-    constexpr bool writable = false;
-    OSAllocator::protect(slowMemory + initialBytes, maximumBytes - initialBytes, readable, writable);
+#if OS(HAIKU)
+    // The reservation starts inaccessible on Haiku (BufferMemoryHandle.cpp).
+    if (BufferMemoryHandle::signalingMemoryStartsInaccessible()) {
+        if (initialBytes)
+            OSAllocator::protect(slowMemory, initialBytes, true, true);
+    } else
+#endif
+    {
+        constexpr bool readable = false;
+        constexpr bool writable = false;
+        OSAllocator::protect(slowMemory + initialBytes, maximumBytes - initialBytes, readable, writable);
+    }
     return adoptRef(*new BufferMemoryHandle(slowMemory, initialBytes, maximumBytes, PageCount::fromBytes(initialBytes), PageCount::fromBytes(maximumBytes), MemorySharingMode::Shared, MemoryMode::BoundsChecking));
 }
 

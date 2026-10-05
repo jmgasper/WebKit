@@ -107,12 +107,81 @@ Ref<CoordinatedTileBuffer> CoordinatedUnacceleratedTileBuffer::create(const IntS
     return adoptRef(*new CoordinatedUnacceleratedTileBuffer(size, flags));
 }
 
+#if PLATFORM(HAIKU)
+Ref<CoordinatedTileBuffer> CoordinatedUnacceleratedTileBuffer::createForThreadedPainting(const IntSize& size, Flags flags)
+{
+    static const bool allocatesLate = [] {
+        // SUMMIT_TILE_BUFFERS_LATE=0 allocates and zeroes where the buffer is created.
+        const char* value = getenv("SUMMIT_TILE_BUFFERS_LATE");
+        return !value || value[0] != '0' || value[1];
+    }();
+    if (!allocatesLate)
+        return create(size, flags);
+    return adoptRef(*new CoordinatedUnacceleratedTileBuffer(size, flags, Allocation::WhenAskedFor));
+}
+
+CoordinatedUnacceleratedTileBuffer::CoordinatedUnacceleratedTileBuffer(const IntSize& size, Flags flags, Allocation)
+    : CoordinatedTileBuffer(flags)
+    , m_size(size)
+{
+    const auto checkedArea = size.area() * 4;
+    Locker locker { s_layersMemoryUsageLock };
+    s_currentLayersMemoryUsage += checkedArea;
+    s_maxLayersMemoryUsage = std::max(s_maxLayersMemoryUsage, s_currentLayersMemoryUsage);
+}
+
+void CoordinatedUnacceleratedTileBuffer::noteIfTransparent()
+{
+    static const bool enabled = [] {
+        const char* value = getenv("SUMMIT_SKIP_EMPTY_TILES");
+        return !value || value[0] != '0' || value[1];
+    }();
+    m_isTransparent = false;
+    if (!enabled || !supportsAlpha() || !m_hasData)
+        return;
+    auto bytes = m_data.span();
+    if (!bytes.data())
+        return;
+    // Painted content is found within the first rows as a rule; a tile
+    // without any is 260 KB to look through.
+    size_t size = bytes.size();
+    const unsigned char* data = bytes.data();
+    size_t index = 0;
+    for (; index + sizeof(uint64_t) <= size; index += sizeof(uint64_t)) {
+        uint64_t word;
+        memcpy(&word, data + index, sizeof(word));
+        if (word)
+            return;
+    }
+    for (; index < size; ++index) {
+        if (data[index])
+            return;
+    }
+    m_isTransparent = true;
+}
+
+void CoordinatedUnacceleratedTileBuffer::ensureData(Zeroed zeroed) const
+{
+    if (m_hasData)
+        return;
+    Locker locker { m_dataLock };
+    if (m_hasData)
+        return;
+    const auto checkedArea = m_size.area() * 4;
+    m_data = zeroed == Zeroed::Yes ? MallocSpan<unsigned char>::tryZeroedMalloc(checkedArea) : MallocSpan<unsigned char>::tryMalloc(checkedArea);
+    m_hasData = true;
+}
+#endif
+
 CoordinatedUnacceleratedTileBuffer::CoordinatedUnacceleratedTileBuffer(const IntSize& size, Flags flags)
     : CoordinatedTileBuffer(flags)
     , m_size(size)
 {
     const auto checkedArea = size.area() * 4;
     m_data = MallocSpan<unsigned char>::tryZeroedMalloc(checkedArea);
+#if PLATFORM(HAIKU)
+    m_hasData = true;
+#endif
 
     {
         Locker locker { s_layersMemoryUsageLock };
@@ -134,6 +203,10 @@ CoordinatedUnacceleratedTileBuffer::~CoordinatedUnacceleratedTileBuffer()
 SkCanvas* CoordinatedUnacceleratedTileBuffer::canvas()
 {
     if (!m_surface) {
+#if PLATFORM(HAIKU)
+        // Only a buffer made for a painter that clears it is without pixels here.
+        ensureData(Zeroed::No);
+#endif
         auto alphaType = supportsAlpha() ? kPremul_SkAlphaType : kOpaque_SkAlphaType;
         auto imageInfo = SkImageInfo::Make(m_size.width(), m_size.height(), kBGRA_8888_SkColorType, alphaType, SkColorSpace::MakeSRGB());
         // FIXME: ref buffer and unref on release proc?

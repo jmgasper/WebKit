@@ -1144,6 +1144,11 @@ void Connection::processIncomingMessage(UniqueRef<Decoder> message)
     }
 
     if ((message->shouldDispatchMessageWhenWaitingForSyncReply() == ShouldDispatchWhenWaitingForSyncReply::YesDuringUnboundedIPC && !message->isAllowedWhenWaitingForUnboundedSyncReply()) || (message->shouldDispatchMessageWhenWaitingForSyncReply() == ShouldDispatchWhenWaitingForSyncReply::Yes && !message->isAllowedWhenWaitingForSyncReply())) {
+        // dispatchDidReceiveInvalidMessage reacquires m_incomingMessagesLock.
+        // Drop the shared sync state under that lock before scheduling rejection.
+        syncState = nullptr;
+        incomingMessagesLocker.unlockEarly();
+        waitForMessagesLocker.unlockEarly();
         dispatchDidReceiveInvalidMessage(message->messageName(), message->indicesOfObjectsFailingDecoding());
         return;
     }
@@ -1715,7 +1720,7 @@ void Connection::dispatchToClientWithIncomingMessagesLock(F&& clientRunLoopTask)
     dispatcher()->dispatch(WTF::move(clientRunLoopTask));
 }
 
-#if !USE(UNIX_DOMAIN_SOCKETS) && !OS(DARWIN) && !OS(WINDOWS)
+#if !USE(UNIX_DOMAIN_SOCKETS) && !OS(DARWIN) && !OS(WINDOWS) && !OS(HAIKU)
 std::optional<Connection::ConnectionIdentifierPair> Connection::createConnectionIdentifierPair()
 {
     notImplemented();

@@ -42,11 +42,15 @@ struct WebKit::WebExtensionTabParameters {
     std::optional<bool> selected;
     std::optional<bool> pinned;
     std::optional<bool> audible;
+    std::optional<bool> discarded;
     std::optional<bool> muted;
     std::optional<bool> loading;
     std::optional<bool> privateBrowsing;
     std::optional<bool> readerModeAvailable;
     std::optional<bool> showingReaderMode;
+#if PLATFORM(HAIKU)
+    std::optional<String> cookieStoreIdentifier;
+#endif
 }
 
 struct WebKit::WebExtensionTabQueryParameters {
@@ -61,6 +65,7 @@ struct WebKit::WebExtensionTabQueryParameters {
 
     std::optional<bool> active;
     std::optional<bool> audible;
+    std::optional<bool> discarded;
     std::optional<bool> hidden;
     std::optional<bool> loading;
     std::optional<bool> muted;

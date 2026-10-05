@@ -29,6 +29,10 @@
 
 #include "APIObject.h"
 #include "WebExtensionPortChannelIdentifier.h"
+#if PLATFORM(HAIKU)
+#include "WebExtensionContextIdentifier.h"
+#include "haiku/WebExtensionNativePortMessageQueue.h"
+#endif
 #include <wtf/CanMakeWeakPtr.h>
 #include <wtf/CompletionHandler.h>
 #include <wtf/Forward.h>
@@ -73,6 +77,16 @@ public:
     void reportDisconnection(Error);
     bool NODELETE isDisconnected() const;
 
+#if PLATFORM(HAIKU)
+    using MessageHandler = WebExtensionNativePortMessageQueue::MessageHandler;
+    using DisconnectHandler = SharedTask<void(Error)>;
+    void setMessageHandler(RefPtr<MessageHandler>&&);
+    void setDisconnectHandler(RefPtr<DisconnectHandler>&&);
+    void sendMessage(const String& messageJSON, CompletionHandler<void(Error)>&& = { });
+    void receiveMessages(Vector<String>&&);
+    void disconnectForContextUnload();
+#endif
+
 #if PLATFORM(COCOA)
     void sendMessage(id message, CompletionHandler<void(Error)>&& = { });
     void receiveMessage(id message, Error);
@@ -83,7 +97,14 @@ public:
 #endif
 
 private:
+#if PLATFORM(HAIKU)
+    void remove(Error);
+    Ref<WebExtensionNativePortMessageQueue> m_messageQueue;
+    RefPtr<DisconnectHandler> m_disconnectHandler;
+    std::optional<WebExtensionContextIdentifier> m_loadIdentifier;
+#else
     void remove();
+#endif
 
     WeakPtr<WebExtensionContext> m_extensionContext;
     String m_applicationIdentifier;

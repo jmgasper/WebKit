@@ -29,7 +29,7 @@
     UseCPPAPI,
 ] interface WebExtensionAPIWebPageNamespace {
 
-    [Platform=COCOA] readonly attribute WebExtensionAPIWebPageRuntime runtime;
+    readonly attribute WebExtensionAPIWebPageRuntime runtime;
     [Dynamic] readonly attribute WebExtensionAPITest test;
 
 };

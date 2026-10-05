@@ -142,10 +142,7 @@ list(APPEND WebKit_UNIFIED_SOURCE_LIST_FILES
 )
 
 set(WebKit_BINDINGS_IN_FILES
-    WebProcess/Extensions/Interfaces/WebExtensionAPIAction
     WebProcess/Extensions/Interfaces/WebExtensionAPIBookmarks
-    WebProcess/Extensions/Interfaces/WebExtensionAPICommands
-    WebProcess/Extensions/Interfaces/WebExtensionAPICookies
     WebProcess/Extensions/Interfaces/WebExtensionAPIDOM
     WebProcess/Extensions/Interfaces/WebExtensionAPIDeclarativeNetRequest
     WebProcess/Extensions/Interfaces/WebExtensionAPIDevTools
@@ -153,31 +150,34 @@ set(WebKit_BINDINGS_IN_FILES
     WebProcess/Extensions/Interfaces/WebExtensionAPIDevToolsInspectedWindow
     WebProcess/Extensions/Interfaces/WebExtensionAPIDevToolsNetwork
     WebProcess/Extensions/Interfaces/WebExtensionAPIDevToolsPanels
-    WebProcess/Extensions/Interfaces/WebExtensionAPIEvent
-    WebProcess/Extensions/Interfaces/WebExtensionAPIExtension
-    WebProcess/Extensions/Interfaces/WebExtensionAPILocalization
-    WebProcess/Extensions/Interfaces/WebExtensionAPIMenus
     WebProcess/Extensions/Interfaces/WebExtensionAPINotifications
     WebProcess/Extensions/Interfaces/WebExtensionAPIOffscreen
-    WebProcess/Extensions/Interfaces/WebExtensionAPIPermissions
-    WebProcess/Extensions/Interfaces/WebExtensionAPIPort
     WebProcess/Extensions/Interfaces/WebExtensionAPIScripting
     WebProcess/Extensions/Interfaces/WebExtensionAPISidePanel
     WebProcess/Extensions/Interfaces/WebExtensionAPISidebarAction
-    WebProcess/Extensions/Interfaces/WebExtensionAPIStorage
-    WebProcess/Extensions/Interfaces/WebExtensionAPIStorageArea
-    WebProcess/Extensions/Interfaces/WebExtensionAPITabs
-    WebProcess/Extensions/Interfaces/WebExtensionAPIWebNavigation
-    WebProcess/Extensions/Interfaces/WebExtensionAPIWebNavigationEvent
-    WebProcess/Extensions/Interfaces/WebExtensionAPIWebRequest
-    WebProcess/Extensions/Interfaces/WebExtensionAPIWebRequestEvent
-    WebProcess/Extensions/Interfaces/WebExtensionAPIWindows
-    WebProcess/Extensions/Interfaces/WebExtensionAPIWindowsEvent
 )
 
 set(WebKit_CPP_BINDINGS_IN_FILES
+    WebProcess/Extensions/Interfaces/WebExtensionAPIExtension
+    WebProcess/Extensions/Interfaces/WebExtensionAPILocalization
+    WebProcess/Extensions/Interfaces/WebExtensionAPIMenus
+    WebProcess/Extensions/Interfaces/WebExtensionAPICookies
+    WebProcess/Extensions/Interfaces/WebExtensionAPIAction
+    WebProcess/Extensions/Interfaces/WebExtensionAPIWindowsEvent
+    WebProcess/Extensions/Interfaces/WebExtensionAPIWindows
+    WebProcess/Extensions/Interfaces/WebExtensionAPITabs
+    WebProcess/Extensions/Interfaces/WebExtensionAPIPermissions
+    WebProcess/Extensions/Interfaces/WebExtensionAPICommands
+    WebProcess/Extensions/Interfaces/WebExtensionAPIWebRequest
+    WebProcess/Extensions/Interfaces/WebExtensionAPIWebRequestEvent
+    WebProcess/Extensions/Interfaces/WebExtensionAPIWebNavigation
+    WebProcess/Extensions/Interfaces/WebExtensionAPIWebNavigationEvent
+    WebProcess/Extensions/Interfaces/WebExtensionAPIStorage
+    WebProcess/Extensions/Interfaces/WebExtensionAPIStorageArea
+    WebProcess/Extensions/Interfaces/WebExtensionAPIEvent
     WebProcess/Extensions/Interfaces/WebExtensionAPIAlarms
     WebProcess/Extensions/Interfaces/WebExtensionAPINamespace
+    WebProcess/Extensions/Interfaces/WebExtensionAPIPort
     WebProcess/Extensions/Interfaces/WebExtensionAPIRuntime
     WebProcess/Extensions/Interfaces/WebExtensionAPITest
     WebProcess/Extensions/Interfaces/WebExtensionAPIWebPageNamespace
@@ -627,6 +627,7 @@ set(WebKit_SERIALIZATION_IN_FILES
     Shared/Extensions/WebExtensionSidebarParameters.serialization.in
     Shared/Extensions/WebExtensionStorage.serialization.in
     Shared/Extensions/WebExtensionTab.serialization.in
+    Shared/Extensions/WebExtensionTabScriptParameters.serialization.in
     Shared/Extensions/WebExtensionWindow.serialization.in
 
     Shared/Gamepad/GamepadData.serialization.in

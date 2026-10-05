@@ -39,6 +39,10 @@
 #include <wtf/Vector.h>
 #include <wtf/text/WTFString.h>
 
+#if PLATFORM(HAIKU) && USE(CURL)
+#include <memory>
+#endif
+
 #if PLATFORM(COCOA)
 #include <pal/spi/cf/CFNetworkSPI.h>
 #include <wtf/RetainPtr.h>
@@ -54,6 +58,10 @@ namespace WebCore {
 struct Cookie;
 struct CookieRequestHeaderFieldProxy;
 struct SameSiteInfo;
+
+#if PLATFORM(HAIKU) && USE(CURL)
+class CookieJarDB;
+#endif
 
 enum class HTTPCookieAcceptPolicy : uint8_t;
 enum class IncludeSecureCookies : bool;
@@ -92,7 +100,9 @@ public:
 #if ENABLE(OPT_IN_PARTITIONED_COOKIES)
     WEBCORE_EXPORT static NSHTTPCookie *setCookiePartition(NSHTTPCookie *, NSString *partition);
 #endif
+#endif // PLATFORM(COCOA)
 
+#if PLATFORM(COCOA) || (PLATFORM(HAIKU) && USE(CURL))
     WEBCORE_EXPORT std::pair<String, bool> cookiesForDOM(const URL& firstParty, const SameSiteInfo&, const URL&, IncludeSecureCookies, ThirdPartyCookieBlockingDecision, const String& partition) const;
     WEBCORE_EXPORT std::pair<String, bool> cookieRequestHeaderFieldValue(const URL& firstParty, const SameSiteInfo&, const URL&, IncludeSecureCookies, ThirdPartyCookieBlockingDecision, const String& partition) const;
     WEBCORE_EXPORT std::pair<String, bool> cookieRequestHeaderFieldValue(const CookieRequestHeaderFieldProxy&, ThirdPartyCookieBlockingDecision, const String& partition) const;
@@ -102,7 +112,13 @@ public:
     WEBCORE_EXPORT void setCookie(const Cookie&);
     WEBCORE_EXPORT void deleteCookie(const URL& firstParty, const URL&, const String& cookieName, const String& partition, CompletionHandler<void()>&&) const;
     WEBCORE_EXPORT void deleteAllCookies(CompletionHandler<void()>&&);
-#endif // PLATFORM(COCOA)
+#endif
+
+#if PLATFORM(HAIKU) && USE(CURL)
+    // The Haiku legacy loader owns its cookie store in the application process.
+    WEBCORE_EXPORT CookieJarDB& cookieDatabase() const;
+    WEBCORE_EXPORT void setCookiesFromHTTPResponse(const URL& firstParty, const URL&, const String&) const;
+#endif
 
 protected:
     bool isInMemoryCookieStore() const { return m_isInMemoryCookieStore; }
@@ -130,6 +146,10 @@ private:
     RetainPtr<CFHTTPCookieStorageRef> m_platformCookieStorage;
 #endif
     CredentialStorage m_credentialStorage;
+
+#if PLATFORM(HAIKU) && USE(CURL)
+    mutable std::unique_ptr<CookieJarDB> m_cookieDatabase;
+#endif
 
     static bool m_processMayUseCookieAPI;
 };

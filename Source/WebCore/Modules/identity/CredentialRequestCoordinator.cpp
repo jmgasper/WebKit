@@ -54,7 +54,7 @@
 #include "TaskSource.h"
 #include <JavaScriptCore/JSObject.h>
 #include <JavaScriptCore/StrongInlines.h>
-#include <Logging.h>
+#include "Logging.h"
 #include <wtf/TZoneMallocInlines.h>
 #include <wtf/text/WTFString.h>
 

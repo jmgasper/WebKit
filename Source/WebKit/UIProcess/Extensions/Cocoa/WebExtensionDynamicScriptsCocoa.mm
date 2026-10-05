@@ -51,7 +51,6 @@
 #import "_WKFrameTreeNode.h"
 #import <wtf/Borrow.h>
 #import <wtf/CallbackAggregator.h>
-#import <wtf/TZoneMallocInlines.h>
 #import <wtf/URL.h>
 #import <wtf/cocoa/VectorCocoa.h>
 
@@ -228,86 +227,6 @@ WebExtensionScriptInjectionResultParameters toInjectionResultParameters(id resul
     return parameters;
 }
 
-WTF_MAKE_TZONE_ALLOCATED_IMPL(WebExtensionRegisteredScript);
-
-void WebExtensionRegisteredScript::updateParameters(const WebExtensionRegisteredScriptParameters& parameters)
-{
-    m_parameters = parameters;
-}
-
-void WebExtensionRegisteredScript::merge(WebExtensionRegisteredScriptParameters& parameters)
-{
-    if (!parameters.css && m_parameters.css)
-        parameters.css = m_parameters.css.value();
-
-    if (!parameters.js && m_parameters.js)
-        parameters.js = m_parameters.js.value();
-
-    if (!parameters.injectionTime && m_parameters.injectionTime)
-        parameters.injectionTime = m_parameters.injectionTime.value();
-
-    if (!parameters.excludeMatchPatterns && m_parameters.excludeMatchPatterns)
-        parameters.excludeMatchPatterns = m_parameters.excludeMatchPatterns.value();
-
-    if (!parameters.matchPatterns && m_parameters.matchPatterns)
-        parameters.matchPatterns = m_parameters.matchPatterns.value();
-
-    if (!parameters.allFrames && m_parameters.allFrames)
-        parameters.allFrames = m_parameters.allFrames.value();
-
-    if (!parameters.matchParentFrame && m_parameters.matchParentFrame)
-        parameters.matchParentFrame = m_parameters.matchParentFrame.value();
-
-    if (!parameters.persistent && m_parameters.persistent)
-        parameters.persistent = m_parameters.persistent.value();
-
-    if (!parameters.world && m_parameters.world)
-        parameters.world = m_parameters.world.value();
-}
-
-void WebExtensionRegisteredScript::addUserScript(const String& identifier, API::UserScript& userScript)
-{
-    auto& userScripts = m_userScriptsMap.ensure(identifier, [&] {
-        return UserScriptVector { };
-    }).iterator->value;
-    userScripts.append(userScript);
-}
-
-void WebExtensionRegisteredScript::addUserStyleSheet(const String& identifier, API::UserStyleSheet& userStyleSheet)
-{
-    auto& userStyleSheets = m_userStyleSheetsMap.ensure(identifier, [&] {
-        return UserStyleSheetVector { };
-    }).iterator->value;
-    userStyleSheets.append(userStyleSheet);
-}
-
-void WebExtensionRegisteredScript::removeUserScriptsAndStyleSheets(const String& identifier)
-{
-    removeUserScripts(identifier);
-    removeUserStyleSheets(identifier);
-}
-
-void WebExtensionRegisteredScript::removeUserScripts(const String& identifier)
-{
-    auto userScripts = m_userScriptsMap.take(identifier);
-    auto allUserContentControllers = m_extensionContext->extensionController()->allUserContentControllers();
-
-    for (auto& userScript : userScripts) {
-        for (Ref userContentController : allUserContentControllers)
-            userContentController->removeUserScript(userScript);
-    }
-}
-
-void WebExtensionRegisteredScript::removeUserStyleSheets(const String& identifier)
-{
-    auto userStyleSheets = m_userStyleSheetsMap.take(identifier);
-    auto allUserContentControllers = m_extensionContext->extensionController()->allUserContentControllers();
-
-    for (auto& userStyleSheet : userStyleSheets) {
-        for (Ref userContentController : allUserContentControllers)
-            userContentController->removeUserStyleSheet(userStyleSheet);
-    }
-}
 
 } // namespace WebExtensionDynamicScripts
 

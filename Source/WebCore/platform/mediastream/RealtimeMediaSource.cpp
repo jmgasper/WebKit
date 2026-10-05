@@ -55,6 +55,10 @@
 #include "VideoFrameCV.h"
 #endif
 
+#if PLATFORM(HAIKU)
+#include "VideoFrameHaiku.h"
+#endif
+
 #if USE(GSTREAMER)
 #include "VideoFrameGStreamer.h"
 #endif
@@ -303,6 +307,9 @@ static RefPtr<VideoFrame> adaptVideoFrame(VideoFrameAdaptor& adaptor, VideoFrame
 #elif USE(GSTREAMER)
     UNUSED_PARAM(adaptor);
     return reinterpret_cast<VideoFrameGStreamer&>(videoFrame).resizeTo(desiredSize);
+#elif PLATFORM(HAIKU)
+    UNUSED_PARAM(adaptor);
+    return downcast<VideoFrameHaiku>(videoFrame).resizedTo(desiredSize);
 #else
     UNUSED_PARAM(adaptor);
     UNUSED_PARAM(videoFrame);

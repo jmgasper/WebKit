@@ -36,19 +36,377 @@
 #include "NetworkLoadMetrics.h"
 #include "ResourceError.h"
 #include "SharedBuffer.h"
+#include "SynchronousLoaderClient.h"
 #include <wtf/CrossThreadCopier.h>
+#include "wtf/FileSystem.h"
 #include <wtf/Language.h>
 #include <wtf/MainThread.h>
 #include <wtf/TZoneMallocInlines.h>
 #include <wtf/text/MakeString.h>
 
+#if PLATFORM(HAIKU)
+#include <cstdio>
+#include <dlfcn.h>
+#include <openssl/ssl.h>
+#include <zlib.h>
+#include <wtf/HashSet.h>
+#include <wtf/text/CString.h>
+#endif
+
 namespace WebCore {
 
+#if PLATFORM(HAIKU)
+// SUMMIT_NET_TRACE=1 logs every request when it is queued and when it
+// completes, fails or is cancelled, to find what holds a page's load event.
+static bool netTraceHaiku()
+{
+    static const bool enabled = [] {
+        const char* value = getenv("SUMMIT_NET_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    return enabled;
+}
+
+static double netTraceMsHaiku(MonotonicTime from, MonotonicTime to)
+{
+    return from && to ? (to - from).milliseconds() : -1;
+}
+
+static CString netTraceURLHaiku(const URL& url)
+{
+    auto string = url.string();
+    return (string.length() > 160 ? string.left(160) : string).utf8();
+}
+
+// https servers whose connections were seen to be HTTP/1.1, by scheme, host
+// and port: connecting to them ahead of a load is wasted.
+static Lock http1ServersLockHaiku;
+
+static HashSet<String>& http1ServersHaiku() WTF_REQUIRES_LOCK(http1ServersLockHaiku)
+{
+    static NeverDestroyed<HashSet<String>> servers;
+    return servers;
+}
+
+static void noteServerProtocolHaiku(const URL& url, bool http1)
+{
+    if (!url.protocolIs("https"_s))
+        return;
+    auto server = url.protocolHostAndPort();
+    Locker locker { http1ServersLockHaiku };
+    auto& servers = http1ServersHaiku();
+    if (!http1)
+        servers.remove(server);
+    else if (servers.size() < 10000)
+        servers.add(WTF::move(server));
+}
+
+bool CurlRequest::canPreconnectHaiku(const URL& url)
+{
+    static const bool enabled = [] {
+        const char* value = getenv("SUMMIT_PRECONNECT");
+        return !value || strcmp(value, "0");
+    }();
+    if (!enabled || !url.protocolIs("https"_s))
+        return false;
+    Locker locker { http1ServersLockHaiku };
+    return !http1ServersHaiku().contains(url.protocolHostAndPort());
+}
+
+// Content-Encoding. libcurl would decode gzip and deflate itself, but the
+// system's libcurl is built without brotli and zstd, which the large sites
+// serve to every other browser: YouTube's front page is 98 KB as brotli and
+// 255 KB as gzip. Their decoders are system libraries, loaded when first
+// needed; without them only gzip and deflate are asked for, as before.
+struct BrotliDecoderApiHaiku {
+    void* (*create)(void*, void*, void*) { nullptr };
+    int (*decompressStream)(void*, size_t*, const uint8_t**, size_t*, uint8_t**, size_t*) { nullptr };
+    void (*destroy)(void*) { nullptr };
+};
+
+struct ZstdInBufferHaiku {
+    const void* src;
+    size_t size;
+    size_t pos;
+};
+
+struct ZstdOutBufferHaiku {
+    void* dst;
+    size_t size;
+    size_t pos;
+};
+
+struct ZstdApiHaiku {
+    void* (*create)() { nullptr };
+    size_t (*free)(void*) { nullptr };
+    size_t (*decompressStream)(void*, ZstdOutBufferHaiku*, ZstdInBufferHaiku*) { nullptr };
+    unsigned (*isError)(size_t) { nullptr };
+};
+
+static const BrotliDecoderApiHaiku* brotliApiHaiku()
+{
+    static const BrotliDecoderApiHaiku* api = [] () -> BrotliDecoderApiHaiku* {
+        void* library = dlopen("libbrotlidec.so.1", RTLD_NOW | RTLD_LOCAL);
+        if (!library)
+            return nullptr;
+        auto* api = new BrotliDecoderApiHaiku;
+        api->create = reinterpret_cast<decltype(api->create)>(dlsym(library, "BrotliDecoderCreateInstance"));
+        api->decompressStream = reinterpret_cast<decltype(api->decompressStream)>(dlsym(library, "BrotliDecoderDecompressStream"));
+        api->destroy = reinterpret_cast<decltype(api->destroy)>(dlsym(library, "BrotliDecoderDestroyInstance"));
+        if (api->create && api->decompressStream && api->destroy)
+            return api;
+        delete api;
+        return nullptr;
+    }();
+    return api;
+}
+
+static const ZstdApiHaiku* zstdApiHaiku()
+{
+    static const ZstdApiHaiku* api = [] () -> ZstdApiHaiku* {
+        void* library = dlopen("libzstd.so.1", RTLD_NOW | RTLD_LOCAL);
+        if (!library)
+            return nullptr;
+        auto* api = new ZstdApiHaiku;
+        api->create = reinterpret_cast<decltype(api->create)>(dlsym(library, "ZSTD_createDStream"));
+        api->free = reinterpret_cast<decltype(api->free)>(dlsym(library, "ZSTD_freeDStream"));
+        api->decompressStream = reinterpret_cast<decltype(api->decompressStream)>(dlsym(library, "ZSTD_decompressStream"));
+        api->isError = reinterpret_cast<decltype(api->isError)>(dlsym(library, "ZSTD_isError"));
+        if (api->create && api->free && api->decompressStream && api->isError)
+            return api;
+        delete api;
+        return nullptr;
+    }();
+    return api;
+}
+
+// SUMMIT_CONTENT_ENCODINGS=curl leaves decoding to libcurl (gzip, deflate).
+static bool decodesContentHaiku()
+{
+    static const bool decodes = [] {
+        const char* value = getenv("SUMMIT_CONTENT_ENCODINGS");
+        return !(value && !strcmp(value, "curl"));
+    }();
+    return decodes;
+}
+
+static const String& acceptedEncodingsHaiku()
+{
+    static NeverDestroyed<String> encodings = [] {
+        StringBuilder builder;
+        builder.append("gzip, deflate"_s);
+        if (brotliApiHaiku())
+            builder.append(", br"_s);
+        if (zstdApiHaiku())
+            builder.append(", zstd"_s);
+        return builder.toString();
+    }();
+    return encodings;
+}
+
+class ContentDecoderHaiku {
+public:
+    enum class Kind : uint8_t { Deflate, Gzip, Brotli, Zstd };
+
+    // One decoder per coding, in the order they are undone (the header lists
+    // them in the order they were applied). Null for identity, or a coding
+    // that cannot be undone here, which leaves the body as it came, as libcurl
+    // would have failed it.
+    static std::unique_ptr<ContentDecoderHaiku> create(const String& header)
+    {
+        Vector<Kind> kinds;
+        for (auto token : StringView(header).split(',')) {
+            auto coding = token.trim(isASCIIWhitespace<char16_t>);
+            if (coding.isEmpty() || equalLettersIgnoringASCIICase(coding, "identity"_s))
+                continue;
+            if (equalLettersIgnoringASCIICase(coding, "gzip"_s) || equalLettersIgnoringASCIICase(coding, "x-gzip"_s))
+                kinds.insert(0, Kind::Gzip);
+            else if (equalLettersIgnoringASCIICase(coding, "deflate"_s))
+                kinds.insert(0, Kind::Deflate);
+            else if (equalLettersIgnoringASCIICase(coding, "br"_s) && brotliApiHaiku())
+                kinds.insert(0, Kind::Brotli);
+            else if (equalLettersIgnoringASCIICase(coding, "zstd"_s) && zstdApiHaiku())
+                kinds.insert(0, Kind::Zstd);
+            else
+                return nullptr;
+        }
+        if (kinds.isEmpty())
+            return nullptr;
+        return std::unique_ptr<ContentDecoderHaiku>(new ContentDecoderHaiku(WTF::move(kinds)));
+    }
+
+    ~ContentDecoderHaiku()
+    {
+        for (auto& stage : m_stages)
+            stage.close();
+    }
+
+    // Appends what the input decodes to; false when it is not valid.
+    bool decode(std::span<const uint8_t> input, Vector<uint8_t>& output)
+    {
+        Vector<uint8_t> current;
+        current.append(input);
+        for (auto& stage : m_stages) {
+            Vector<uint8_t> next;
+            if (!stage.decode(current.span(), next))
+                return false;
+            current = WTF::move(next);
+        }
+        output.appendVector(current);
+        return true;
+    }
+
+private:
+    struct Stage {
+        Kind kind;
+        bool started { false };
+        bool finished { false };
+        z_stream zlib { };
+        void* state { nullptr };
+
+        void close()
+        {
+            if ((kind == Kind::Gzip || kind == Kind::Deflate) && started)
+                inflateEnd(&zlib);
+            else if (kind == Kind::Brotli && state)
+                brotliApiHaiku()->destroy(state);
+            else if (kind == Kind::Zstd && state)
+                zstdApiHaiku()->free(state);
+        }
+
+        bool decode(std::span<const uint8_t> input, Vector<uint8_t>& output)
+        {
+            uint8_t buffer[64 * 1024];
+            switch (kind) {
+            case Kind::Gzip:
+            case Kind::Deflate: {
+                if (!started) {
+                    if (input.empty())
+                        return true;
+                    // Some servers send "deflate" without the zlib header
+                    // (raw deflate); libcurl takes both, and so does this.
+                    int bits = 15 + 32;
+                    if (kind == Kind::Deflate && ((input[0] & 0x0f) != 8 || (input.size() > 1 && ((input[0] << 8) | input[1]) % 31)))
+                        bits = -15;
+                    if (inflateInit2(&zlib, bits) != Z_OK)
+                        return false;
+                    started = true;
+                }
+                if (finished)
+                    return true;
+                zlib.next_in = const_cast<Bytef*>(input.data());
+                zlib.avail_in = input.size();
+                // Until the input is used up and the output no longer fills
+                // the buffer (zlib may hold more than one buffer's worth).
+                do {
+                    zlib.next_out = buffer;
+                    zlib.avail_out = sizeof(buffer);
+                    int result = inflate(&zlib, Z_NO_FLUSH);
+                    output.append(std::span<const uint8_t> { buffer, sizeof(buffer) - zlib.avail_out });
+                    if (result == Z_STREAM_END) {
+                        // Another gzip member may follow; anything else is ignored.
+                        if (kind == Kind::Gzip && zlib.avail_in && inflateReset(&zlib) == Z_OK)
+                            continue;
+                        finished = true;
+                    } else if (result == Z_BUF_ERROR)
+                        break;
+                    else if (result != Z_OK)
+                        return false;
+                } while (!finished && (zlib.avail_in || !zlib.avail_out));
+                return true;
+            }
+            case Kind::Brotli: {
+                if (!state && !(state = brotliApiHaiku()->create(nullptr, nullptr, nullptr)))
+                    return false;
+                size_t availableIn = input.size();
+                const uint8_t* nextIn = input.data();
+                while (!finished) {
+                    size_t availableOut = sizeof(buffer);
+                    uint8_t* nextOut = buffer;
+                    int result = brotliApiHaiku()->decompressStream(state, &availableIn, &nextIn, &availableOut, &nextOut, nullptr);
+                    output.append(std::span<const uint8_t> { buffer, sizeof(buffer) - availableOut });
+                    if (result == 1) // BROTLI_DECODER_RESULT_SUCCESS
+                        finished = true;
+                    else if (result == 2) // NEEDS_MORE_INPUT
+                        break;
+                    else if (result != 3) // NEEDS_MORE_OUTPUT continues; ERROR fails
+                        return false;
+                }
+                return true;
+            }
+            case Kind::Zstd: {
+                if (!state && !(state = zstdApiHaiku()->create()))
+                    return false;
+                ZstdInBufferHaiku in { input.data(), input.size(), 0 };
+                while (in.pos < in.size) {
+                    ZstdOutBufferHaiku out { buffer, sizeof(buffer), 0 };
+                    size_t before = in.pos;
+                    size_t result = zstdApiHaiku()->decompressStream(state, &out, &in);
+                    if (zstdApiHaiku()->isError(result))
+                        return false;
+                    output.append(std::span<const uint8_t> { buffer, out.pos });
+                    if (!out.pos && in.pos == before)
+                        break;
+                }
+                // Flush what the decoder still holds for this input.
+                for (;;) {
+                    ZstdOutBufferHaiku out { buffer, sizeof(buffer), 0 };
+                    ZstdInBufferHaiku empty { nullptr, 0, 0 };
+                    size_t result = zstdApiHaiku()->decompressStream(state, &out, &empty);
+                    if (zstdApiHaiku()->isError(result))
+                        return false;
+                    output.append(std::span<const uint8_t> { buffer, out.pos });
+                    if (out.pos < out.size)
+                        break;
+                }
+                return true;
+            }
+            }
+            return false;
+        }
+    };
+
+    explicit ContentDecoderHaiku(Vector<Kind>&& kinds)
+    {
+        for (auto kind : kinds)
+            m_stages.append(Stage { kind });
+    }
+
+    Vector<Stage> m_stages;
+};
+
+#endif
+
+#if PLATFORM(HAIKU)
+// libcurl calls this once the connection is up (resolved, connected, TLS
+// and ALPN done) or found in its pool, just before sending the request.
+int CurlRequest::willSendRequestCallbackHaiku(void* userData, char*, char*, int, int)
+{
+    auto& request = *static_cast<CurlRequest*>(userData);
+    request.m_preconnectedHaiku = true;
+    curl_tlssessioninfo* session = nullptr;
+    if (curl_easy_getinfo(request.m_curlHandle->handle(), CURLINFO_TLS_SSL_PTR, &session) == CURLE_OK && session
+        && session->backend == CURLSSLBACKEND_OPENSSL && session->internals) {
+        const unsigned char* protocol = nullptr;
+        unsigned length = 0;
+        SSL_get0_alpn_selected(static_cast<SSL*>(session->internals), &protocol, &length);
+        request.m_preconnectedMultiplexedHaiku = length == 2 && protocol[0] == 'h' && protocol[1] == '2';
+    }
+    // Stopped before anything is sent, an HTTP/2 connection stays in the
+    // pool (a transfer that ends early only closes connections it cannot
+    // share).
+    return CURL_PREREQFUNC_ABORT;
+}
+#endif
+
 WTF_MAKE_TZONE_ALLOCATED_IMPL(CurlRequest);
+
+CurlRequest::~CurlRequest() = default;
 
 CurlRequest::CurlRequest(const ResourceRequest&request, CurlRequestClient* client, CaptureNetworkLoadMetrics captureExtraMetrics)
     : m_client(client)
     , m_request(request.isolatedCopy())
+    , m_startState(StartState::WaitingForStart)
     , m_formDataStream(m_request.httpBody())
     , m_captureExtraMetrics(captureExtraMetrics == CaptureNetworkLoadMetrics::Extended)
 {
@@ -95,7 +453,7 @@ void CurlRequest::setUserPass(const String& user, const String& password)
     m_password = password.isolatedCopy();
 }
 
-void CurlRequest::resume()
+void CurlRequest::start()
 {
     // The pausing of transfer does not work with protocols, like file://.
     // Therefore, PAUSE can not be done in didReceiveData().
@@ -108,10 +466,16 @@ void CurlRequest::resume()
 
     ASSERT(isMainThread());
 
-    if (m_didStartTransfer)
+    switch (m_startState) {
+    case StartState::DidStart:
+        ASSERT(false);
+        [[fallthrough]];
+    case StartState::StartSuspended:
         return;
-
-    m_didStartTransfer = true;
+    case StartState::WaitingForStart:
+        m_startState = StartState::DidStart;
+        break;
+    }
 
     if (m_request.url().protocolIsFile())
         invokeDidReceiveResponseForFile(m_request.url());
@@ -122,8 +486,14 @@ void CurlRequest::resume()
 void CurlRequest::startWithJobManager()
 {
     ASSERT(isMainThread());
+#if PLATFORM(HAIKU)
+    if (netTraceHaiku()) {
+        m_netTraceQueuedAtHaiku = MonotonicTime::now();
+        fprintf(stderr, "Summit net: start id=%p %s %s\n", this, m_request.httpMethod().utf8().data(), netTraceURLHaiku(m_request.url()).data());
+    }
+#endif
 
-    CurlContext::singleton().scheduler().add(this);
+    CurlContext::singleton().scheduler().add(this, m_request.url().host().toString());
 }
 
 void CurlRequest::cancel()
@@ -137,6 +507,10 @@ void CurlRequest::cancel()
 
         m_cancelled = true;
     }
+#if PLATFORM(HAIKU)
+    if (netTraceHaiku() && m_netTraceQueuedAtHaiku)
+        fprintf(stderr, "Summit net: cancel id=%p after=%.0f %s\n", this, netTraceMsHaiku(m_netTraceQueuedAtHaiku, MonotonicTime::now()), netTraceURLHaiku(m_request.url()).data());
+#endif
 
     auto& scheduler = CurlContext::singleton().scheduler();
 
@@ -144,7 +518,7 @@ void CurlRequest::cancel()
         runOnWorkerThreadIfRequired([this, protectedThis = Ref { *this }]() {
             didCancelTransfer();
         });
-    } else if (m_didStartTransfer)
+    } else if (m_startState == StartState::DidStart)
         scheduler.cancel(this);
 
     invalidateClient();
@@ -162,6 +536,41 @@ bool CurlRequest::isCompletedOrCancelled()
     return m_completed || m_cancelled;
 }
 
+void CurlRequest::suspend()
+{
+    ASSERT(isMainThread());
+
+    switch (m_startState) {
+    case StartState::StartSuspended:
+        ASSERT(false);
+        [[fallthrough]];
+    case StartState::WaitingForStart:
+        m_startState = StartState::StartSuspended;
+        break;
+    case StartState::DidStart:
+        setRequestPaused(true);
+        break;
+    }
+}
+
+void CurlRequest::resume()
+{
+    ASSERT(isMainThread());
+
+    switch (m_startState) {
+    case StartState::WaitingForStart:
+        ASSERT(false);
+        [[fallthrough]];
+    case StartState::StartSuspended:
+        m_startState = StartState::WaitingForStart;
+        start();
+        break;
+    case StartState::DidStart:
+        setRequestPaused(false);
+        break;
+    }
+}
+
 /* `this` is protected inside this method. */
 void CurlRequest::callClient(Function<void(CurlRequest&, CurlRequestClient&)>&& task)
 {
@@ -173,13 +582,13 @@ void CurlRequest::callClient(Function<void(CurlRequest&, CurlRequestClient&)>&& 
 
 void CurlRequest::runOnMainThread(Function<void()>&& task)
 {
-    ensureOnMainThread(WTF::move(task));
+    ensureOnMainThread(std::move(task));
 }
 
 void CurlRequest::runOnWorkerThreadIfRequired(Function<void()>&& task)
 {
     if (isMainThread())
-        CurlContext::singleton().scheduler().callOnWorkerThread(WTF::move(task));
+        CurlContext::singleton().scheduler().callOnWorkerThread(this, WTF::move(task));
     else
         task();
 }
@@ -190,6 +599,17 @@ CURL* CurlRequest::setupTransfer()
     appendAcceptLanguageHeaderIfNeeded(httpHeaderFields);
 
     m_curlHandle = makeUnique<CurlHandle>();
+#if PLATFORM(HAIKU)
+    m_decodesContentHaiku = decodesContentHaiku() && m_request.url().protocolIsInHTTPFamily();
+    if (m_decodesContentHaiku) {
+        curl_easy_setopt(m_curlHandle->handle(), CURLOPT_ACCEPT_ENCODING, static_cast<const char*>(nullptr));
+        curl_easy_setopt(m_curlHandle->handle(), CURLOPT_HTTP_CONTENT_DECODING, 0L);
+        // A part of a resource is asked for as it is stored: a coding
+        // applies to the whole, and a part of it could not be decoded.
+        if (!httpHeaderFields.contains(HTTPHeaderName::AcceptEncoding))
+            httpHeaderFields.set(HTTPHeaderName::AcceptEncoding, httpHeaderFields.contains(HTTPHeaderName::Range) ? "identity"_s : acceptedEncodingsHaiku());
+    }
+#endif
 
     m_curlHandle->setURL(m_request.url(), m_localhostAlias);
 
@@ -209,8 +629,9 @@ CURL* CurlRequest::setupTransfer()
         setupPUT();
     }
 
-    if (!m_user.isEmpty() || !m_password.isEmpty())
+    if (!m_user.isEmpty() || !m_password.isEmpty()) {
         m_curlHandle->setHttpAuthUserPass(m_user, m_password, m_authType);
+    }
 
     if (m_shouldDisableServerTrustEvaluation)
         m_curlHandle->disableServerTrustEvaluation();
@@ -218,6 +639,12 @@ CURL* CurlRequest::setupTransfer()
     m_curlHandle->setHeaderCallbackFunction(didReceiveHeaderCallback, this);
     m_curlHandle->setWriteCallbackFunction(didReceiveDataCallback, this);
     m_curlHandle->setDebugCallbackFunction(didReceiveDebugInfoCallback, this);
+#if PLATFORM(HAIKU)
+    if (m_preconnectOnlyHaiku) {
+        curl_easy_setopt(m_curlHandle->handle(), CURLOPT_PREREQFUNCTION, willSendRequestCallbackHaiku);
+        curl_easy_setopt(m_curlHandle->handle(), CURLOPT_PREREQDATA, this);
+    }
+#endif
 
     m_curlHandle->setTimeout(timeoutInterval());
 
@@ -270,6 +697,27 @@ size_t CurlRequest::willSendData(char* buffer, size_t blockSize, size_t numberOf
     return *sendBytes;
 }
 
+// The request timeout is an idle timeout (CurlHandle::setTimeout), so it also
+// ended responses that stream for as long as the page shows them and may go
+// quiet in between: an MJPEG feed from a camera, or from a KVM whose machine
+// shows no picture, and an event stream between events. Other browsers keep
+// those open; once one has started, only the server or the page ends it.
+static bool isStreamingResponse(const CurlResponse& response)
+{
+    static constexpr auto contentTypeLength = std::char_traits<char>::length("content-type:");
+
+    for (auto& header : response.headers) {
+        if (!header.startsWithIgnoringASCIICase("content-type:"_s))
+            continue;
+
+        auto mimeType = extractMIMETypeFromMediaType(header.substring(contentTypeLength).trim(deprecatedIsSpaceOrNewline));
+        return equalLettersIgnoringASCIICase(mimeType, "multipart/x-mixed-replace"_s)
+            || equalLettersIgnoringASCIICase(mimeType, "text/event-stream"_s);
+    }
+
+    return false;
+}
+
 // This is being called for each HTTP header in the response. This includes '\r\n'
 // for the last line of the header.
 
@@ -294,6 +742,9 @@ size_t CurlRequest::didReceiveHeader(String&& header)
         m_didReceiveResponse = false;
         m_response = CurlResponse { };
         m_multipartHandle = nullptr;
+#if PLATFORM(HAIKU)
+        m_contentDecoderHaiku = nullptr;
+#endif
     }
 
     auto receiveBytes = static_cast<size_t>(header.length());
@@ -343,6 +794,20 @@ size_t CurlRequest::didReceiveHeader(String&& header)
 
     m_multipartHandle = CurlMultipartHandle::createIfNeeded(*this, m_response);
 
+#if PLATFORM(HAIKU)
+    if (m_decodesContentHaiku) {
+        for (auto& line : m_response.headers) {
+            auto colon = line.find(':');
+            if (colon == notFound || !equalLettersIgnoringASCIICase(StringView(line).left(colon).trim(isASCIIWhitespace<char16_t>), "content-encoding"_s))
+                continue;
+            m_contentDecoderHaiku = ContentDecoderHaiku::create(StringView(line).substring(colon + 1).trim(isASCIIWhitespace<char16_t>).toString());
+        }
+    }
+#endif
+
+    if (isStreamingResponse(m_response))
+        m_curlHandle->setTimeout(0_s);
+
     // Response will send at didReceiveData() or didCompleteTransfer()
     // to receive continueDidRceiveResponse() for asynchronously.
 
@@ -375,7 +840,23 @@ size_t CurlRequest::didReceiveData(std::span<const uint8_t> receivedData)
         return CURL_WRITEFUNC_PAUSE;
     }
 
+    // What libcurl gave is taken whole, whatever it decodes to.
+    size_t consumed = receivedData.size();
+#if PLATFORM(HAIKU)
+    Vector<uint8_t> decoded;
+    if (m_contentDecoderHaiku) {
+        if (!m_contentDecoderHaiku->decode(receivedData, decoded)) {
+            if (netTraceHaiku())
+                fprintf(stderr, "Summit net: content decoding failed id=%p %s\n", this, netTraceURLHaiku(m_request.url()).data());
+            return CURL_WRITEFUNC_ERROR;
+        }
+        receivedData = decoded.span();
+    }
+#endif
+
     m_totalReceivedSize += receivedData.size();
+
+    writeDataToDownloadFileIfEnabled(receivedData);
 
     if (receivedData.size()) {
         if (m_multipartHandle) {
@@ -393,7 +874,7 @@ size_t CurlRequest::didReceiveData(std::span<const uint8_t> receivedData)
         }
     }
 
-    return receivedData.size();
+    return consumed;
 }
 
 void CurlRequest::didReceiveHeaderFromMultipart(Vector<String>&& headers)
@@ -446,6 +927,29 @@ void CurlRequest::didCompleteTransfer(CURLcode result)
         return;
     }
 
+#if PLATFORM(HAIKU)
+    if (m_preconnectOnlyHaiku && result == CURLE_ABORTED_BY_CALLBACK && m_preconnectedHaiku) {
+        // Connected, and stopped there on purpose.
+        auto metrics = networkLoadMetrics();
+        noteServerProtocolHaiku(m_request.url(), !m_preconnectedMultiplexedHaiku);
+        if (netTraceHaiku() && m_netTraceQueuedAtHaiku) {
+            fprintf(stderr, "Summit net: preconnected id=%p queue=%.0f dns=%.0f connect=%.0f tls=%.0f total=%.0f proto=%s %s\n",
+                this, netTraceMsHaiku(m_netTraceQueuedAtHaiku, m_performStartTime),
+                netTraceMsHaiku(metrics.domainLookupStart, metrics.domainLookupEnd), netTraceMsHaiku(metrics.connectStart, metrics.connectEnd),
+                netTraceMsHaiku(metrics.secureConnectionStart, metrics.connectEnd), netTraceMsHaiku(m_netTraceQueuedAtHaiku, MonotonicTime::now()),
+                m_preconnectedMultiplexedHaiku ? "h2" : "http/1.1 (closed)", netTraceURLHaiku(m_request.url()).data());
+        }
+        finalizeTransfer();
+        callClient([networkLoadMetrics = WTF::move(metrics)](CurlRequest& request, CurlRequestClient& client) mutable {
+            networkLoadMetrics.markComplete();
+            client.curlDidComplete(request, WTF::move(networkLoadMetrics));
+        });
+        Locker locker { m_statusMutex };
+        m_completed = true;
+        return;
+    }
+#endif
+
     // Newer versions of curl/OpenSSL report CURLE_RECV_ERROR or CURLE_PARTIAL_FILE
     // when a server closes the connection to signal end-of-body on responses with
     // no Content-Length and no chunked encoding. This is valid HTTP/1.1 behavior,
@@ -475,6 +979,19 @@ void CurlRequest::didCompleteTransfer(CURLcode result)
         }
 
         auto metrics = networkLoadMetrics();
+#if PLATFORM(HAIKU)
+        if (!metrics.protocol.isEmpty())
+            noteServerProtocolHaiku(m_request.url(), metrics.protocol == "http/1.1"_s || metrics.protocol == "http/1.0"_s);
+        if (netTraceHaiku() && m_netTraceQueuedAtHaiku) {
+            auto now = MonotonicTime::now();
+            fprintf(stderr, "Summit net: done id=%p status=%d queue=%.0f dns=%.0f connect=%.0f tls=%.0f ttfb=%.0f total=%.0f bytes=%zu proto=%s %s\n",
+                this, m_response.statusCode, netTraceMsHaiku(m_netTraceQueuedAtHaiku, m_performStartTime),
+                netTraceMsHaiku(metrics.domainLookupStart, metrics.domainLookupEnd), netTraceMsHaiku(metrics.connectStart, metrics.connectEnd),
+                netTraceMsHaiku(metrics.secureConnectionStart, metrics.connectEnd), netTraceMsHaiku(metrics.requestStart, metrics.responseStart),
+                netTraceMsHaiku(m_netTraceQueuedAtHaiku, now), m_totalReceivedSize, metrics.protocol.utf8().data(),
+                netTraceURLHaiku(m_request.url()).data());
+        }
+#endif
 
         finalizeTransfer();
         callClient([networkLoadMetrics = WTF::move(metrics)](CurlRequest& request, CurlRequestClient& client) mutable {
@@ -486,6 +1003,11 @@ void CurlRequest::didCompleteTransfer(CURLcode result)
     } else {
         auto type = (result == CURLE_OPERATION_TIMEDOUT && timeoutInterval()) ? ResourceError::Type::Timeout : ResourceError::Type::General;
         auto resourceError = ResourceError(result, m_request.url(), type);
+#if PLATFORM(HAIKU)
+        if (netTraceHaiku() && m_netTraceQueuedAtHaiku)
+            fprintf(stderr, "Summit net: fail id=%p result=%d (%s) total=%.0f %s\n", this, static_cast<int>(result), curl_easy_strerror(result),
+                netTraceMsHaiku(m_netTraceQueuedAtHaiku, MonotonicTime::now()), netTraceURLHaiku(m_request.url()).data());
+#endif
 
         CertificateInfo certificateInfo;
         if (auto info = m_curlHandle->certificateInfo())
@@ -506,10 +1028,12 @@ void CurlRequest::didCompleteTransfer(CURLcode result)
 void CurlRequest::didCancelTransfer()
 {
     finalizeTransfer();
+    cleanupDownloadFile();
 }
 
 void CurlRequest::finalizeTransfer()
 {
+    closeDownloadFile();
     m_formDataStream.clean();
     m_multipartHandle = nullptr;
     m_curlHandle = nullptr;
@@ -632,6 +1156,88 @@ void CurlRequest::completeDidReceiveResponse()
         responseCompletionHandler();
 }
 
+void CurlRequest::setRequestPaused(bool paused)
+{
+    {
+        Locker locker { m_pauseStateMutex };
+
+        auto savedState = shouldBePaused();
+        m_isPausedOfRequest = paused;
+        if (shouldBePaused() == savedState)
+            return;
+    }
+
+    pausedStatusChanged();
+}
+
+void CurlRequest::setCallbackPaused(bool paused)
+{
+    {
+        Locker locker { m_pauseStateMutex };
+
+        auto savedState = shouldBePaused();
+        m_isPausedOfCallback = paused;
+
+        // If pause is requested, it is called within didReceiveData() which means
+        // actual change happens inside libcurl. No need to update manually here.
+        if (shouldBePaused() == savedState || paused)
+            return;
+    }
+
+    pausedStatusChanged();
+}
+
+void CurlRequest::invokeCancel()
+{
+    // There's no need to extract this method. This is a workaround for MSVC's bug
+    // which happens when using lambda inside other lambda. The compiler loses context
+    // of `this` which prevent makeRef.
+    runOnMainThread([this, protectedThis = Ref { *this }]() {
+        cancel();
+    });
+}
+
+void CurlRequest::pausedStatusChanged()
+{
+    if (isCompletedOrCancelled())
+        return;
+
+    runOnWorkerThreadIfRequired([this, protectedThis = Ref { *this }]() {
+        if (isCompletedOrCancelled() || !m_curlHandle)
+            return;
+
+        bool needCancel { false };
+        {
+            Locker locker { m_pauseStateMutex };
+            bool paused = shouldBePaused();
+
+            if (isHandlePaused() == paused)
+                return;
+
+            auto error = m_curlHandle->pause(paused ? CURLPAUSE_ALL : CURLPAUSE_CONT);
+            if (error == CURLE_OK)
+                updateHandlePauseState(paused);
+
+            needCancel = (error != CURLE_OK && !paused);
+        }
+
+        if (needCancel)
+            invokeCancel();
+    });
+}
+
+void CurlRequest::updateHandlePauseState(bool paused)
+{
+    ASSERT(!isMainThread());
+    m_isHandlePaused = paused;
+}
+
+bool CurlRequest::isHandlePaused() const
+{
+    ASSERT(!isMainThread());
+    return m_isHandlePaused;
+}
+
 NetworkLoadMetrics CurlRequest::networkLoadMetrics()
 {
     ASSERT(m_curlHandle);
@@ -651,6 +1257,57 @@ NetworkLoadMetrics CurlRequest::networkLoadMetrics()
     }
 
     return WTF::move(*networkLoadMetrics);
+}
+
+void CurlRequest::enableDownloadToFile()
+{
+    Locker locker { m_downloadMutex };
+    m_isEnabledDownloadToFile = true;
+}
+
+const String& CurlRequest::getDownloadedFilePath()
+{
+    Locker locker { m_downloadMutex };
+    return m_downloadFilePath;
+}
+
+void CurlRequest::writeDataToDownloadFileIfEnabled(std::span<const unsigned char> buffer)
+{
+    {
+        Locker locker { m_downloadMutex };
+
+        if (!m_isEnabledDownloadToFile)
+            return;
+
+        if (m_downloadFilePath.isEmpty()) {
+            auto [m_downloadFilePath, m_downloadFileHandle] = FileSystem::openTemporaryFile("download"_s);
+        } else if (!m_downloadFileHandle) {
+            m_downloadFileHandle = FileSystem::openFile(m_downloadFilePath, FileSystem::FileOpenMode::Truncate);
+        }
+    }
+
+    if (m_downloadFileHandle)
+        m_downloadFileHandle.write(buffer);
+}
+
+void CurlRequest::closeDownloadFile()
+{
+    Locker locker { m_downloadMutex };
+
+    if (!m_downloadFileHandle)
+        return;
+
+    m_downloadFileHandle.flush();
+}
+
+void CurlRequest::cleanupDownloadFile()
+{
+    Locker locker { m_downloadMutex };
+
+    if (!m_downloadFilePath.isEmpty()) {
+        FileSystem::deleteFile(m_downloadFilePath);
+        m_downloadFilePath = String();
+    }
 }
 
 std::optional<long long> CurlRequest::getContentLength()

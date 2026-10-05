@@ -1,0 +1,96 @@
+# Global rules
+exclude #$
+exclude ChangeLog
+exclude CMakeLists.txt.user
+exclude Makefile
+exclude PlatformMac.cmake
+exclude PlatformPlayStation.cmake
+exclude PlatformGTK.cmake
+exclude PlatformWPE.cmake
+exclude PlatformWin.cmake
+exclude tags$
+exclude ~$
+exclude \.#$
+exclude \.bak$
+exclude \.cproject$
+exclude \.git$
+exclude \.gitattributes$
+exclude \.gitignore$
+exclude \.icns$
+exclude \.lproj$
+exclude \.m$
+exclude \.mm$
+exclude \.nib$
+exclude \.o$
+exclude \.order$
+exclude \.orig$
+exclude \.pdf$
+exclude \.plist$
+exclude \.project$
+exclude \.props$
+exclude \.pyc$
+exclude \.pyo$
+exclude \.rej$
+exclude \.rtf$
+exclude \.sb$
+exclude \.sb\.in$
+exclude \.settings$
+exclude \.svn$
+exclude \.sw[a-p]$
+exclude \.vcxproj$
+exclude \.xib$
+exclude \.xcconfig$
+exclude \.xcodeproj$
+
+# some of this stuff is probably not needed.
+# But this should make webkit build for now for us, we can make this more specific later
+
+# Exclude directories from other ports
+exclude .*\/(Configurations|mac|ios|cf|cg|cocoa|Cocoa|objc|avfoundation|ca|win|gtk|wpe|libwpe)\/.*$
+
+directory Source
+exclude Source/JavaScriptCore/tests
+exclude Source/WebCore/PAL/ThirdParty
+exclude Source/WebCore/platform/audio/resources
+exclude Source/WebCore/bindings/scripts/test
+exclude Source/WebCore/Resources
+exclude Source/cmake/OptionsMac.cmake$
+exclude Source/cmake/OptionsPlayStation.cmake$
+exclude Source/cmake/OptionsWin.cmake$
+exclude Source/cmake/OptionsGTK.cmake$
+exclude Source/cmake/OptionsWPE.cmake$
+exclude Source/WebKit/Resources
+exclude Source/ThirdParty
+directory Source/ThirdParty/unifdef
+
+# not used but cmake likes it...
+file Source/WebCore/platform/graphics/cg/SpatialImageTypes.h
+file Source/WebCore/platform/graphics/cg/ShareableSpatialImage.h
+
+file README.markdown
+
+
+file CMakeLists.txt
+file Tools/CMakeLists.txt
+file Tools/Scripts/build-webkit
+file Tools/Scripts/webkitdirs.pm
+file Tools/Scripts/VCSUtils.pm
+directory Tools/clangd/
+directory Tools/Scripts/webkitperl/
+
+# needed by ENABLE_LAYOUT_TESTS which we have on
+directory Tools/TestRunnerShared
+directory Tools/ImageDiff
+directory Tools/DumpRenderTree
+
+file Tools/Scripts/rewrite-compile-commands
+file Tools/Scripts/swift/swiftc-wrapper.sh
+
+# This specifies the webkit version,
+# it is not used by us directly but the version is extracted from it
+file Configurations/Version.xcconfig
+
+file Source/WebInspectorUI/Localizations/en.lproj/localizedStrings.js
+
+# Not sure what this is about, but cmake wants it
+file Source/WTF/wtf/ios/WebCoreThread.h

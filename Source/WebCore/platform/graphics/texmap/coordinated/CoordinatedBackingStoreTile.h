@@ -50,10 +50,35 @@ public:
 
     bool canBePainted() const { return !!m_texture; }
 
+#if PLATFORM(HAIKU)
+    bool hasPendingUpdates() const { return !m_updates.isEmpty(); }
+    // Where the tile is once its pending updates are applied, in the
+    // coordinates rect() uses.
+    FloatRect rectAfterPendingUpdates() const;
+
+    // What the tile updates of one composition cost, counted on the
+    // compositor thread while SUMMIT_COMPOSITOR_TIMING_TRACE asks for it.
+    struct UpdateStatsHaiku {
+        unsigned tiles { 0 };
+        unsigned newTextures { 0 };
+        double megapixels { 0 };
+        double paintWaitMs { 0 };
+        double textureMs { 0 };
+        double uploadMs { 0 };
+        unsigned transparentTiles { 0 };
+    };
+    static void setCountsUpdatesHaiku(bool);
+    static UpdateStatsHaiku takeUpdateStatsHaiku();
+#endif
+
 private:
     void ensureTexture(const IntSize&, CoordinatedTileBuffer&);
 
     RefPtr<BitmapTexture> m_texture;
+#if PLATFORM(HAIKU)
+    // No texture because every pixel of the tile is transparent.
+    bool m_isTransparent { false };
+#endif
     Vector<Update> m_updates;
     float m_scale { 1. };
     FloatRect m_rect;

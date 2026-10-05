@@ -45,6 +45,11 @@
 #include <wtf/text/TextBreakIterator.h>
 #include <wtf/unicode/CharacterNames.h>
 
+#if PLATFORM(HAIKU)
+#include <cstdio>
+#include <cstdlib>
+#endif
+
 namespace WebCore {
 namespace Layout {
 
@@ -910,7 +915,20 @@ static bool inlineTextBoxWidthsAreCacheable(const InlineTextBox& inlineTextBox, 
 {
     if (contentMayAdjustWidths || mayHaveGlyphOverflow || !canCacheWidthOnInlineTextItem(inlineTextBox, false))
         return false;
-    return inlineTextBox.canUseSimplifiedContentMeasuring();
+    if (inlineTextBox.canUseSimplifiedContentMeasuring())
+        return true;
+#if PLATFORM(HAIKU)
+    // Exact widths are also reusable for the simple font code path when the
+    // measurement has no position or text-spacing state. The simplified
+    // measuring flag is stricter and may be false for otherwise reusable runs.
+    auto& fontCascade = inlineTextBox.style().fontCascade();
+    return inlineTextBox.canUseSimpleFontCodePath() && !inlineTextBox.hasPositionDependentContentWidth()
+        && !inlineTextBox.hasSynthesizedGlyph() && !inlineTextBox.isCombined()
+        && !fontCascade.letterSpacing() && !fontCascade.wordSpacing()
+        && inlineTextBox.style().unicodeBidi() == UnicodeBidi::Normal;
+#else
+    return false;
+#endif
 }
 
 static FontCascadeCacheKey fontCascadeIdentifier(const FontCascade& fontCascade)
@@ -989,11 +1007,33 @@ void InlineItemsBuilder::computeInlineTextItemWidthsAndTextSpacing(InlineItemLis
 
 bool InlineItemsBuilder::buildInlineItemListForTextFromBreakingPositionsCache(const InlineTextBox& inlineTextBox, InlineItemList& inlineItemList)
 {
+#if PLATFORM(HAIKU)
+    static bool traceCache = [] {
+        const char* value = std::getenv("SUMMIT_TEXT_BREAK_STATS");
+        return value && value[0] == '1' && !value[1];
+    }();
+    static thread_local unsigned lookups = 0;
+    static thread_local unsigned hits = 0;
+    static thread_local unsigned widthEligible = 0;
+    static thread_local unsigned widthHits = 0;
+    static thread_local unsigned glyphOverflow = 0;
+    static thread_local unsigned simplified = 0;
+    static thread_local unsigned adjusted = 0;
+    static thread_local unsigned spacing = 0;
+    static thread_local unsigned firstLineMismatch = 0;
+    static thread_local unsigned positionDependent = 0;
+    if (traceCache)
+        ++lookups;
+#endif
     auto& text = inlineTextBox.content();
     TextBreakingPositionCache::Key cacheKey { text, { inlineTextBox.style() }, m_securityOrigin.data() };
     auto* cacheEntry = TextBreakingPositionCache::singleton().get(cacheKey);
     if (!cacheEntry)
         return false;
+#if PLATFORM(HAIKU)
+    if (traceCache)
+        ++hits;
+#endif
     auto& breakingPositions = cacheEntry->breakingPositions;
 
     auto shouldPreserveNewline = TextUtil::shouldPreserveNewline(inlineTextBox);
@@ -1010,6 +1050,17 @@ bool InlineItemsBuilder::buildInlineItemListForTextFromBreakingPositionsCache(co
     auto mayHaveGlyphOverflow = textBoxMayHaveGlyphOverflow(inlineTextBox);
 
     auto widthCacheEligible = inlineTextBoxWidthsAreCacheable(inlineTextBox, contentRequiresVisualReordering() || m_hasTextAutospace, mayHaveGlyphOverflow);
+#if PLATFORM(HAIKU)
+    if (traceCache) {
+        widthEligible += widthCacheEligible;
+        glyphOverflow += mayHaveGlyphOverflow;
+        simplified += inlineTextBox.canUseSimplifiedContentMeasuring();
+        adjusted += contentRequiresVisualReordering() || m_hasTextAutospace;
+        spacing += !!fontCascade->letterSpacing() || !!fontCascade->wordSpacing();
+        firstLineMismatch += &inlineTextBox.style() != &inlineTextBox.firstLineStyle() && !inlineTextBox.style().fontCascadeEqual(inlineTextBox.firstLineStyle());
+        positionDependent += inlineTextBox.hasPositionDependentContentWidth();
+    }
+#endif
     std::optional<FontCascadeCacheKey> widthCacheFontCascadeIdentifier;
     const TextBreakingPositionCache::WidthList* cachedWidths = nullptr;
     TextBreakingPositionCache::WidthList measuredWidths;
@@ -1017,11 +1068,30 @@ bool InlineItemsBuilder::buildInlineItemListForTextFromBreakingPositionsCache(co
         widthCacheFontCascadeIdentifier = fontCascadeIdentifier(fontCascade);
         cachedWidths = TextBreakingPositionCache::singleton().widths(*cacheEntry, *widthCacheFontCascadeIdentifier);
     }
+#if PLATFORM(HAIKU)
+    if (traceCache) {
+        widthHits += !!cachedWidths;
+        if (!(hits % 100))
+            std::fprintf(stderr, "Summit text break cache: lookups=%u hits=%u widthEligible=%u widthHits=%u glyphOverflow=%u simplified=%u adjusted=%u spacing=%u firstLineMismatch=%u positionDependent=%u\n",
+                lookups, hits, widthEligible, widthHits, glyphOverflow, simplified, adjusted, spacing, firstLineMismatch, positionDependent);
+    }
+#endif
     size_t nonWhitespaceIndex = 0;
 
     auto nonWhitespaceItemWidth = [&](unsigned startPosition, unsigned endPosition) -> WidthAndGlyphOverflow {
         if (cachedWidths && nonWhitespaceIndex < cachedWidths->size()) {
             auto cachedWidth = (*cachedWidths)[nonWhitespaceIndex];
+#if PLATFORM(HAIKU)
+            static bool verifyWidths = [] {
+                const char* value = std::getenv("SUMMIT_VERIFY_TEXT_WIDTH_CACHE");
+                return value && value[0] == '1' && !value[1];
+            }();
+            if (verifyWidths) {
+                auto measuredWidth = nonWhitespaceContentWidth(inlineTextBox, startPosition, endPosition, mayHaveGlyphOverflow).width;
+                if (cachedWidth != measuredWidth)
+                    std::fprintf(stderr, "Summit text width cache mismatch: cached=%f measured=%f\n", cachedWidth, measuredWidth);
+            }
+#endif
             ASSERT(cachedWidth == nonWhitespaceContentWidth(inlineTextBox, startPosition, endPosition, mayHaveGlyphOverflow).width);
             ASSERT(!mayHaveGlyphOverflow);
             return { cachedWidth, { } };

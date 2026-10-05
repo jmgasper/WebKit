@@ -47,27 +47,39 @@ dictionary WebExtensionDNRTabUpdateOptions {
     Conditional=WK_WEB_EXTENSIONS,
     MainWorldOnly,
     ReturnsPromiseWhenCallbackIsOmitted,
+    UseCPPAPI,
 ] interface WebExtensionAPIDeclarativeNetRequest {
 
-    [RaisesException] void updateEnabledRulesets([NSDictionary] any options, [Optional, CallbackHandler] function callback);
+    // Argument types are validated here; rule contents are validated by the UI process, which rejects the promise.
+    [RaisesStringException] void updateEnabledRulesets([JSONValue] any options, [Optional, CallbackHandler] function callback);
     void getEnabledRulesets([Optional, CallbackHandler] function callback);
 
-    [RaisesException] void updateDynamicRules([NSDictionary] any options, [Optional, CallbackHandler] function callback);
-    void getDynamicRules([Optional, NSDictionary] any filter, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void updateDynamicRules([JSONValue] any options, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void getDynamicRules([Optional, JSONValue] any filter, [Optional, CallbackHandler] function callback);
 
-    [RaisesException] void updateSessionRules([NSDictionary] any options, [Optional, CallbackHandler] function callback);
-    void getSessionRules([Optional, NSDictionary] any filter, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void updateSessionRules([JSONValue] any options, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void getSessionRules([Optional, JSONValue] any filter, [Optional, CallbackHandler] function callback);
 
-    [RaisesException] void getMatchedRules([Optional, NSDictionary] any filter, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void getMatchedRules([Optional, JSONValue] any filter, [Optional, CallbackHandler] function callback);
 
-    [RaisesException] void isRegexSupported([NSDictionary] any regexOptions, [Optional, CallbackHandler] function callback);
-    [RaisesException] void setExtensionActionOptions([NSDictionary] any options, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void isRegexSupported([JSONValue] any regexOptions, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void setExtensionActionOptions([JSONValue] any options, [Optional, CallbackHandler] function callback);
+
+    [Platform=HAIKU] void getAvailableStaticRuleCount([Optional, CallbackHandler] function callback);
 
     [Dynamic, Conditional=DNR_ON_RULE_MATCHED_DEBUG] readonly attribute WebExtensionAPIEvent onRuleMatchedDebug;
 
     [ImplementedAs=maxNumberOfStaticRulesets] readonly attribute double MAX_NUMBER_OF_STATIC_RULESETS;
     [ImplementedAs=maxNumberOfEnabledRulesets] readonly attribute double MAX_NUMBER_OF_ENABLED_STATIC_RULESETS;
     [ImplementedAs=maxNumberOfDynamicAndSessionRules] readonly attribute double MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES;
+
+    // Dynamic and session rules share MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES; the per-kind values report that shared limit.
+    [Platform=HAIKU, ImplementedAs=maxNumberOfDynamicRules] readonly attribute double MAX_NUMBER_OF_DYNAMIC_RULES;
+    [Platform=HAIKU, ImplementedAs=maxNumberOfSessionRules] readonly attribute double MAX_NUMBER_OF_SESSION_RULES;
+    [Platform=HAIKU, ImplementedAs=maxNumberOfRegexRules] readonly attribute double MAX_NUMBER_OF_REGEX_RULES;
+    [Platform=HAIKU, ImplementedAs=guaranteedMinimumStaticRules] readonly attribute double GUARANTEED_MINIMUM_STATIC_RULES;
+    [Platform=HAIKU, ImplementedAs=dynamicRulesetIdentifier] readonly attribute DOMString DYNAMIC_RULESET_ID;
+    [Platform=HAIKU, ImplementedAs=sessionRulesetIdentifier] readonly attribute DOMString SESSION_RULESET_ID;
 
     // FIXME: <rdar://71865986> Define MAX_NUMBER_OF_RULES.
     // FIXME: <rdar://71868241> Define other constants.

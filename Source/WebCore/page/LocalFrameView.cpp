@@ -4863,10 +4863,30 @@ void LocalFrameView::flushAnyPendingPostLayoutTasks()
 void LocalFrameView::performPostLayoutTasks()
 {
     ScriptDisallowedScope::InMainThread scriptDisallowedScope;
+#if PLATFORM(HAIKU)
+    static bool summitPostLayoutDirtyTrace = [] {
+        const char* value = std::getenv("SUMMIT_PAGE_UPDATE_TRACE");
+        return value && value[0] == '2' && !value[1];
+    }();
+    bool wasDirty = summitPostLayoutDirtyTrace && layoutContext().needsLayout(LayoutOptions::CanDeferUpdateLayerPositions);
+    if (wasDirty)
+        WTFLogAlways("Summit post-layout dirtied: view=%p step=entry\n", this);
+    auto traceDirty = [&](const char* step) {
+        if (!summitPostLayoutDirtyTrace)
+            return;
+        bool isDirty = layoutContext().needsLayout(LayoutOptions::CanDeferUpdateLayerPositions);
+        if (isDirty && !wasDirty)
+            WTFLogAlways("Summit post-layout dirtied: view=%p step=%s\n", this, step);
+        wasDirty = isDirty;
+    };
+#endif
 
     // FIXME: We should not run any JavaScript code in this function.
     LOG(Layout, "LocalFrameView %p performPostLayoutTasks", this);
     updateHasReachedSignificantRenderedTextThreshold();
+#if PLATFORM(HAIKU)
+    traceDirty("significant-text");
+#endif
 
 #if ENABLE(AX_CUSTOM_COLOR_MODE)
     if (CheckedPtr renderView = this->renderView())
@@ -4875,6 +4895,9 @@ void LocalFrameView::performPostLayoutTasks()
 
     if (!layoutContext().isLayoutNested() && m_frame->document()->documentElement())
         fireLayoutRelatedMilestonesIfNeeded();
+#if PLATFORM(HAIKU)
+    traceDirty("layout-milestones");
+#endif
 
 #if PLATFORM(IOS_FAMILY)
     // Only send layout-related delegate callbacks synchronously for the main frame to
@@ -4889,32 +4912,56 @@ void LocalFrameView::performPostLayoutTasks()
     // FIXME: We should consider adding DidLayout as a LayoutMilestone. That would let us merge this
     // with didLayout(LayoutMilestones).
     m_frame->loader().client().dispatchDidLayout();
+#if PLATFORM(HAIKU)
+    traceDirty("dispatch-did-layout");
+#endif
 
     updateWidgetPositions();
+#if PLATFORM(HAIKU)
+    traceDirty("widget-positions");
+#endif
 
     updateSnapOffsets();
+#if PLATFORM(HAIKU)
+    traceDirty("snap-offsets");
+#endif
 
     m_updateEmbeddedObjectsTimer.startOneShot(0_s);
 
     if (RefPtr scrollingCoordinator = this->scrollingCoordinator())
         scrollingCoordinator->frameViewLayoutUpdated(*this);
+#if PLATFORM(HAIKU)
+    traceDirty("scrolling-coordinator");
+#endif
 
     if (CheckedPtr renderView = this->renderView()) {
         if (renderView->usesCompositing())
             renderView->compositor().frameViewDidLayout();
     }
+#if PLATFORM(HAIKU)
+    traceDirty("compositor");
+#endif
 
     scheduleScrollToAnchorAndTextFragment();
 
     scheduleResizeEventIfNeeded();
 
     updateLayoutViewport();
+#if PLATFORM(HAIKU)
+    traceDirty("layout-viewport");
+#endif
     viewportContentsChanged();
+#if PLATFORM(HAIKU)
+    traceDirty("viewport-contents");
+#endif
 
     if (!layoutContext().isLayoutNested())
         adjustScrollAnchoringPositionForScrollableAreas();
 
     resnapAfterLayout();
+#if PLATFORM(HAIKU)
+    traceDirty("scroll-anchor-and-resnap");
+#endif
 
     protect(m_frame->document())->scheduleDeferredAXObjectCacheUpdate();
 
@@ -6218,6 +6265,21 @@ void LocalFrameView::checkAndDispatchDidReachVisuallyNonEmptyState()
         return;
 
     m_contentQualifiesAsVisuallyNonEmpty = true;
+#if PLATFORM(HAIKU)
+    // SUMMIT_FIRST_SHOWN_TRACE=1: when a page had enough to be shown in place of the one before it.
+    static bool traceFirstShown = [] {
+        const char* value = std::getenv("SUMMIT_FIRST_SHOWN_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    if (traceFirstShown && m_frame->isRootFrame()) {
+        Ref document = *m_frame->document();
+        RefPtr documentLoader = m_frame->loader().documentLoader();
+        auto sinceStart = documentLoader ? MonotonicTime::now() - documentLoader->timing().startTime() : 0_s;
+        WTFLogAlways("Summit first shown: %.0f ms after the navigation began, %u characters, %u pixels, url=%s\n",
+            sinceStart.milliseconds(), m_visuallyNonEmptyCharacterCount, m_visuallyNonEmptyPixelCount,
+            document->url().string().utf8().legacyCStringPointer());
+    }
+#endif
     if (m_frame->isRootFrame())
         m_frame->loader().didReachVisuallyNonEmptyState();
 }

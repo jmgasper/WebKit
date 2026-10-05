@@ -30,6 +30,7 @@
 #include "JSWebExtensionAPICookies.h"
 #include "WebExtensionAPIEvent.h"
 #include "WebExtensionAPIObject.h"
+#include <wtf/JSONValues.h>
 
 OBJC_CLASS NSDictionary;
 OBJC_CLASS NSString;
@@ -40,6 +41,12 @@ class WebExtensionAPICookies : public WebExtensionAPIObject, public JSWebExtensi
     WEB_EXTENSION_DECLARE_JS_WRAPPER_CLASS(WebExtensionAPICookies, cookies, cookies);
 
 public:
+    void get(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String&);
+    void getAll(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String&);
+    void set(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String&);
+    void remove(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String&);
+    void getAllCookieStores(Ref<WebExtensionCallbackHandler>&&);
+    WebExtensionAPIEvent& onChanged();
 #if PLATFORM(COCOA)
     void get(NSDictionary *details, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
     void getAll(NSDictionary *details, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
@@ -47,16 +54,13 @@ public:
     void set(NSDictionary *details, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
     void remove(NSDictionary *details, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
 
-    void getAllCookieStores(Ref<WebExtensionCallbackHandler>&&);
-
-    WebExtensionAPIEvent& onChanged();
-
 private:
     using ParsedDetails = std::tuple<std::optional<PAL::SessionID>, String, URL>;
     static std::optional<ParsedDetails> parseCookieDetails(NSDictionary *details, NSArray *requiredKeys, NSString **outExceptionString);
 
-    RefPtr<WebExtensionAPIEvent> m_onChanged;
 #endif
+private:
+    RefPtr<WebExtensionAPIEvent> m_onChanged;
 };
 
 } // namespace WebKit

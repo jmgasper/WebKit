@@ -455,6 +455,18 @@ void NetworkLoad::didReceiveChallenge(AuthenticationChallenge&& challenge, Negot
     auto scheme = challenge.protectionSpace().authenticationScheme();
     bool isTLSHandshake = scheme == ProtectionSpace::AuthenticationScheme::ServerTrustEvaluationRequested
         || scheme == ProtectionSpace::AuthenticationScheme::ClientCertificateRequested;
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    // Blocking webRequest onAuthRequired listeners may answer HTTP challenges
+    // before the embedder is asked. Downloads and TLS handshakes are not offered.
+    if (!isTLSHandshake && !(m_task && m_task->pendingDownload())) {
+        client->decideAuthenticationChallengeHaiku(challenge, [protectedThis = Ref { *this }, challenge, negotiatedLegacyTLS, completionHandler = WTF::move(completionHandler)](std::optional<Credential>&& credential) mutable {
+            if (credential)
+                return completionHandler(AuthenticationChallengeDisposition::UseCredential, *credential);
+            protectedThis->continueDidReceiveChallengeHaiku(WTF::move(challenge), negotiatedLegacyTLS, WTF::move(completionHandler));
+        });
+        return;
+    }
+#endif
     if (!isAllowedToAskUserForCredentials() && !isTLSHandshake && !challenge.protectionSpace().isProxy()) {
         client->didBlockAuthenticationChallenge();
         completionHandler(AuthenticationChallengeDisposition::UseCredential, { });
@@ -466,6 +478,28 @@ void NetworkLoad::didReceiveChallenge(AuthenticationChallenge&& challenge, Negot
     else
         protect(m_networkProcess->authenticationManager())->didReceiveAuthenticationChallenge(m_task->sessionID(), m_parameters.webPageProxyID, m_parameters.topOrigin ? &m_parameters.topOrigin->data() : nullptr, challenge, negotiatedLegacyTLS, WTF::move(completionHandler));
 }
+
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+void NetworkLoad::continueDidReceiveChallengeHaiku(AuthenticationChallenge&& challenge, NegotiatedLegacyTLS negotiatedLegacyTLS, ChallengeCompletionHandler&& completionHandler)
+{
+    // Same as the tail of didReceiveChallenge() for non-TLS challenges, after
+    // webRequest declined to answer. The client may have gone away meanwhile.
+    RefPtr client = m_client.get();
+    RefPtr task = m_task;
+    if (!client || !task) {
+        completionHandler(AuthenticationChallengeDisposition::Cancel, { });
+        return;
+    }
+
+    if (!isAllowedToAskUserForCredentials() && !challenge.protectionSpace().isProxy()) {
+        client->didBlockAuthenticationChallenge();
+        completionHandler(AuthenticationChallengeDisposition::UseCredential, { });
+        return;
+    }
+
+    protect(m_networkProcess->authenticationManager())->didReceiveAuthenticationChallenge(task->sessionID(), m_parameters.webPageProxyID, m_parameters.topOrigin ? &m_parameters.topOrigin->data() : nullptr, challenge, negotiatedLegacyTLS, WTF::move(completionHandler));
+}
+#endif
 
 void NetworkLoad::didReceiveInformationalResponse(ResourceResponse&& response)
 {

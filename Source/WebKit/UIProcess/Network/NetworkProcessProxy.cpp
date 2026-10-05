@@ -31,6 +31,9 @@
 #include "APIDataTask.h"
 #include "APIDataTaskClient.h"
 #include "APIHTTPCookieStore.h"
+#if PLATFORM(HAIKU) && USE(CURL)
+#include "WebCookieManagerMessages.h"
+#endif
 #include "APINavigation.h"
 #include "APIPageConfiguration.h"
 #include "APIURLRequest.h"
@@ -214,7 +217,7 @@ void NetworkProcessProxy::sendCreationParametersToNewProcess()
     parameters.urlSchemesRegisteredForCustomProtocols = WebProcessPool::urlSchemesWithCustomProtocolHandlers();
     parameters.localhostAliasesForTesting = LegacyGlobalSettings::singleton().hostnamesToRegisterAsLocal();
 
-#if !PLATFORM(GTK) && !PLATFORM(WPE) // GTK and WPE don't use defaultNetworkProcess
+#if !PLATFORM(GTK) && !PLATFORM(WPE) && !PLATFORM(HAIKU) // These ports add only their own store after process creation.
     parameters.websiteDataStoreParameters = WebsiteDataStore::parametersFromEachWebsiteDataStore();
     WebsiteDataStore::forEachWebsiteDataStore([&](auto& websiteDataStore) {
         addSession(websiteDataStore, SendParametersToNetworkProcess::No);
@@ -283,6 +286,10 @@ NetworkProcessProxy::NetworkProcessProxy()
     sendCreationParametersToNewProcess();
     updateProcessAssertion();
     networkProcessesSet().add(*this);
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    if (auto phases = webRequestBlockingPhasesHaiku())
+        send(Messages::NetworkProcess::SetWebRequestBlockingPhasesHaiku(phases), 0);
+#endif
 #if PLATFORM(IOS_FAMILY)
     addBackgroundStateObservers();
 #endif
@@ -1472,6 +1479,12 @@ void NetworkProcessProxy::addSession(WebsiteDataStore& store, SendParametersToNe
     // DispatchMessageEvenWhenWaitingForSyncReply flag.
     if (canSendMessage() && sendParametersToNetworkProcess == SendParametersToNetworkProcess::Yes)
         send(Messages::NetworkProcess::AddWebsiteDataStore { store.parameters() }, 0, IPC::SendOption::DispatchMessageEvenWhenWaitingForSyncReply);
+#if PLATFORM(HAIKU) && USE(CURL)
+    // The UI observer set survives a NetworkProcess restart. Reinstall the
+    // backend observer after the session is recreated on this connection.
+    if (canSendMessage() && store.cookieStore().hasObservers())
+        send(Messages::WebCookieManager::StartObservingCookieChanges(store.sessionID()), 0, IPC::SendOption::DispatchMessageEvenWhenWaitingForSyncReply);
+#endif
 }
 
 void NetworkProcessProxy::removeSession(WebsiteDataStore& websiteDataStore, CompletionHandler<void(String&&)>&& completionHandler)
@@ -1991,6 +2004,20 @@ void NetworkProcessProxy::cookiesDidChange(PAL::SessionID sessionID)
     if (RefPtr websiteDataStore = websiteDataStoreFromSessionID(sessionID))
         protect(websiteDataStore->cookieStore())->cookiesDidChange();
 }
+
+#if PLATFORM(HAIKU) && USE(CURL)
+void NetworkProcessProxy::cookiesDidChangeWithDetails(PAL::SessionID sessionID, const Vector<WebCore::CookieChange>& changes)
+{
+    if (changes.isEmpty())
+        return;
+    if (RefPtr websiteDataStore = websiteDataStoreFromSessionID(sessionID)) {
+        // The session lookup is global. Accept details only from the process
+        // currently owning this registered store, including after a restart.
+        if (websiteDataStore->networkProcessIfExists() == this && m_websiteDataStores.contains(*websiteDataStore))
+            protect(websiteDataStore->cookieStore())->cookiesDidChange(changes);
+    }
+}
+#endif
 
 void NetworkProcessProxy::notifyMediaStreamingActivity(bool activity)
 {

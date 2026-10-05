@@ -28,6 +28,9 @@ struct WebKit::WebExtensionContextParameters {
 
     URL baseURL;
     String uniqueIdentifier;
+#if PLATFORM(HAIKU)
+    std::optional<WebKit::ContentWorldIdentifier> contentScriptWorldIdentifier;
+#endif
     HashSet<String> unsupportedAPIs;
 
     HashMap<String, WallTime> grantedPermissions;

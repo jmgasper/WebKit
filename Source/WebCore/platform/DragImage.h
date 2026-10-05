@@ -47,6 +47,8 @@ typedef struct HBITMAP__* HBITMAP;
 #include "RefPtrCairo.h"
 #elif USE(SKIA)
 #include <skia/core/SkImage.h>
+#elif PLATFORM(HAIKU)
+class BBitmap;
 #endif
 
 namespace WebCore {
@@ -68,6 +70,8 @@ typedef HBITMAP DragImageRef;
 typedef RefPtr<cairo_surface_t> DragImageRef;
 #elif USE(SKIA)
 typedef sk_sp<SkImage> DragImageRef;
+#elif PLATFORM(HAIKU)
+typedef BBitmap* DragImageRef;
 #else
 typedef void* DragImageRef;
 #endif

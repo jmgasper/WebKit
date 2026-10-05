@@ -1932,6 +1932,9 @@ public:
 #endif
 
     void preferencesDidChange();
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    void setNativePrivacyPreferences(std::optional<bool> prediction, std::optional<bool> hyperlinkAuditing);
+#endif
 
 #if ENABLE(CONTEXT_MENUS)
     // Called by the WebContextMenuProxy.
@@ -3870,6 +3873,13 @@ private:
     Ref<WebProcessProxy> m_legacyMainFrameProcess;
     const Ref<WebPageGroup> m_pageGroup;
     Ref<WebPreferences> m_preferences;
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    void updateNativePrivacyPreferencesStore();
+    std::optional<bool> m_nativePrivacyPrediction;
+    std::optional<bool> m_nativePrivacyHyperlinkAuditing;
+    std::unique_ptr<WebPreferencesStore> m_nativePrivacyPreferencesStore;
+    bool m_changingNativePrivacyPreferences { false };
+#endif
 
     const Ref<WebUserContentControllerProxy> m_userContentController;
 

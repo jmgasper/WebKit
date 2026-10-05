@@ -43,6 +43,7 @@
 #include <wtf/CrossThreadCopier.h>
 #include <wtf/Forward.h>
 #include <wtf/HashFunctions.h>
+#include <wtf/HashMap.h>
 #include <wtf/HashTraits.h>
 #include <wtf/OrderedHashSet.h>
 #include <wtf/Platform.h>
@@ -285,6 +286,7 @@ private:
 
 #if USE(SKIA)
     mutable sk_sp<SkFontMgr> m_fontManager;
+    HashMap<std::pair<String, unsigned>, sk_sp<SkTypeface>> m_skiaMatchedTypefaceCache;
     SkiaHarfBuzzFontCache m_harfBuzzFontCache;
 #if !OS(ANDROID) && !PLATFORM(WIN)
     SkiaSystemFallbackFontCache m_skiaSystemFallbackFontCache;

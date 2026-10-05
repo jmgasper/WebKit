@@ -67,9 +67,11 @@
 #if defined(ANGLE_ENABLE_OPENGL)
 #    if defined(ANGLE_PLATFORM_WINDOWS)
 #        include "libANGLE/renderer/gl/wgl/DisplayWGL.h"
+#    elif defined(ANGLE_PLATFORM_MACOS) || defined(ANGLE_PLATFORM_APPLE_EMBEDDED)
+#        include "libANGLE/renderer/gl/apple/DisplayApple_api.h"
 #    elif ANGLE_ENABLE_CGL
 #        include "libANGLE/renderer/gl/cgl/DisplayCGL.h"
-#    elif defined(ANGLE_PLATFORM_LINUX)
+#    elif defined(ANGLE_PLATFORM_LINUX) || defined(__HAIKU__)
 #        include "libANGLE/renderer/gl/egl/DisplayEGL.h"
 #        if defined(ANGLE_USE_X11)
 #            include "libANGLE/renderer/gl/glx/DisplayGLX_api.h"
@@ -551,7 +553,7 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
             impl = new rx::DisplayCGL(state);
             break;
 
-#    elif defined(ANGLE_PLATFORM_LINUX)
+#    elif defined(ANGLE_PLATFORM_LINUX) || defined(__HAIKU__)
 #        if defined(ANGLE_USE_GBM) || defined(ANGLE_USE_WAYLAND)
             if (platformType == 0)
             {
@@ -609,7 +611,7 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
 #if defined(ANGLE_ENABLE_OPENGL)
 #    if defined(ANGLE_PLATFORM_WINDOWS)
             impl = new rx::DisplayWGL(state);
-#    elif defined(ANGLE_PLATFORM_LINUX)
+#    elif defined(ANGLE_PLATFORM_LINUX) || defined(__HAIKU__)
 #        if defined(ANGLE_USE_GBM) || defined(ANGLE_USE_WAYLAND)
             if (platformType == 0)
             {
@@ -2259,7 +2261,7 @@ static ClientExtensions GenerateClientExtensions()
     extensions.x11Visual = true;
 #endif
 
-#if defined(ANGLE_PLATFORM_LINUX)
+#if defined(ANGLE_PLATFORM_LINUX) || defined(__HAIKU__)
     extensions.platformANGLEDeviceTypeEGLANGLE = true;
 #endif
 

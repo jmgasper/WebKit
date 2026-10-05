@@ -50,6 +50,7 @@ class MachSendRight;
 #endif
 
 namespace WebCore {
+class ShareableBitmapHandle;
 enum class DelegatedScrollingMode : uint8_t;
 using FramesPerSecond = unsigned;
 using PlatformDisplayID = uint32_t;
@@ -168,6 +169,10 @@ private:
     virtual void enterAcceleratedCompositingMode(uint64_t /* backingStoreStateID */, const LayerTreeContext&) { }
     virtual void updateAcceleratedCompositingMode(uint64_t /* backingStoreStateID */, const LayerTreeContext&) { }
     virtual void didFirstLayerFlush(uint64_t /* backingStoreStateID */, const LayerTreeContext&) { }
+
+#if PLATFORM(HAIKU)
+    virtual void updateBitmapHaiku(uint64_t, uint64_t, const WebCore::IntSize&, float, WebCore::ShareableBitmapHandle&&) { }
+#endif
 
 #if !PLATFORM(WPE) && !PLATFORM(GTK) && (USE(COORDINATED_GRAPHICS) || USE(TEXTURE_MAPPER))
     virtual void update(uint64_t /* backingStoreStateID */, UpdateInfo&&) { }

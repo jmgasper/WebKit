@@ -66,12 +66,15 @@ private:
     String m_deviceId;
     RealtimeMediaSourceSettings m_currentSettings;
     std::unique_ptr<PlatformAudioData> m_audioBuffer;
-#if USE(AVFOUNDATION) || USE(GSTREAMER)
+#if USE(AVFOUNDATION) || USE(GSTREAMER) || PLATFORM(HAIKU)
     size_t m_numberOfFrames { 0 };
 #endif
 #if USE(GSTREAMER)
     GstAudioInfo m_info;
     GRefPtr<GstCaps> m_caps;
+#endif
+#if PLATFORM(HAIKU)
+    Vector<float> m_interleaved;
 #endif
 };
 

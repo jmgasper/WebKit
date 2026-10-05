@@ -25,7 +25,7 @@
 
 #pragma once
 
-#if USE(GLIB) && ENABLE(MEDIA_STREAM)
+#if (USE(GLIB) || PLATFORM(HAIKU)) && ENABLE(MEDIA_STREAM)
 
 #include "MessageReceiver.h"
 #include "WebProcessSupplement.h"

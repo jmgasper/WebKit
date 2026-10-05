@@ -51,7 +51,9 @@
 #include "APISessionState.h"
 #include "APIUIClient.h"
 #include "APIWebAuthenticationPanel.h"
+#if !PLATFORM(HAIKU)
 #include "APIWebAuthenticationPanelClient.h"
+#endif
 #include "APIWebsitePolicies.h"
 #include "APIWindowFeatures.h"
 #include "AuthenticationChallengeDisposition.h"
@@ -2235,7 +2237,7 @@ void WKPageSetPageUIClient(WKPageRef pageRef, const WKPageUIClientBase* wkClient
             m_client.handleAutoplayEvent(toAPI(&page), toWKAutoplayEvent(event), toWKAutoplayEventFlags(flags), m_client.base.clientInfo);
         }
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(HAIKU)
         // The current method is specialized for WebKitTestRunner.
         void runWebAuthenticationPanel(WebPageProxy&, API::WebAuthenticationPanel& panel, WebFrameProxy&, FrameInfoData&&, CompletionHandler<void(WebKit::WebAuthenticationPanelResult)>&& completionHandler) final
         {

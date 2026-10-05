@@ -1,0 +1,10 @@
+# Copyright (C) 2026 KunanyiOS contributors. SPDX-License-Identifier: BSD-2-Clause
+
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+struct WebKit::WebExtensionWebRequestGateResultHaiku {
+    bool cancel;
+    std::optional<URL> redirectURL;
+    std::optional<Vector<std::pair<String, String>>> headers;
+    std::optional<std::pair<String, String>> credentials;
+};
+#endif

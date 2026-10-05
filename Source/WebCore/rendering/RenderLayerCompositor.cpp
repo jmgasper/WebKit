@@ -77,6 +77,12 @@
 #include "Settings.h"
 #include "StyleComputedStyle+GettersInlines.h"
 #include "StyleOffsetRotate.h"
+#if PLATFORM(HAIKU)
+#include "StyleBlurFunction.h"
+#include "StyleFilter.h"
+#include <cstdlib>
+#include <cstring>
+#endif
 #include "TiledBacking.h"
 #include "TransformState.h"
 #include "TranslateTransformOperation.h"
@@ -3997,10 +4003,55 @@ bool RenderLayerCompositor::requiresCompositingForCanvas(RenderLayerModelObject&
     return false;
 }
 
+#if PLATFORM(HAIKU)
+// Haiku paints page tiles on the CPU, where a wide blur on a large element is
+// redone in software on the main thread for every tile it touches and every
+// repaint: YouTube's blurred thumbnail behind the player (blur(15px) over
+// 1202x676) held the main thread for about a second each time the video
+// changed. Composited, the element's tiles are painted without the filter and
+// the compositor blurs the layer on the GPU (TextureMapper scales a wide blur
+// down first). Small filtered elements, such as icons with a drop shadow, stay
+// as they were. SUMMIT_COMPOSITE_WIDE_BLURS=0 composites none of them.
+static bool hasWideBlurOnLargeBoxHaiku(const RenderLayerModelObject& renderer)
+{
+    static const bool enabled = [] {
+        const char* value = getenv("SUMMIT_COMPOSITE_WIDE_BLURS");
+        return !value || strcmp(value, "0");
+    }();
+    if (!enabled || !renderer.hasFilter())
+        return false;
+    auto& filter = renderer.style().filter();
+    if (filter.hasReferenceFilter())
+        return false;
+    auto zoom = renderer.style().usedZoomForLength();
+    IntOutsets outsets;
+    for (auto& value : filter) {
+        WTF::switchOn(value,
+            [&](const Style::BlurFunction& blurFunction) {
+                outsets += blurFunction->calculateOutsets(zoom);
+            },
+            [](const auto&) { });
+    }
+    // A blur's outsets are three times its standard deviation.
+    if (outsets.top() < 15)
+        return false;
+    auto* box = dynamicDowncast<RenderBox>(renderer);
+    if (!box)
+        return false;
+    auto size = box->borderBoxRect().size();
+    return size.width().toFloat() * size.height().toFloat() >= 200 * 200;
+}
+#endif
+
 bool RenderLayerCompositor::requiresCompositingForFilters(RenderLayerModelObject& renderer) const
 {
     if (renderer.hasBackdropFilter())
         return true;
+
+#if PLATFORM(HAIKU)
+    if (hasWideBlurOnLargeBoxHaiku(renderer))
+        return true;
+#endif
 
 #if HAVE(CORE_MATERIAL)
     if (renderer.hasAppleVisualEffect())

@@ -89,7 +89,13 @@ public:
     const String& identifier() const LIFETIME_BOUND { return m_identifier; }
     const String& description() const LIFETIME_BOUND { return m_description; }
 
+#if PLATFORM(HAIKU)
+    const String& activationKey() const LIFETIME_BOUND { return m_activationKey; }
+    void setDescription(const String& description) { m_description = description; }
+    bool setShortcut(const String&, SuppressEvents = SuppressEvents::No);
+#else
     const String& activationKey() const LIFETIME_BOUND { return m_modifierFlags ? m_activationKey : nullString(); }
+#endif
     bool setActivationKey(String, SuppressEvents = SuppressEvents::No);
 
     OptionSet<ModifierFlags> modifierFlags() const { return !m_activationKey.isEmpty() ? m_modifierFlags : OptionSet<ModifierFlags> { }; }

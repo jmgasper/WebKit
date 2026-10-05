@@ -33,6 +33,7 @@
 #include "GridLayoutUtils.h"
 #include "LayoutIntegrationBoxGeometryUpdater.h"
 #include "LayoutIntegrationBoxTreeUpdater.h"
+#include "RenderChildIterator.h"
 #include "RenderGrid.h"
 #include "RenderView.h"
 #include "StyleKeyword+Logging.h"
@@ -210,6 +211,8 @@ void GridLayout::updateFormattingContextRootRenderer(const Layout::GridLayoutCon
 void GridLayout::invalidateFormattingContextRootRenderer(RenderGrid& renderGrid)
 {
     renderGrid.currentGrid().setNeedsItemsPlacement(true);
+    for (CheckedRef gridItem : childrenOfType<RenderBox>(renderGrid))
+        gridItem->clearGridAreaContentSize();
 }
 
 std::pair<LayoutUnit, LayoutUnit> GridLayout::computeIntrinsicWidths()

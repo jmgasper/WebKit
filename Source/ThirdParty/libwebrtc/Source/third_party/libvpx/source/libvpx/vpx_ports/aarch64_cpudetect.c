@@ -62,7 +62,20 @@ static int arm_get_cpu_caps(void) {
   return flags;
 }
 
-#elif defined(_WIN32)  // end __APPLE__
+#elif defined(__HAIKU__)  // end __APPLE__
+
+// WEBRTC_WEBKIT_BUILD change: Haiku has no getauxval(); the Haiku
+// configuration builds NEON code only (vpx_config.h), which every AArch64 CPU
+// has.
+static int arm_get_cpu_caps(void) {
+  int flags = 0;
+#if HAVE_NEON
+  flags |= HAS_NEON;
+#endif  // HAVE_NEON
+  return flags;
+}
+
+#elif defined(_WIN32)  // end __HAIKU__
 
 static int arm_get_cpu_caps(void) {
   int flags = 0;

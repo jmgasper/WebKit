@@ -24,13 +24,17 @@
 
 #pragma once
 
-#include "Cookie.h"
+#include "CookieChange.h"
 #include "CookieJar.h"
 #include "SQLiteDatabase.h"
 #include "SQLiteStatement.h"
+#include <wtf/Function.h>
 #include <wtf/HashMap.h>
 #include <wtf/Noncopyable.h>
+#include <wtf/RunLoop.h>
+#include <wtf/SharedTask.h>
 #include <wtf/TZoneMalloc.h>
+#include <wtf/WallTime.h>
 #include <wtf/text/StringHash.h>
 
 namespace WebCore {
@@ -55,7 +59,7 @@ public:
     WEBCORE_EXPORT void open();
     bool isEnabled() const;
 
-    void setAcceptPolicy(CookieAcceptPolicy policy) { m_acceptPolicy = policy; }
+    void setAcceptPolicy(CookieAcceptPolicy policy) { m_acceptPolicy = policy; scheduleCookieExpiration(); }
     CookieAcceptPolicy acceptPolicy() const { return m_acceptPolicy; }
 
     WEBCORE_EXPORT HashSet<String> allDomains();
@@ -63,11 +67,21 @@ public:
     WEBCORE_EXPORT Vector<Cookie> getAllCookies();
     WEBCORE_EXPORT bool setCookie(const URL& firstParty, const URL&, const String& cookie, Source, std::optional<Seconds> cappedLifetime = std::nullopt);
     WEBCORE_EXPORT bool setCookie(const Cookie&);
+    // Returns the row actually stored, including preserved creation time and
+    // normalized expiry. Successful expiry/deletion returns an empty cookie.
+    WEBCORE_EXPORT bool setCookieWithResult(const Cookie&, std::optional<Cookie>&);
 
+    WEBCORE_EXPORT bool deleteCookie(const Cookie&);
     WEBCORE_EXPORT bool deleteCookie(const String& url, const String& name);
     bool deleteCookies(const String& url);
     WEBCORE_EXPORT bool deleteCookiesForHostname(const String& hostname, IncludeHttpOnlyCookies);
     WEBCORE_EXPORT bool deleteAllCookies();
+    WEBCORE_EXPORT bool deleteCookiesModifiedSince(WallTime);
+    WEBCORE_EXPORT bool deleteExpiredCookies();
+
+    using ChangeHandler = SharedTask<void(Vector<CookieChange>&&)>;
+    // A replacement is delivered as one ordered batch, after the SQL commit.
+    WEBCORE_EXPORT void setCookieChangeHandler(RefPtr<ChangeHandler>&&);
 
     WEBCORE_EXPORT CookieJarDB(const String& databasePath);
     WEBCORE_EXPORT ~CookieJarDB();
@@ -91,14 +105,22 @@ private:
     bool checkDatabaseValidity();
     void deleteAllDatabaseFiles();
 
-    void verifySchemaVersion();
+    bool verifySchemaVersion();
     void deleteAllTables();
 
-    void createPrepareStatement(ASCIILiteral);
+    bool createPrepareStatement(ASCIILiteral);
     SQLiteStatement& preparedStatement(const String&);
     bool executeSQLStatement(std::unique_ptr<SQLiteStatement>&&);
 
     bool deleteCookieInternal(const String& name, const String& domain, const String& path);
+    bool readCookie(const Cookie&, std::optional<Cookie>&);
+    bool deleteCookiesMatching(ASCIILiteral selectSQL, ASCIILiteral deleteSQL, Function<bool(SQLiteStatement&)>&&, CookieChangeCause);
+    void notifyCookieChanges(Vector<CookieChange>&&);
+    void scheduleCookieExpiration();
+    void cookieExpirationTimerFired();
+    RefPtr<ChangeHandler> m_cookieChangeHandler;
+    std::unique_ptr<RunLoop::Timer> m_cookieExpirationTimer;
+
     bool hasHttpOnlyCookie(const String& name, const String& domain, const String& path);
     bool canAcceptCookie(const Cookie&, const URL& firstParty, const URL&, CookieJarDB::Source);
     bool checkCookieAcceptPolicy(const URL& firstParty, const URL&);

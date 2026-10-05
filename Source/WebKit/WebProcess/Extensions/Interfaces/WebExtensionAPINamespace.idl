@@ -33,57 +33,65 @@
     * in the offscreen web view context) - and automatically grant it in WebExtensionAPINamespace::isPropertyAllowed.
     */
 
-    [MainWorldOnly, Dynamic, Platform=COCOA] readonly attribute WebExtensionAPIAction action;
+    [MainWorldOnly, Dynamic] readonly attribute WebExtensionAPIAction action;
 
     [MainWorldOnly, Dynamic] readonly attribute WebExtensionAPIAlarms alarms;
 
     [MainWorldOnly, Dynamic, Platform=COCOA, Conditional=WK_WEB_EXTENSIONS_BOOKMARKS] readonly attribute WebExtensionAPIBookmarks bookmarks;
 
-    [MainWorldOnly, Dynamic, Platform=COCOA] readonly attribute WebExtensionAPIAction browserAction;
+    [MainWorldOnly, Dynamic] readonly attribute WebExtensionAPIAction browserAction;
 
-    [MainWorldOnly, Dynamic, Platform=COCOA] readonly attribute WebExtensionAPICookies cookies;
+    [MainWorldOnly, Dynamic] readonly attribute WebExtensionAPICookies cookies;
 
-    [MainWorldOnly, Dynamic, Platform=COCOA] readonly attribute WebExtensionAPICommands commands;
+    [MainWorldOnly, Dynamic] readonly attribute WebExtensionAPICommands commands;
 
-    [MainWorldOnly, Dynamic, Platform=COCOA] readonly attribute WebExtensionAPIMenus contextMenus;
+    [MainWorldOnly, Dynamic] readonly attribute WebExtensionAPIMenus contextMenus;
 
-    [MainWorldOnly, Dynamic, Platform=COCOA] readonly attribute WebExtensionAPIDeclarativeNetRequest declarativeNetRequest;
+    [MainWorldOnly, Dynamic] readonly attribute WebExtensionAPIDeclarativeNetRequest declarativeNetRequest;
 
     [Dynamic, Platform=COCOA, Conditional=INSPECTOR_EXTENSIONS] readonly attribute WebExtensionAPIDevTools devtools;
 
     [Dynamic, Platform=COCOA] readonly attribute WebExtensionAPIDOM dom;
 
-    [Dynamic, Platform=COCOA] readonly attribute WebExtensionAPIExtension extension;
+    [MainWorldOnly, Dynamic, Platform=HAIKU] readonly attribute WebExtensionAPIDownloads downloads;
 
-    [Dynamic, Platform=COCOA] readonly attribute WebExtensionAPILocalization i18n;
+    [Dynamic] readonly attribute WebExtensionAPIExtension extension;
 
-    [Dynamic, Platform=COCOA] readonly attribute WebExtensionAPIRuntime runtime;
+    [Dynamic] readonly attribute WebExtensionAPILocalization i18n;
 
-    [MainWorldOnly, Dynamic, Platform=COCOA] readonly attribute WebExtensionAPIMenus menus;
+    [Dynamic] readonly attribute WebExtensionAPIRuntime runtime;
+
+    [MainWorldOnly, Dynamic] readonly attribute WebExtensionAPIMenus menus;
+
+    [MainWorldOnly, Dynamic, Platform=HAIKU] readonly attribute WebExtensionAPIIdle idle;
+
+    [MainWorldOnly, Dynamic, Platform=HAIKU] readonly attribute WebExtensionAPIManagement management;
 
     [MainWorldOnly, Dynamic, Platform=COCOA] readonly attribute WebExtensionAPINotifications notifications;
+    [MainWorldOnly, Dynamic, Platform=HAIKU, ImplementedAs=notificationsHaiku] readonly attribute WebExtensionAPINotificationsHaiku notifications;
 
-    [MainWorldOnly, Dynamic, Platform=COCOA, Conditional=WK_WEB_EXTENSIONS_OFFSCREEN] readonly attribute WebExtensionAPIOffscreen offscreen;
+    [MainWorldOnly, Dynamic, Conditional=WK_WEB_EXTENSIONS_OFFSCREEN] readonly attribute WebExtensionAPIOffscreen offscreen;
 
-    [MainWorldOnly, Dynamic, Platform=COCOA] readonly attribute WebExtensionAPIAction pageAction;
+    [MainWorldOnly, Dynamic] readonly attribute WebExtensionAPIAction pageAction;
 
-    [MainWorldOnly, Dynamic, Platform=COCOA] readonly attribute WebExtensionAPIPermissions permissions;
+    [MainWorldOnly, Dynamic] readonly attribute WebExtensionAPIPermissions permissions;
+    [MainWorldOnly, Dynamic, Platform=HAIKU] readonly attribute WebExtensionAPIPrivacy privacy;
 
-    [MainWorldOnly, Dynamic, Platform=COCOA] readonly attribute WebExtensionAPIScripting scripting;
+    [MainWorldOnly, Dynamic] readonly attribute WebExtensionAPIScripting scripting;
 
     [MainWorldOnly, Dynamic, Platform=COCOA, Conditional=WK_WEB_EXTENSIONS_SIDEBAR] readonly attribute WebExtensionAPISidebarAction sidebarAction;
 
     [MainWorldOnly, Dynamic, Platform=COCOA, Conditional=WK_WEB_EXTENSIONS_SIDEBAR] readonly attribute WebExtensionAPISidePanel sidePanel;
 
-    [Dynamic, Platform=COCOA] readonly attribute WebExtensionAPIStorage storage;
+    [Dynamic] readonly attribute WebExtensionAPIStorage storage;
 
-    [MainWorldOnly, Dynamic, Platform=COCOA] readonly attribute WebExtensionAPITabs tabs;
+    [MainWorldOnly, Dynamic] readonly attribute WebExtensionAPITabs tabs;
 
-    [MainWorldOnly, Dynamic, Platform=COCOA] readonly attribute WebExtensionAPIWindows windows;
+    [MainWorldOnly, Dynamic] readonly attribute WebExtensionAPIWindows windows;
 
-    [MainWorldOnly, Dynamic, Platform=COCOA] readonly attribute WebExtensionAPIWebNavigation webNavigation;
+    [MainWorldOnly, Dynamic] readonly attribute WebExtensionAPIWebNavigation webNavigation;
 
-    [MainWorldOnly, Dynamic, Platform=COCOA] readonly attribute WebExtensionAPIWebRequest webRequest;
+    [MainWorldOnly, Dynamic] readonly attribute WebExtensionAPIWebRequest webRequest;
 
     [Dynamic] readonly attribute WebExtensionAPITest test;
 

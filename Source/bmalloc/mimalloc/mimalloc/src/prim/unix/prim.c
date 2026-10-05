@@ -496,6 +496,10 @@ int _mi_prim_decommit(void* start, size_t size, bool* needs_recommit) {
     // decommit on macOS: use MADV_FREE_REUSABLE as it does immediate rss accounting (issue #1097)
     err = unix_madvise(start, size, MADV_FREE_REUSABLE);
     if (err) { err = unix_madvise(start, size, MADV_DONTNEED); }
+  #elif defined(__HAIKU__)
+    // decommit on Haiku: MADV_DONTNEED is accepted but ignored, so purged memory
+    // never left the process; MADV_FREE discards the pages immediately.
+    err = unix_madvise(start, size, MADV_FREE);
   #else
     // decommit: use MADV_DONTNEED as it decreases rss immediately (unlike MADV_FREE)
     err = unix_madvise(start, size, MADV_DONTNEED);

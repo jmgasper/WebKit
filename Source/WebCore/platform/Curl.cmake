@@ -8,11 +8,13 @@ list(APPEND WebCore_SOURCES
     platform/network/curl/CookieJarDB.cpp
     platform/network/curl/CookieUtil.cpp
     platform/network/curl/CurlContext.cpp
+    platform/network/curl/CurlDownload.cpp
     platform/network/curl/CurlFormDataStream.cpp
     platform/network/curl/CurlMultipartHandle.cpp
     platform/network/curl/CurlProxySettings.cpp
     platform/network/curl/CurlRequest.cpp
     platform/network/curl/CurlRequestScheduler.cpp
+    platform/network/curl/CurlResourceHandleDelegate.cpp
     platform/network/curl/CurlSSLHandle.cpp
     platform/network/curl/CurlSSLVerifier.cpp
     platform/network/curl/CurlStream.cpp
@@ -22,8 +24,10 @@ list(APPEND WebCore_SOURCES
     platform/network/curl/ProtectionSpaceCurl.cpp
     platform/network/curl/PublicSuffixStoreCurl.cpp
     platform/network/curl/ResourceErrorCurl.cpp
+    platform/network/curl/ResourceHandleCurl.cpp
     platform/network/curl/ResourceRequestCurl.cpp
     platform/network/curl/ResourceResponseCurl.cpp
+    platform/network/curl/SynchronousLoaderClientCurl.cpp
 )
 
 list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
@@ -31,7 +35,10 @@ list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
     platform/network/curl/CertificateInfo.h
     platform/network/curl/CookieJarDB.h
     platform/network/curl/CookieUtil.h
+    platform/network/curl/CurlCacheEntry.h
+    platform/network/curl/CurlCacheManager.h
     platform/network/curl/CurlContext.h
+    platform/network/curl/CurlDownload.h
     platform/network/curl/CurlFormDataStream.h
     platform/network/curl/CurlMultipartHandle.h
     platform/network/curl/CurlMultipartHandleClient.h
@@ -40,6 +47,7 @@ list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
     platform/network/curl/CurlRequestClient.h
     platform/network/curl/CurlRequestScheduler.h
     platform/network/curl/CurlRequestSchedulerClient.h
+    platform/network/curl/CurlResourceHandleDelegate.h
     platform/network/curl/CurlResponse.h
     platform/network/curl/CurlSSLHandle.h
     platform/network/curl/CurlSSLVerifier.h
@@ -56,5 +64,5 @@ list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
 list(APPEND WebCore_LIBRARIES
     CURL::libcurl
     LibPSL::LibPSL
-    OpenSSL::SSL
+    ssl
 )

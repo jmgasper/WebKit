@@ -58,6 +58,11 @@
 #define BOS_DARWIN 1
 #endif
 
+#ifdef __HAIKU__
+#define BOS_HAIKU 1
+#define BOS_UNIX 1
+#endif
+
 #if defined(__unix) || defined(__unix__)
 #define BOS_UNIX 1
 #endif

@@ -32,7 +32,7 @@
 #include <wtf/Platform.h>
 #include <wtf/ThreadSafeRefCounted.h>
 
-#if USE(UNIX_DOMAIN_SOCKETS)
+#if USE(UNIX_DOMAIN_SOCKETS) || OS(HAIKU)
 #include <wtf/unix/UnixFileDescriptor.h>
 #endif
 
@@ -42,6 +42,10 @@
 
 #if OS(DARWIN)
 #include <wtf/MachSendRight.h>
+#endif
+
+#if PLATFORM(HAIKU)
+#include <OS.h>
 #endif
 
 #if PLATFORM(COCOA)
@@ -62,12 +66,14 @@ WEBCORE_EXPORT bool isMemoryAttributionDisabled();
 class SharedMemoryHandle {
 public:
     using Type =
-#if USE(UNIX_DOMAIN_SOCKETS)
+#if USE(UNIX_DOMAIN_SOCKETS) || OS(HAIKU)
         UnixFileDescriptor;
 #elif OS(DARWIN)
         MachSendRight;
 #elif OS(WINDOWS)
         Win32Handle;
+#else
+        #error Missing platform specific code
 #endif
 
     // Note: this function should not be used to share writable arbitrary malloc memory to
@@ -81,7 +87,7 @@ public:
     WEBCORE_EXPORT static std::optional<SharedMemoryHandle> createCopy(std::span<const uint8_t>, SharedMemoryProtection);
 
     SharedMemoryHandle(SharedMemoryHandle&&) = default;
-#if USE(UNIX_DOMAIN_SOCKETS)
+#if USE(UNIX_DOMAIN_SOCKETS) || OS(HAIKU)
     explicit SharedMemoryHandle(const SharedMemoryHandle&);
 #else
     explicit SharedMemoryHandle(const SharedMemoryHandle&) = default;
@@ -97,7 +103,7 @@ public:
     // Transfer ownership of the memory for process memory accounting purposes.
     WEBCORE_EXPORT void setOwnershipOfMemory(const WebCore::ProcessIdentity&, MemoryLedger) const;
 
-#if USE(UNIX_DOMAIN_SOCKETS)
+#if USE(UNIX_DOMAIN_SOCKETS) || OS(HAIKU)
     UnixFileDescriptor releaseHandle();
 #elif OS(DARWIN)
     MachSendRight releaseHandle() { return std::exchange(m_handle, MachSendRight { }); }
@@ -121,7 +127,7 @@ public:
     WEBCORE_EXPORT static RefPtr<SharedMemory> allocate(size_t);
     WEBCORE_EXPORT static RefPtr<SharedMemory> copyBuffer(const WebCore::FragmentedSharedBuffer&);
     WEBCORE_EXPORT static RefPtr<SharedMemory> map(Handle&&, Protection, CopyOnWrite = CopyOnWrite::No);
-#if USE(UNIX_DOMAIN_SOCKETS)
+#if USE(UNIX_DOMAIN_SOCKETS) || OS(HAIKU)
     WEBCORE_EXPORT static RefPtr<SharedMemory> wrapMap(void*, size_t, int fileDescriptor);
 #elif OS(DARWIN)
     WEBCORE_EXPORT static RefPtr<SharedMemory> wrapMap(std::span<const uint8_t>, Protection);
@@ -145,6 +151,10 @@ public:
     WEBCORE_EXPORT RetainPtr<NSData> toNSData() const;
 #endif
 
+#if OS(HAIKU)
+    WEBCORE_EXPORT area_id area() const;
+#endif
+
     WEBCORE_EXPORT Ref<WebCore::SharedBuffer> createSharedBuffer(size_t) const;
 
 private:
@@ -158,13 +168,19 @@ private:
     Protection m_protection;
 #endif
 
-#if USE(UNIX_DOMAIN_SOCKETS)
+#if USE(UNIX_DOMAIN_SOCKETS) || OS(HAIKU)
     UnixFileDescriptor m_fileDescriptor;
     bool m_isWrappingMap { false };
 #elif OS(DARWIN)
     MachSendRight m_sendRight;
 #elif OS(WINDOWS)
     Win32Handle m_handle;
+#else
+        #error Missing platform specific code
+#endif
+#if OS(HAIKU)
+    UnixFileDescriptor m_readOnlyFileDescriptor;
+    bool m_isCopyOnWrite { false };
 #endif
 };
 

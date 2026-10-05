@@ -40,6 +40,10 @@
 #include "StylePrimitiveNumericTypes+Evaluation.h"
 #include "StylePrimitiveNumericTypes+EvaluationMinimum.h"
 #include "StyleSelfAlignmentData.h"
+#if PLATFORM(HAIKU)
+#include <cstdlib>
+#include <wtf/MonotonicTime.h>
+#endif
 #include <ranges>
 #include <wtf/Range.h>
 #include <wtf/StdMap.h>
@@ -47,6 +51,13 @@
 #include <wtf/Vector.h>
 #include <wtf/WeakPtr.h>
 #include <wtf/text/ParsingUtilities.h>
+
+#if PLATFORM(HAIKU)
+namespace WebCore {
+// Layout reuse for flex and grid items lives in RenderBlock.cpp.
+void summitSetNeedsLayoutByContainer(RenderBox&);
+}
+#endif
 
 namespace WebCore {
 
@@ -1075,7 +1086,11 @@ LayoutUnit GridTrackSizingAlgorithmStrategy::logicalHeightForGridItem(RenderBox&
     };
     if (hasOverridingContainingBlockContentSizeForGridItem() && shouldClearOverridingContainingBlockContentSizeForGridItem(gridItem, Style::GridTrackSizingDirection::Rows)) {
         setOverridingContainingBlockContentSizeForGridItem(*renderGrid(), gridItem, gridItemBlockDirection, std::nullopt);
+#if PLATFORM(HAIKU)
+        summitSetNeedsLayoutByContainer(gridItem);
+#else
         gridItem.setNeedsLayout(MarkingBehavior::MarkOnlyThis);
+#endif
 
         if (renderGrid()->canSetColumnAxisStretchRequirementForItem(gridItem))
             gridLayoutState.setLayoutRequirementForGridItem(gridItem, ItemLayoutRequirement::NeedsColumnAxisStretchAlignment);
@@ -1085,7 +1100,23 @@ LayoutUnit GridTrackSizingAlgorithmStrategy::logicalHeightForGridItem(RenderBox&
     if (gridItem.needsLayout())
         gridItem.clearOverridingSize();
 
+#if PLATFORM(HAIKU)
+    static bool summitPageUpdateTraceEnabled = [] {
+        const char* value = std::getenv("SUMMIT_PAGE_UPDATE_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    bool traceLayout = summitPageUpdateTraceEnabled && gridItem.needsLayout();
+    auto traceStart = traceLayout ? MonotonicTime::now() : MonotonicTime { };
+#endif
     gridItem.layoutIfNeeded();
+#if PLATFORM(HAIKU)
+    if (traceLayout) {
+        auto duration = MonotonicTime::now() - traceStart;
+        if (duration >= 10_ms)
+            WTFLogAlways("Summit grid item layout: grid=%p item=%p phase=rowSizing state=%u total=%.1f\n",
+                renderGrid(), &gridItem, static_cast<unsigned>(sizingState()), duration.milliseconds());
+    }
+#endif
 
     auto gridItemLogicalHeight = gridItem.logicalHeight() + GridLayoutFunctions::marginLogicalSizeForGridItem(*renderGrid(), gridItemBlockDirection, gridItem) + m_algorithm.baselineOffsetForGridItem(gridItem, direction());
     if (intrinsicLogicalHeightsForRowSizingFirstPass && sizingState() == GridTrackSizingAlgorithm::SizingState::RowSizingFirstIteration)
@@ -1146,7 +1177,11 @@ LayoutUnit GridTrackSizingAlgorithmStrategy::minContentContributionForGridItem(R
     }
 
     if (updateOverridingContainingBlockContentSizeForGridItem(gridItem, gridItemInlineDirection)) {
+#if PLATFORM(HAIKU)
+        summitSetNeedsLayoutByContainer(gridItem);
+#else
         gridItem.setNeedsLayout(MarkingBehavior::MarkOnlyThis);
+#endif
 
         if (auto& intrinsicLogicalHeightsForRowSizingFirstPass = renderGrid()->intrinsicLogicalHeightsForRowSizingFirstPass())
             intrinsicLogicalHeightsForRowSizingFirstPass->invalidateSizeForItem(gridItem);
@@ -1193,7 +1228,11 @@ LayoutUnit GridTrackSizingAlgorithmStrategy::maxContentContributionForGridItem(R
     if (updateOverridingContainingBlockContentSizeForGridItem(gridItem, gridItemInlineDirection)) {
         if (auto& intrinsicLogicalHeightsForRowSizingFirstPass = renderGrid()->intrinsicLogicalHeightsForRowSizingFirstPass())
             intrinsicLogicalHeightsForRowSizingFirstPass->invalidateSizeForItem(gridItem);
+#if PLATFORM(HAIKU)
+        summitSetNeedsLayoutByContainer(gridItem);
+#else
         gridItem.setNeedsLayout(MarkingBehavior::MarkOnlyThis);
+#endif
     }
     return logicalHeightForGridItem(gridItem, gridLayoutState);
 }
@@ -1440,7 +1479,11 @@ private:
 void IndefiniteSizeStrategy::layoutGridItemForMinSizeComputation(RenderBox& gridItem, bool overrideSizeHasChanged) const
 {
     if (overrideSizeHasChanged && direction() != Style::GridTrackSizingDirection::Columns)
+#if PLATFORM(HAIKU)
+        summitSetNeedsLayoutByContainer(gridItem);
+#else
         gridItem.setNeedsLayout(MarkingBehavior::MarkOnlyThis);
+#endif
     gridItem.layoutIfNeeded();
 }
 
@@ -1646,7 +1689,11 @@ void DefiniteSizeStrategy::maximizeTracks(Vector<UniqueRef<GridTrack>>& tracks, 
 void DefiniteSizeStrategy::layoutGridItemForMinSizeComputation(RenderBox& gridItem, bool overrideSizeHasChanged) const
 {
     if (overrideSizeHasChanged)
+#if PLATFORM(HAIKU)
+        summitSetNeedsLayoutByContainer(gridItem);
+#else
         gridItem.setNeedsLayout(MarkingBehavior::MarkOnlyThis);
+#endif
     gridItem.layoutIfNeeded();
 }
 

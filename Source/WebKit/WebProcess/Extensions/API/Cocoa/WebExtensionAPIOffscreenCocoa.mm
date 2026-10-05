@@ -40,6 +40,21 @@
 
 namespace WebKit {
 
+// The bindings are generated with UseCPPAPI; adapt the JSON options to the Cocoa implementation.
+void WebExtensionAPIOffscreen::createDocument(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&& callback, String& outExceptionString)
+{
+    id value = details ? parseJSON(details->toJSONString().createNSString().get(), JSONOptions::FragmentsAllowed) : nil;
+    auto *dictionary = dynamic_objc_cast<NSDictionary>(value);
+    if (!dictionary) {
+        outExceptionString = "parameters must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    createDocument(dictionary, WTF::move(callback), &nativeException);
+    if (nativeException)
+        outExceptionString = nativeException;
+}
+
 void WebExtensionAPIOffscreen::createDocument(NSDictionary *details, Ref<WebExtensionCallbackHandler>&& callback, NSString **outExceptionString)
 {
     // https://developer.chrome.com/docs/extensions/reference/api/offscreen#method-createDocument

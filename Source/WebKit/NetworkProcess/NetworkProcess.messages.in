@@ -312,4 +312,9 @@ messages -> NetworkProcess : AuxiliaryProcess WantsAsyncDispatchMessage {
 #if HAVE(ENHANCED_SECURITY_LINKS)
     IsEnhancedSecurityLink(URL url) -> (bool isEnhancedSecurityLink)
 #endif
+
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    // Phases (bit per WebExtensionWebRequestPhaseHaiku) with at least one live blocking webRequest listener.
+    SetWebRequestBlockingPhasesHaiku(uint8_t phases)
+#endif
 }

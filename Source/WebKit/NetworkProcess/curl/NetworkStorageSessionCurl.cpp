@@ -105,7 +105,16 @@ NetworkStorageSession::~NetworkStorageSession()
 
 void NetworkStorageSession::setCookieDatabase(UniqueRef<CookieJarDB>&& cookieDatabase)
 {
+    m_cookieDatabase->setCookieChangeHandler(nullptr);
     m_cookieDatabase = WTF::move(cookieDatabase);
+    if (m_cookieChangeHandler)
+        this->cookieDatabase().setCookieChangeHandler(m_cookieChangeHandler.copyRef());
+}
+
+void NetworkStorageSession::setCookieChangeHandler(RefPtr<CookieJarDB::ChangeHandler>&& handler)
+{
+    m_cookieChangeHandler = WTF::move(handler);
+    cookieDatabase().setCookieChangeHandler(m_cookieChangeHandler.copyRef());
 }
 
 CookieJarDB& NetworkStorageSession::cookieDatabase() const
@@ -182,8 +191,7 @@ void NetworkStorageSession::setCookie(const Cookie& cookie, const URL&, const UR
 
 void NetworkStorageSession::deleteCookie(const Cookie& cookie, CompletionHandler<void()>&& completionHandler)
 {
-    String url = makeString(cookie.secure ? "https"_s : "http"_s, "://"_s, cookie.domain, cookie.path);
-    cookieDatabase().deleteCookie(url, cookie.name);
+    cookieDatabase().deleteCookie(cookie);
     completionHandler();
 }
 
@@ -199,9 +207,9 @@ void NetworkStorageSession::deleteAllCookies(CompletionHandler<void()>&& complet
     completionHandler();
 }
 
-void NetworkStorageSession::deleteAllCookiesModifiedSince(WallTime, CompletionHandler<void()>&& completionHandler)
+void NetworkStorageSession::deleteAllCookiesModifiedSince(WallTime since, CompletionHandler<void()>&& completionHandler)
 {
-    // FIXME: Not yet implemented
+    cookieDatabase().deleteCookiesModifiedSince(since);
     completionHandler();
 }
 
@@ -222,10 +230,13 @@ void NetworkStorageSession::getHostnamesWithCookies(HashSet<String>& hostnames)
     hostnames = cookieDatabase().allDomains();
 }
 
-Vector<Cookie> NetworkStorageSession::getCookies(const URL&)
+Vector<Cookie> NetworkStorageSession::getCookies(const URL& url)
 {
-    // FIXME: Implement for WebKit to use.
-    return { };
+    if (!url.isValid() || !url.protocolIsInHTTPFamily())
+        return { };
+    std::optional<bool> secureFilter = url.protocolIs("https"_s) ? std::nullopt : std::optional<bool> { false };
+    auto cookies = cookieDatabase().searchCookies(url, url, std::nullopt, secureFilter, std::nullopt);
+    return cookies ? WTF::move(*cookies) : Vector<Cookie> { };
 }
 
 void NetworkStorageSession::hasCookies(const RegistrableDomain&, CompletionHandler<void(bool)>&& completionHandler) const

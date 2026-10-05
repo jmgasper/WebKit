@@ -29,6 +29,12 @@
 #include <wtf/CheckedPtr.h>
 #include <wtf/Forward.h>
 
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+#include <WebCore/Credential.h>
+#include <optional>
+#include <wtf/CompletionHandler.h>
+#endif
+
 namespace WebCore {
 class AuthenticationChallenge;
 class NetworkLoadMetrics;
@@ -63,6 +69,13 @@ public:
     virtual void didFailLoading(const WebCore::ResourceError&) = 0;
     virtual void didBlockAuthenticationChallenge() { };
     virtual void didReceiveChallenge(const WebCore::AuthenticationChallenge&) { };
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    // Gives the client a chance to answer an HTTP authentication challenge before
+    // the ordinary path. std::nullopt continues along the ordinary path; any
+    // credential (including an empty one, which proceeds without credentials and
+    // exposes the 401/407 response) answers the challenge directly.
+    virtual void decideAuthenticationChallengeHaiku(const WebCore::AuthenticationChallenge&, CompletionHandler<void(std::optional<WebCore::Credential>&&)>&& completionHandler) { completionHandler(std::nullopt); }
+#endif
     virtual bool shouldCaptureExtraNetworkLoadMetrics() const { return false; }
 };
 

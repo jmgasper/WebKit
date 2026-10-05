@@ -40,6 +40,8 @@ static constexpr size_t webExtensionMaxMessageLength = 1024 * 1024 * 64;
 static constexpr size_t webExtensionDeclarativeNetRequestMaximumNumberOfStaticRulesets = 100;
 static constexpr size_t webExtensionDeclarativeNetRequestMaximumNumberOfEnabledRulesets = 50;
 static constexpr size_t webExtensionDeclarativeNetRequestMaximumNumberOfDynamicAndSessionRules = 30000;
+static constexpr size_t webExtensionDeclarativeNetRequestMaximumNumberOfRegexRules = 1000;
+static constexpr size_t webExtensionDeclarativeNetRequestGuaranteedMinimumStaticRules = 30000;
 
 // MARK: Storage
 static constexpr size_t webExtensionUnlimitedStorageQuotaBytes = std::numeric_limits<size_t>::max();

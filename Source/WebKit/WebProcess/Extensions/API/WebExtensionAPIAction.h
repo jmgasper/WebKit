@@ -31,6 +31,7 @@
 #include "WebExtensionAPIEvent.h"
 #include "WebExtensionAPIObject.h"
 #include "WebPageProxyIdentifier.h"
+#include <wtf/JSONValues.h>
 
 OBJC_CLASS NSDictionary;
 OBJC_CLASS NSString;
@@ -41,6 +42,27 @@ class WebExtensionAPIAction : public WebExtensionAPIObject, public JSWebExtensio
     WEB_EXTENSION_DECLARE_JS_WRAPPER_CLASS(WebExtensionAPIAction, action, action);
 
 public:
+    void getTitle(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void setTitle(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void getBadgeText(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void setBadgeText(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void enable(JSContextRef, JSValueRef, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void disable(JSContextRef, JSValueRef, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void isEnabled(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void getPopup(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void setPopup(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    WebExtensionAPIEvent& onClicked();
+
+    void getBadgeBackgroundColor(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void setBadgeBackgroundColor(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    // Preserve native ImageData wrappers for the platform's icon converter.
+    void setIcon(WebFrame&, JSContextRef, JSValueRef, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void openPopup(WebPageProxyIdentifier, RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+#if PLATFORM(HAIKU)
+    void getBadgeTextColor(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void setBadgeTextColor(RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void getUserSettings(Ref<WebExtensionCallbackHandler>&&);
+#endif
 #if PLATFORM(COCOA)
     void getTitle(NSDictionary *details, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
     void setTitle(NSDictionary *details, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
@@ -61,7 +83,6 @@ public:
     void setPopup(NSDictionary *details, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
     void openPopup(WebPageProxyIdentifier, NSDictionary *details, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
 
-    WebExtensionAPIEvent& onClicked();
 
 private:
     friend class WebExtensionAPIMenus;
@@ -77,8 +98,13 @@ private:
 
     static std::expected<void, String> parseActionDetails(NSDictionary *, std::optional<WebExtensionWindowIdentifier>&, std::optional<WebExtensionTabIdentifier>&);
 
-    RefPtr<WebExtensionAPIEvent> m_onClicked;
 #endif
+private:
+#if PLATFORM(HAIKU)
+    void getBadgeColor(bool background, RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void setBadgeColor(bool background, RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& exception);
+#endif
+    RefPtr<WebExtensionAPIEvent> m_onClicked;
 };
 
 } // namespace WebKit

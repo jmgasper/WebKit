@@ -35,7 +35,7 @@ SocketPair createPlatformConnection(int socketType, unsigned options)
 {
     std::array<int, 2> sockets;
 
-#if OS(LINUX)
+#if OS(LINUX) || OS(HAIKU)
     if ((options & SetCloexecOnServer) || (options & SetCloexecOnClient)) {
         RELEASE_ASSERT(socketpair(AF_UNIX, socketType | SOCK_CLOEXEC, 0, sockets.data()) != -1);
 

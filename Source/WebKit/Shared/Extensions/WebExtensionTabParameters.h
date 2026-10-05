@@ -52,11 +52,16 @@ struct WebExtensionTabParameters {
     std::optional<bool> selected;
     std::optional<bool> pinned;
     std::optional<bool> audible;
+    std::optional<bool> discarded;
     std::optional<bool> muted;
     std::optional<bool> loading;
     std::optional<bool> privateBrowsing;
     std::optional<bool> readerModeAvailable;
     std::optional<bool> showingReaderMode;
+#if PLATFORM(HAIKU)
+    // Firefox's tab.cookieStoreId: the storeId that cookies.* reports for this tab's cookies.
+    std::optional<String> cookieStoreIdentifier;
+#endif
 };
 
 } // namespace WebKit

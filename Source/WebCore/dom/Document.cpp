@@ -383,6 +383,7 @@
 #include <JavaScriptCore/VM.h>
 #include <JavaScriptCore/WeakInlines.h>
 #include <algorithm>
+#include <cstdlib>
 #include <ctime>
 #include <ranges>
 #include <wtf/ASCIICType.h>
@@ -486,6 +487,13 @@
 
 #define DOCUMENT_RELEASE_LOG(channel, fmt, ...) RELEASE_LOG(channel, "%p - [pageID=%" PRIu64 ", frameID=%" PRIu64 ", isMainFrame=%d] Document::" fmt, this, pageID() ? pageID()->toUInt64() : 0, frameID() ? frameID()->toUInt64() : 0, this->isTopDocument(), ##__VA_ARGS__)
 #define DOCUMENT_RELEASE_LOG_ERROR(channel, fmt, ...) RELEASE_LOG_ERROR(channel, "%p - [pageID=%" PRIu64 ", frameID=%" PRIu64 ", isMainFrame=%d] Document::" fmt, this, pageID() ? pageID()->toUInt64() : 0, frameID() ? frameID()->toUInt64() : 0, this->isTopDocument(), ##__VA_ARGS__)
+
+#if PLATFORM(HAIKU)
+namespace WebCore {
+bool summitInvalidateElementsWithMissingStyleHaiku(Document&);
+void summitForgetElementsWithMissingStyleHaiku(Document&);
+}
+#endif
 
 namespace WebCore {
 
@@ -2811,6 +2819,17 @@ void Document::updateRenderTree(std::unique_ptr<Style::Update> styleUpdate)
 
 void Document::resolveStyle(ResolveStyleType type)
 {
+#if PLATFORM(HAIKU)
+    static bool summitStyleTraceEnabled = [] {
+        const char* value = std::getenv("SUMMIT_PAGE_UPDATE_TRACE");
+        return value && value[0] == '3' && !value[1];
+    }();
+    auto styleTraceStart = summitStyleTraceEnabled ? MonotonicTime::now() : MonotonicTime { };
+    Seconds treeResolveDuration;
+    Seconds renderTreeDuration;
+    Seconds interleavedLayoutDuration;
+    Seconds styleCompositingDuration;
+#endif
     ScriptDisallowedScope::InMainThread scriptDisallowedScope;
 
     ASSERT(!view() || !view()->isPainting());
@@ -2860,6 +2879,9 @@ void Document::resolveStyle(ResolveStyleType type)
         if (type == ResolveStyleType::Rebuild) {
             // This may get set again during style resolve.
             m_hasNodesWithMissingStyle = false;
+#if PLATFORM(HAIKU)
+            summitForgetElementsWithMissingStyleHaiku(*this);
+#endif
 
             auto newStyle = Style::resolveForDocument(*this);
 
@@ -2879,19 +2901,45 @@ void Document::resolveStyle(ResolveStyleType type)
 
         {
             Style::TreeResolver resolver(*this, WTF::move(m_pendingRenderTreeUpdate));
+#if PLATFORM(HAIKU)
+            auto treeResolveStart = summitStyleTraceEnabled ? MonotonicTime::now() : MonotonicTime { };
+#endif
             auto styleUpdate = resolver.resolve();
+#if PLATFORM(HAIKU)
+            if (summitStyleTraceEnabled)
+                treeResolveDuration += MonotonicTime::now() - treeResolveStart;
+#endif
 
             while (resolver.needsInterleavedLayout()) {
                 if (styleUpdate) {
                     SetForScope interleavedLayoutScope(m_isInStyleInterleavedLayout, true);
 
+#if PLATFORM(HAIKU)
+                    auto renderTreeStart = summitStyleTraceEnabled ? MonotonicTime::now() : MonotonicTime { };
+#endif
                     updateRenderTree(WTF::move(styleUpdate));
+#if PLATFORM(HAIKU)
+                    if (summitStyleTraceEnabled)
+                        renderTreeDuration += MonotonicTime::now() - renderTreeStart;
+                    auto interleavedLayoutStart = summitStyleTraceEnabled ? MonotonicTime::now() : MonotonicTime { };
+#endif
 
                     if (frameView->layoutContext().needsLayout())
                         frameView->layoutContext().interleavedLayout();
+#if PLATFORM(HAIKU)
+                    if (summitStyleTraceEnabled)
+                        interleavedLayoutDuration += MonotonicTime::now() - interleavedLayoutStart;
+#endif
                 }
 
+#if PLATFORM(HAIKU)
+                auto treeResolveStart = summitStyleTraceEnabled ? MonotonicTime::now() : MonotonicTime { };
+#endif
                 styleUpdate = resolver.resolve();
+#if PLATFORM(HAIKU)
+                if (summitStyleTraceEnabled)
+                    treeResolveDuration += MonotonicTime::now() - treeResolveStart;
+#endif
             }
 
             m_lastStyleUpdateSizeForTesting = styleUpdate ? styleUpdate->size() : 0;
@@ -2906,12 +2954,26 @@ void Document::resolveStyle(ResolveStyleType type)
                 fontLoader->loadPendingFonts();
 
             if (styleUpdate) {
+#if PLATFORM(HAIKU)
+                auto renderTreeStart = summitStyleTraceEnabled ? MonotonicTime::now() : MonotonicTime { };
+#endif
                 updateRenderTree(WTF::move(styleUpdate));
                 frameView->styleAndRenderTreeDidChange();
+#if PLATFORM(HAIKU)
+                if (summitStyleTraceEnabled)
+                    renderTreeDuration += MonotonicTime::now() - renderTreeStart;
+#endif
             }
         }
 
+#if PLATFORM(HAIKU)
+        auto styleCompositingStart = summitStyleTraceEnabled ? MonotonicTime::now() : MonotonicTime { };
+#endif
         updatedCompositingLayers = frameView->layoutContext().updateCompositingLayersAfterStyleChange();
+#if PLATFORM(HAIKU)
+        if (summitStyleTraceEnabled)
+            styleCompositingDuration += MonotonicTime::now() - styleCompositingStart;
+#endif
 
         if (m_renderView->needsLayout())
             frameView->layoutContext().scheduleLayout();
@@ -2938,6 +3000,14 @@ void Document::resolveStyle(ResolveStyleType type)
     // Re-evaluate speculation rules after DOM changes that trigger style recalculation.
     // That helps ensure CSS selector matching works correctly.
     considerSpeculationRules();
+#if PLATFORM(HAIKU)
+    if (summitStyleTraceEnabled) {
+        auto total = MonotonicTime::now() - styleTraceStart;
+        if (total >= 5_ms)
+            WTFLogAlways("Summit style phases: wall=%.3f document=%p total=%.1f resolve=%.1f renderTree=%.1f interleavedLayout=%.1f compositing=%.1f url=%s\n",
+                WallTime::now().secondsSinceEpoch().milliseconds(), this, total.milliseconds(), treeResolveDuration.milliseconds(), renderTreeDuration.milliseconds(), interleavedLayoutDuration.milliseconds(), styleCompositingDuration.milliseconds(), reinterpret_cast<const char*>(url().string().utf8().data()));
+    }
+#endif
 }
 
 void Document::updateTextRenderer(Text& text, unsigned offsetOfReplacedText, unsigned lengthOfReplacedText)
@@ -3048,7 +3118,11 @@ bool Document::updateStyleIfNeededIgnoringPendingStylesheets()
     bool oldIgnore = m_ignorePendingStylesheets;
     m_ignorePendingStylesheets = true;
     // FIXME: This should just invalidate elements with missing styles.
+#if PLATFORM(HAIKU)
+    if (m_hasNodesWithMissingStyle && !summitInvalidateElementsWithMissingStyleHaiku(*this))
+#else
     if (m_hasNodesWithMissingStyle)
+#endif
         scheduleFullStyleRebuild();
 
     updateRelevancyOfContentVisibilityElements();
@@ -3081,13 +3155,27 @@ static RenderElement* rootForSkippedLayout(RenderElement& rootCandidate)
 
 auto Document::updateLayout(OptionSet<LayoutOptions> layoutOptions, const Element* context) -> UpdateLayoutResult
 {
+#if PLATFORM(HAIKU)
+    static bool summitLayoutTraceEnabled = [] {
+        const char* value = std::getenv("SUMMIT_PAGE_UPDATE_TRACE");
+        return value && value[0] == '3' && !value[1];
+    }();
+    auto traceStart = summitLayoutTraceEnabled ? MonotonicTime::now() : MonotonicTime { };
+    Seconds styleDuration;
+    Seconds layoutDuration;
+    Seconds compositingDuration;
+#endif
     bool oldIgnore = m_ignorePendingStylesheets;
 
     if (layoutOptions.contains(LayoutOptions::IgnorePendingStylesheets)) {
         if (!haveStylesheetsLoaded()) {
             m_ignorePendingStylesheets = true;
             // FIXME: This should just invalidate elements with missing styles.
+#if PLATFORM(HAIKU)
+            if (m_hasNodesWithMissingStyle && !summitInvalidateElementsWithMissingStyleHaiku(*this))
+#else
             if (m_hasNodesWithMissingStyle)
+#endif
                 scheduleFullStyleRebuild();
         }
 
@@ -3118,8 +3206,15 @@ auto Document::updateLayout(OptionSet<LayoutOptions> layoutOptions, const Elemen
                 result = UpdateLayoutResult::ChangesDone;
         }
 
+#if PLATFORM(HAIKU)
+        auto styleStart = summitLayoutTraceEnabled ? MonotonicTime::now() : MonotonicTime { };
+#endif
         if (updateStyleIfNeeded())
             result = UpdateLayoutResult::ChangesDone;
+#if PLATFORM(HAIKU)
+        if (summitLayoutTraceEnabled)
+            styleDuration += MonotonicTime::now() - styleStart;
+#endif
 
         // LBSE: drain queued transform-attribute updates after style recalc so updateLayerTransform
         // sees post-style geometry and re-enqueues from style callbacks land in this pass.
@@ -3186,6 +3281,9 @@ auto Document::updateLayout(OptionSet<LayoutOptions> layoutOptions, const Elemen
                 return true;
             };
 
+#if PLATFORM(HAIKU)
+            auto layoutStart = summitLayoutTraceEnabled ? MonotonicTime::now() : MonotonicTime { };
+#endif
             auto didRunLayout = runForcedLayoutOnSkippedContentIfNeeded();
             if (!didRunLayout && layoutContext->needsLayout(layoutOptions)) {
                 layoutContext->layout(layoutOptions.contains(LayoutOptions::CanDeferUpdateLayerPositions));
@@ -3193,9 +3291,18 @@ auto Document::updateLayout(OptionSet<LayoutOptions> layoutOptions, const Elemen
             }
 
             result = didRunLayout ? UpdateLayoutResult::ChangesDone : result;
+#if PLATFORM(HAIKU)
+            if (summitLayoutTraceEnabled)
+                layoutDuration += MonotonicTime::now() - layoutStart;
+            auto compositingStart = summitLayoutTraceEnabled ? MonotonicTime::now() : MonotonicTime { };
+#endif
 
             if (layoutOptions.contains(LayoutOptions::UpdateCompositingLayers) && layoutContext->updateCompositingLayersAfterLayoutIfNeeded())
                 result = UpdateLayoutResult::ChangesDone;
+#if PLATFORM(HAIKU)
+            if (summitLayoutTraceEnabled)
+                compositingDuration += MonotonicTime::now() - compositingStart;
+#endif
         }
     }
 
@@ -3203,6 +3310,14 @@ auto Document::updateLayout(OptionSet<LayoutOptions> layoutOptions, const Elemen
         protect(view())->flushAnyPendingPostLayoutTasks();
 
     m_ignorePendingStylesheets = oldIgnore;
+#if PLATFORM(HAIKU)
+    if (summitLayoutTraceEnabled) {
+        auto total = MonotonicTime::now() - traceStart;
+        if (total >= 5_ms)
+            WTFLogAlways("Summit document layout: wall=%.3f document=%p total=%.1f style=%.1f layout=%.1f compositing=%.1f url=%s\n",
+                WallTime::now().secondsSinceEpoch().milliseconds(), this, total.milliseconds(), styleDuration.milliseconds(), layoutDuration.milliseconds(), compositingDuration.milliseconds(), reinterpret_cast<const char*>(url().string().utf8().data()));
+    }
+#endif
     return result;
 }
 
@@ -3494,6 +3609,9 @@ void Document::createRenderTree()
 
     renderView->setIsInWindow(true);
 
+    // Collect injected author styles even when the document has no stylesheet
+    // nodes to trigger an active stylesheet update.
+    styleScope().didChangeActiveStyleSheetCandidates();
     resolveStyle(ResolveStyleType::Rebuild);
 
 #if PLATFORM(MAC)
@@ -5999,6 +6117,37 @@ void Document::runScrollSteps()
     if (auto page = this->page(); page && page->shouldDeferScrollEvents())
         return;
 
+#if PLATFORM(HAIKU)
+    static bool summitPageUpdateTraceEnabled = [] {
+        const char* value = std::getenv("SUMMIT_PAGE_UPDATE_TRACE");
+        return value && (value[0] == '1' || value[0] == '2') && !value[1];
+    }();
+    MonotonicTime traceStart;
+    MonotonicTime traceLast;
+    Seconds animationServiceDuration;
+    Seconds anchoringDuration;
+    Seconds targetSetupDuration;
+    Seconds willDispatchDuration;
+    Seconds eventDispatchDuration;
+    Seconds didDispatchDuration;
+    Seconds visualViewportDuration;
+    Seconds maximumEventDispatchDuration;
+    unsigned targetCount = 0;
+    unsigned documentTargetCount = 0;
+    unsigned elementTargetCount = 0;
+    unsigned scrollTargetCount = 0;
+    unsigned scrollendTargetCount = 0;
+    if (summitPageUpdateTraceEnabled)
+        traceStart = traceLast = MonotonicTime::now();
+    auto markTracePhase = [&](Seconds& duration) {
+        if (!summitPageUpdateTraceEnabled)
+            return;
+        auto now = MonotonicTime::now();
+        duration += now - traceLast;
+        traceLast = now;
+    };
+#endif
+
     // Service user scroll animations before scroll event dispatch.
     if (RefPtr frameView = view()) {
         MonotonicTime now = MonotonicTime::now();
@@ -6020,7 +6169,13 @@ void Document::runScrollSteps()
         if (scrollAnimationsInProgress)
             protect(page())->scheduleRenderingUpdate({ RenderingUpdateStep::Scroll });
 
+#if PLATFORM(HAIKU)
+        markTracePhase(animationServiceDuration);
+#endif
         frameView->adjustScrollAnchoringPositionForScrollableAreas();
+#if PLATFORM(HAIKU)
+        markTracePhase(anchoringDuration);
+#endif
     }
 
     // FIXME: The order of dispatching is not specified: https://github.com/WICG/visual-viewport/issues/66.
@@ -6028,6 +6183,15 @@ void Document::runScrollSteps()
         LOG_WITH_STREAM(Events, stream << "Document " << this << " sending scroll events to pending scroll event targets");
         auto currentTargets = WTF::move(m_pendingScrollEventTargetList->targets);
         for (auto& [target, type] : currentTargets) {
+#if PLATFORM(HAIKU)
+            if (summitPageUpdateTraceEnabled) {
+                ++targetCount;
+                documentTargetCount += target->isDocumentNode();
+                elementTargetCount += !target->isDocumentNode();
+                scrollTargetCount += type == ScrollEventType::Scroll;
+                scrollendTargetCount += type == ScrollEventType::Scrollend;
+            }
+#endif
             auto bubbles = target->isDocumentNode() ? Event::CanBubble::Yes : Event::CanBubble::No;
             auto eventName = [&] {
                 switch (type) {
@@ -6049,13 +6213,31 @@ void Document::runScrollSteps()
                 return frameView->scrollableAreaForNode(target.get());
             }();
 
+#if PLATFORM(HAIKU)
+            markTracePhase(targetSetupDuration);
+#endif
             if (targetScrollableArea)
                 targetScrollableArea->willDispatchScrollEvent();
+#if PLATFORM(HAIKU)
+            markTracePhase(willDispatchDuration);
+            auto eventDispatchStart = summitPageUpdateTraceEnabled ? MonotonicTime::now() : MonotonicTime { };
+#endif
 
             target->dispatchEvent(Event::create(eventName, bubbles, Event::IsCancelable::No));
+#if PLATFORM(HAIKU)
+            if (summitPageUpdateTraceEnabled) {
+                auto duration = MonotonicTime::now() - eventDispatchStart;
+                eventDispatchDuration += duration;
+                maximumEventDispatchDuration = std::max(maximumEventDispatchDuration, duration);
+                traceLast = MonotonicTime::now();
+            }
+#endif
 
             if (targetScrollableArea)
                 targetScrollableArea->didDispatchScrollEvent();
+#if PLATFORM(HAIKU)
+            markTracePhase(didDispatchDuration);
+#endif
         }
     }
     if (m_needsVisualViewportScrollEvent) {
@@ -6064,6 +6246,17 @@ void Document::runScrollSteps()
         if (RefPtr window = this->window())
             window->visualViewport().dispatchEvent(Event::create(eventNames().scrollEvent, Event::CanBubble::No, Event::IsCancelable::No));
     }
+#if PLATFORM(HAIKU)
+    markTracePhase(visualViewportDuration);
+    if (summitPageUpdateTraceEnabled) {
+        auto total = MonotonicTime::now() - traceStart;
+        if (total >= 33_ms)
+            WTFLogAlways("Summit scroll steps: document=%p total=%.1f animationService=%.1f anchoring=%.1f targetSetup=%.1f willDispatch=%.1f eventDispatch=%.1f didDispatch=%.1f visualViewport=%.1f targets=%u documentTargets=%u elementTargets=%u scrollTargets=%u scrollendTargets=%u maxEventDispatch=%.1f\n",
+                this, total.milliseconds(), animationServiceDuration.milliseconds(), anchoringDuration.milliseconds(), targetSetupDuration.milliseconds(),
+                willDispatchDuration.milliseconds(), eventDispatchDuration.milliseconds(), didDispatchDuration.milliseconds(), visualViewportDuration.milliseconds(),
+                targetCount, documentTargetCount, elementTargetCount, scrollTargetCount, scrollendTargetCount, maximumEventDispatchDuration.milliseconds());
+    }
+#endif
 }
 
 void Document::flushDeferredScrollEvents()
@@ -10529,21 +10722,54 @@ void Document::removeIntersectionObserver(IntersectionObserver& observer)
 static void updateAndNotifyIntersectionObservers(const Vector<WeakPtr<IntersectionObserver>>& intersectionObservers, const Frame& hostFrame)
 {
     Vector<WeakPtr<IntersectionObserver>> intersectionObserversWithPendingNotifications;
+#if PLATFORM(HAIKU)
+    static bool traceIntersectionObservers = [] {
+        const char* value = std::getenv("SUMMIT_PAGE_UPDATE_TRACE");
+        return value && value[0] == '2' && !value[1];
+    }();
+    auto traceStart = traceIntersectionObservers ? MonotonicTime::now() : MonotonicTime { };
+    Seconds updateDuration;
+    Seconds slowestUpdate;
+    unsigned updatedObservers = 0;
+#endif
 
     for (auto& weakObserver : intersectionObservers) {
         RefPtr observer = weakObserver.get();
         if (!observer)
             continue;
 
+#if PLATFORM(HAIKU)
+        auto updateStart = traceIntersectionObservers ? MonotonicTime::now() : MonotonicTime { };
+#endif
         auto needNotify = observer->updateObservations(hostFrame);
+#if PLATFORM(HAIKU)
+        if (traceIntersectionObservers) {
+            auto duration = MonotonicTime::now() - updateStart;
+            updateDuration += duration;
+            slowestUpdate = std::max(slowestUpdate, duration);
+            ++updatedObservers;
+        }
+#endif
         if (needNotify == IntersectionObserver::NeedNotify::Yes)
             intersectionObserversWithPendingNotifications.append(observer);
     }
 
+#if PLATFORM(HAIKU)
+    auto notifyStart = traceIntersectionObservers ? MonotonicTime::now() : MonotonicTime { };
+#endif
     for (auto& weakObserver : intersectionObserversWithPendingNotifications) {
         if (RefPtr observer = weakObserver.get())
             observer->notify();
     }
+#if PLATFORM(HAIKU)
+    if (traceIntersectionObservers) {
+        auto total = MonotonicTime::now() - traceStart;
+        if (total >= 5_ms)
+            WTFLogAlways("Summit intersection observers: frame=%p total=%.1f update=%.1f notify=%.1f observers=%u notified=%zu slowestUpdate=%.1f\n",
+                &hostFrame, total.milliseconds(), updateDuration.milliseconds(), (MonotonicTime::now() - notifyStart).milliseconds(),
+                updatedObservers, intersectionObserversWithPendingNotifications.size(), slowestUpdate.milliseconds());
+    }
+#endif
 }
 
 void Document::updateRemoteIntersectionObservers()

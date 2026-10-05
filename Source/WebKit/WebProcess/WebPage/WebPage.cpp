@@ -500,7 +500,7 @@
 #import <pal/spi/cg/CoreGraphicsSPI.h>
 #endif
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
 #include "WebExtensionControllerProxy.h"
 #endif
 
@@ -522,6 +522,10 @@
 
 #if __has_include(<WebKitAdditions/WebPreferencesDefaultValuesAdditions.h>)
 #include <WebKitAdditions/WebPreferencesDefaultValuesAdditions.h>
+#endif
+
+#if PLATFORM(HAIKU)
+#include "StartupTraceHaiku.h"
 #endif
 
 namespace WebKit {
@@ -875,7 +879,7 @@ WebPage::WebPage(PageIdentifier pageID, WebPageCreationParameters&& parameters)
     pageConfiguration.deviceOrientationUpdateProvider = WebDeviceOrientationUpdateProvider::create(*this);
 #endif
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     if (parameters.webExtensionControllerParameters)
         m_webExtensionController = WebExtensionControllerProxy::getOrCreate(parameters.webExtensionControllerParameters.value(), this);
 #endif
@@ -2426,6 +2430,9 @@ void WebPage::tryClose(CompletionHandler<void(bool)>&& completionHandler)
         completionHandler(false);
         return;
     }
+#if PLATFORM(HAIKU)
+    SUMMIT_QUIT_TRACE("TryClose received");
+#endif
     completionHandler(coreFrame->loader().shouldClose());
 }
 
@@ -5406,7 +5413,7 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
 
     updateSettingsGenerated(store, settings);
 
-#if !PLATFORM(GTK) && !PLATFORM(WIN) && !PLATFORM(PLAYSTATION) && !PLATFORM(WPE)
+#if !PLATFORM(GTK) && !PLATFORM(WIN) && !PLATFORM(PLAYSTATION) && !PLATFORM(WPE) && !PLATFORM(HAIKU)
     if (!settings.acceleratedCompositingEnabled()) {
         WEBPAGE_RELEASE_LOG(Layers, "updatePreferences: acceleratedCompositingEnabled setting was false. WebKit cannot function in this mode; changing setting to true");
         settings.setAcceleratedCompositingEnabled(true);
@@ -8335,6 +8342,13 @@ void WebPage::didCommitLoad(WebFrame* frame)
 #endif
 
     resetFocusedElementForFrame(frame);
+
+#if OS(HAIKU)
+    // The process priority depends on whether this is an extension page,
+    // which is only known once its main frame has a URL.
+    if (frame->isMainFrame())
+        WebProcess::singleton().pageActivityStateDidChange(m_identifier, WebCore::ActivityState::IsVisible);
+#endif
 
     if (frame->isMainFrame())
         m_textManipulationIncludesSubframes = false;

@@ -29,10 +29,13 @@
 
 #include "CurlContext.h"
 #include <wtf/HashMap.h>
+#include <wtf/HashSet.h>
 #include <wtf/Lock.h>
 #include <wtf/Noncopyable.h>
 #include <wtf/RefPtr.h>
 #include <wtf/TZoneMalloc.h>
+#include <wtf/Vector.h>
+#include <wtf/text/WTFString.h>
 
 namespace WTF {
 class Thread;
@@ -42,6 +45,12 @@ namespace WebCore {
 
 class CurlRequestSchedulerClient;
 
+// Transfers are spread over several worker threads, each with its own multi
+// handle, chosen by the request's host so that a host's connections (and its
+// HTTP/2 streams) stay together and are reused. One thread polling every
+// socket of every tab spent most of its time in the kernel and queued new
+// requests for hundreds of milliseconds while dozens of pages loaded.
+// SUMMIT_CURL_THREADS sets the count (default 4).
 class CurlRequestScheduler {
     WTF_MAKE_TZONE_ALLOCATED(CurlRequestScheduler);
     WTF_MAKE_NONCOPYABLE(CurlRequestScheduler);
@@ -50,40 +59,63 @@ public:
     CurlRequestScheduler(long maxConnects, long maxTotalConnections, long maxHostConnections);
     ~CurlRequestScheduler();
 
-    bool add(CurlRequestSchedulerClient*);
+    bool add(CurlRequestSchedulerClient*, const String& host = { });
     void cancel(CurlRequestSchedulerClient*);
 
-    void callOnWorkerThread(Function<void()>&&);
+    // Runs on the thread that owns the client's transfer.
+    void callOnWorkerThread(CurlRequestSchedulerClient*, Function<void()>&&);
 
 private:
-    void startOrWakeUpThread();
-    void wakeUpThreadIfPossible();
-    void stopThreadIfNoMoreJobRunning();
-    void stopThread();
+    class Worker {
+        WTF_MAKE_TZONE_ALLOCATED_INLINE(Worker);
+        WTF_MAKE_NONCOPYABLE(Worker);
+    public:
+        Worker(CurlRequestScheduler&, long maxConnects, long maxTotalConnections, long maxHostConnections);
+        ~Worker();
 
-    void executeTasks();
+        void add(CurlRequestSchedulerClient*);
+        void cancel(CurlRequestSchedulerClient*);
+        void callOnWorkerThread(Function<void()>&&);
 
-    void workerThread();
+    private:
+        void startOrWakeUpThread();
+        void wakeUpThreadIfPossible();
+        void stopThreadIfNoMoreJobRunning();
+        void stopThread();
 
-    void startTransfer(CurlRequestSchedulerClient*);
-    void completeTransfer(CurlRequestSchedulerClient*, CURLcode);
-    void cancelTransfer(CurlRequestSchedulerClient*);
-    void finalizeTransfer(CurlRequestSchedulerClient*, Function<void()>);
+        void executeTasks();
 
-    Lock m_mutex;
-    RefPtr<WTF::Thread> m_thread;
-    bool m_runThread { false };
+        void workerThread();
 
-    Vector<Function<void()>> m_taskQueue;
-    HashSet<CurlRequestSchedulerClient*> m_activeJobs;
-    HashMap<CURL*, CurlRequestSchedulerClient*> m_clientMaps;
+        void startTransfer(CurlRequestSchedulerClient*);
+        void completeTransfer(CurlRequestSchedulerClient*, CURLcode);
+        void cancelTransfer(CurlRequestSchedulerClient*);
+        void finalizeTransfer(CurlRequestSchedulerClient*, Function<void()>);
 
-    Lock m_multiHandleMutex;
-    std::optional<CurlMultiHandle> m_curlMultiHandle;
+        CurlRequestScheduler& m_scheduler;
+        Lock m_mutex;
+        RefPtr<WTF::Thread> m_thread;
+        bool m_runThread { false };
 
-    long m_maxConnects;
-    long m_maxTotalConnections;
-    long m_maxHostConnections;
+        Vector<Function<void()>> m_taskQueue;
+        HashSet<CurlRequestSchedulerClient*> m_activeJobs;
+        HashMap<CURL*, CurlRequestSchedulerClient*> m_clientMaps;
+
+        Lock m_multiHandleMutex;
+        std::optional<CurlMultiHandle> m_curlMultiHandle;
+
+        long m_maxConnects;
+        long m_maxTotalConnections;
+        long m_maxHostConnections;
+    };
+
+    Worker& workerForHost(const String& host);
+    Worker* workerForClient(CurlRequestSchedulerClient*);
+    void unassign(CurlRequestSchedulerClient*);
+
+    Vector<std::unique_ptr<Worker>> m_workers;
+    Lock m_assignmentLock;
+    HashMap<CurlRequestSchedulerClient*, Worker*> m_assignments WTF_GUARDED_BY_LOCK(m_assignmentLock);
 };
 
 } // namespace WebCore

@@ -1182,6 +1182,10 @@ void RenderLayerBacking::updateAfterLayout(bool needsClippingUpdate, bool needsF
         m_owningLayer.setNeedsCompositingGeometryUpdate();
     }
     
+#if PLATFORM(HAIKU)
+    if (needsFullRepaint && canIssueSetNeedsDisplay() && getenv("SUMMIT_FULL_REPAINT_TRACE"))
+        fprintf(stderr, "Summit full repaint: RenderLayerBacking::updateAfterLayout of %s\n", m_owningLayer.name().utf8().data() ? reinterpret_cast<const char*>(m_owningLayer.name().utf8().data()) : "");
+#endif
     if (needsFullRepaint && canIssueSetNeedsDisplay())
         setContentsNeedDisplay();
 }
@@ -1890,8 +1894,18 @@ void RenderLayerBacking::updateGeometry(const RenderLayer* compositedAncestor)
 
     positionOverflowControlsLayers();
 
-    if (subpixelOffsetFromRendererChanged(oldSubpixelOffsetFromRenderer, m_subpixelOffsetFromRenderer, deviceScaleFactor) && canIssueSetNeedsDisplay())
+    if (subpixelOffsetFromRendererChanged(oldSubpixelOffsetFromRenderer, m_subpixelOffsetFromRenderer, deviceScaleFactor) && canIssueSetNeedsDisplay()) {
+#if PLATFORM(HAIKU)
+        if (getenv("SUMMIT_FULL_REPAINT_TRACE")) {
+            auto name = m_owningLayer.name().utf8();
+            fprintf(stderr, "Summit full repaint: subpixel offset of %s changed from %.4f,%.4f to %.4f,%.4f (layer %.0fx%.0f)\n", name.data() ? reinterpret_cast<const char*>(name.data()) : "",
+                oldSubpixelOffsetFromRenderer.width().toFloat(), oldSubpixelOffsetFromRenderer.height().toFloat(),
+                m_subpixelOffsetFromRenderer.width().toFloat(), m_subpixelOffsetFromRenderer.height().toFloat(),
+                m_graphicsLayer->size().width(), m_graphicsLayer->size().height());
+        }
+#endif
         setContentsNeedDisplay();
+    }
 
 #if ENABLE(MODEL_ELEMENT)
     if (is<RenderModel>(renderer()))

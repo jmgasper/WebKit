@@ -1,0 +1,19 @@
+/* Copyright (C) 2026 KunanyiOS contributors. SPDX-License-Identifier: BSD-2-Clause */
+
+[
+    Conditional=WK_WEB_EXTENSIONS,
+    MainWorldOnly,
+    ReturnsPromiseWhenCallbackIsOmitted,
+    UseCPPAPI
+] interface WebExtensionAPIManagement {
+    void getSelf([Optional, CallbackHandler] function callback);
+    void getAll([Optional, CallbackHandler] function callback);
+    void get(DOMString identifier, [Optional, CallbackHandler] function callback);
+    void setEnabled(DOMString identifier, boolean enabled, [Optional, CallbackHandler] function callback);
+    void uninstallSelf([Optional, JSONValue] any options, [Optional, CallbackHandler] function callback);
+
+    readonly attribute WebExtensionAPIEvent onDisabled;
+    readonly attribute WebExtensionAPIEvent onEnabled;
+    readonly attribute WebExtensionAPIEvent onInstalled;
+    readonly attribute WebExtensionAPIEvent onUninstalled;
+};

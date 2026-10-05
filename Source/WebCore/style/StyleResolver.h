@@ -117,7 +117,7 @@ public:
 
     ScopeType scopeType() const { return m_scopeType; }
 
-    void appendAuthorStyleSheets(std::span<const Ref<CSSStyleSheet>>);
+    void appendAuthorStyleSheets(std::span<const Ref<CSSStyleSheet>>, bool preserveResolverMutatingRules = false);
 
     ScopeRuleSets& ruleSets() LIFETIME_BOUND { return m_ruleSets; }
     const ScopeRuleSets& ruleSets() const LIFETIME_BOUND { return m_ruleSets; }

@@ -42,6 +42,10 @@ public:
     static String clipboardWrite();
     static String contextMenus();
     static String cookies();
+#if PLATFORM(HAIKU)
+    static String downloads();
+    static String privacy();
+#endif
     static String declarativeNetRequest();
     static String declarativeNetRequestFeedback();
     static String declarativeNetRequestWithHostAccess();

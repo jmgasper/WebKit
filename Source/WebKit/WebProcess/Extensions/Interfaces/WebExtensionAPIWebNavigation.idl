@@ -35,6 +35,7 @@ dictionary WebExtensionWebNavigationGetAllFramesDetails {
 
 [
     Conditional=WK_WEB_EXTENSIONS,
+    UseCPPAPI,
     MainWorldOnly,
     ReturnsPromiseWhenCallbackIsOmitted,
 ] interface WebExtensionAPIWebNavigation {
@@ -44,8 +45,12 @@ dictionary WebExtensionWebNavigationGetAllFramesDetails {
     readonly attribute WebExtensionAPIWebNavigationEvent onDOMContentLoaded;
     readonly attribute WebExtensionAPIWebNavigationEvent onCompleted;
     readonly attribute WebExtensionAPIWebNavigationEvent onErrorOccurred;
+    [Platform=HAIKU] readonly attribute WebExtensionAPIWebNavigationEvent onCreatedNavigationTarget;
+    [Platform=HAIKU] readonly attribute WebExtensionAPIWebNavigationEvent onHistoryStateUpdated;
+    [Platform=HAIKU] readonly attribute WebExtensionAPIWebNavigationEvent onReferenceFragmentUpdated;
+    [Platform=HAIKU] readonly attribute WebExtensionAPIWebNavigationEvent onTabReplaced;
 
-    [RaisesException] void getFrame([NSDictionary] any details, [Optional, CallbackHandler] function callback);
-    [RaisesException] void getAllFrames([NSDictionary] any details, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void getFrame([JSONValue] any details, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void getAllFrames([JSONValue] any details, [Optional, CallbackHandler] function callback);
 
 };

@@ -41,9 +41,12 @@
 OBJC_CLASS JSValue;
 OBJC_CLASS NSDictionary;
 
+namespace WebCore { struct CookieChange; }
+
 namespace WebKit {
 
 class WebExtensionAPINamespace;
+class WebExtensionMenuClickHandlerStore;
 class WebExtensionAPIStorage;
 class WebExtensionAPIWebPageNamespace;
 class WebExtensionControllerProxy;
@@ -104,10 +107,17 @@ public:
     static WebCore::DOMWrapperWorld& mainWorldSingleton() { return WebCore::mainThreadNormalWorldSingleton(); }
 
     bool hasContentScriptWorld() const { return !!m_contentScriptWorld; }
+#if PLATFORM(HAIKU)
+    bool matchesContentScriptWorld(const WebCore::DOMWrapperWorld&) const;
+    std::optional<ContentWorldIdentifier> contentScriptWorldIdentifier() const { return m_contentScriptWorldIdentifier; }
+#endif
     WebCore::DOMWrapperWorld& contentScriptWorld() const { RELEASE_ASSERT(hasContentScriptWorld()); return *m_contentScriptWorld; }
     void setContentScriptWorld(WebCore::DOMWrapperWorld&);
 
     void addFrameWithExtensionContent(WebFrame&);
+#if PLATFORM(HAIKU)
+    void addMenusClickHandlerStore(WebExtensionMenuClickHandlerStore&);
+#endif
 
     void didEncounterScriptError(const String& message, const String& sourceURL, unsigned lineNumber, unsigned columnNumber, WebExtensionContentWorldType);
 
@@ -151,6 +161,14 @@ public:
         });
     }
 
+#if PLATFORM(HAIKU)
+    // Blocking listeners that already received an event through the blocking
+    // dispatch are skipped when the observation of the same load/phase arrives.
+    void noteBlockingWebRequestDeliveryHaiku(uint64_t resourceLoadID, uint8_t phase);
+    bool consumeBlockingWebRequestDeliveryHaiku(uint64_t resourceLoadID, uint8_t phase);
+    void forgetBlockingWebRequestDeliveriesHaiku(uint64_t resourceLoadID);
+
+#endif
 private:
     explicit WebExtensionContextProxy(const WebExtensionContextParameters&);
 
@@ -167,7 +185,11 @@ private:
     void dispatchCommandsChangedEvent(const String& identifier, const String& oldShortcut, const String& newShortcut);
 
     // Cookies
+#if PLATFORM(HAIKU) && USE(CURL)
+    void dispatchCookiesChangedEvent(PAL::SessionID, const Vector<WebCore::CookieChange>&);
+#else
     void dispatchCookiesChangedEvent();
+#endif
 
 #if ENABLE(DNR_ON_RULE_MATCHED_DEBUG)
     // DeclarativeNetRequest
@@ -195,7 +217,22 @@ private:
 #endif
 
     // Menus
+#if PLATFORM(HAIKU)
+    void dispatchMenusClickedEvent(const WebExtensionMenuItemParameters&, bool wasChecked, const WebExtensionMenuItemContextParameters&, const std::optional<WebExtensionTabParameters>&, const std::optional<WTF::UUID>&);
+    void removeMenusClickHandlers(const Vector<WTF::UUID>&);
+    void clearMenusClickHandlerStores();
+#else
     void dispatchMenusClickedEvent(const WebExtensionMenuItemParameters&, bool wasChecked, const WebExtensionMenuItemContextParameters&, const std::optional<WebExtensionTabParameters>&);
+#endif
+
+#if PLATFORM(HAIKU)
+    void dispatchPrivacyChanged(const String& setting, const String& detailsJSON);
+#endif
+
+#if PLATFORM(HAIKU)
+    // Downloads
+    void dispatchDownloadsEvent(WebExtensionEventListenerType, const String& argumentJSON);
+#endif
 
     // Permissions
     void updateGrantedPermissions(PermissionsMap&&);
@@ -203,10 +240,10 @@ private:
 
     // Port
     void dispatchPortMessageEvent(std::optional<WebPageProxyIdentifier>, WebExtensionPortChannelIdentifier, const String& messageJSON, bool userGesture);
-    void dispatchPortDisconnectEvent(WebExtensionPortChannelIdentifier);
+    void dispatchPortDisconnectEvent(WebExtensionPortChannelIdentifier, const std::optional<String>& errorMessage);
 
     // Runtime
-    void internalDispatchRuntimeMessageEvent(WebExtensionContentWorldType, const String& messageJSON, const std::optional<WebExtensionMessageTargetParameters>&, const WebExtensionMessageSenderParameters&, bool userGesture, CompletionHandler<void(String&& replyJSON)>&&);
+    void internalDispatchRuntimeMessageEvent(WebExtensionContentWorldType, const String& messageJSON, const std::optional<WebExtensionMessageTargetParameters>&, const WebExtensionMessageSenderParameters&, bool userGesture, CompletionHandler<void(String&& replyJSON)>&&, bool* hadListener = nullptr);
     void internalDispatchRuntimeConnectEvent(WebExtensionContentWorldType, WebExtensionPortChannelIdentifier, const String& name, const std::optional<WebExtensionMessageTargetParameters>&, const WebExtensionMessageSenderParameters&, bool userGesture, CompletionHandler<void(HashCountedSet<WebPageProxyIdentifier>&&)>&&);
     void dispatchRuntimeMessageEvent(WebExtensionContentWorldType, const String& messageJSON, const std::optional<WebExtensionMessageTargetParameters>&, const WebExtensionMessageSenderParameters&, bool userGesture, CompletionHandler<void(String&& replyJSON)>&&);
     void dispatchRuntimeConnectEvent(WebExtensionContentWorldType, WebExtensionPortChannelIdentifier, const String& name, const std::optional<WebExtensionMessageTargetParameters>&, const WebExtensionMessageSenderParameters&, bool userGesture, CompletionHandler<void(HashCountedSet<WebPageProxyIdentifier>&&)>&&);
@@ -219,6 +256,9 @@ private:
     void dispatchStorageChangedEvent(const Vector<String>& onChangedJSON, WebExtensionDataType, WebExtensionContentWorldType);
 
     // Tabs
+#if PLATFORM(HAIKU)
+    void dispatchTabsMessageEvent(WebExtensionContentWorldType, const String& messageJSON, const WebExtensionMessageTargetParameters&, const WebExtensionMessageSenderParameters&, bool userGesture, CompletionHandler<void(String&& replyJSON, bool hadListener)>&&);
+#endif
     void dispatchTabsCreatedEvent(const WebExtensionTabParameters&);
     void dispatchTabsUpdatedEvent(const WebExtensionTabParameters&, const WebExtensionTabParameters& changedParameters);
     void dispatchTabsReplacedEvent(WebExtensionTabIdentifier replacedTabIdentifier, WebExtensionTabIdentifier newTabIdentifier);
@@ -238,12 +278,17 @@ private:
     void dispatchWebNavigationEvent(WebExtensionEventListenerType, WebExtensionTabIdentifier, const WebExtensionFrameParameters&, WallTime);
 
     // Web Request
-    void resourceLoadDidSendRequest(WebExtensionTabIdentifier, WebExtensionWindowIdentifier, const WebCore::ResourceRequest&, const ResourceLoadInfo&, const std::optional<IPC::FormDataReference>&);
-    void resourceLoadDidBlockBeforeRequest(WebExtensionTabIdentifier, WebExtensionWindowIdentifier, const ResourceLoadInfo&);
-    void resourceLoadDidPerformHTTPRedirection(WebExtensionTabIdentifier, WebExtensionWindowIdentifier, const WebCore::ResourceResponse&, const ResourceLoadInfo&, const WebCore::ResourceRequest& newRequest);
-    void resourceLoadDidReceiveChallenge(WebExtensionTabIdentifier, WebExtensionWindowIdentifier, const WebCore::AuthenticationChallenge&, const ResourceLoadInfo&);
-    void resourceLoadDidReceiveResponse(WebExtensionTabIdentifier, WebExtensionWindowIdentifier, const WebCore::ResourceResponse&, const ResourceLoadInfo&);
-    void resourceLoadDidCompleteWithError(WebExtensionTabIdentifier, WebExtensionWindowIdentifier, const WebCore::ResourceResponse&, const WebCore::ResourceError&, const ResourceLoadInfo&);
+    void resourceLoadDidSendRequest(WebExtensionTabIdentifier, WebExtensionWindowIdentifier, const WebCore::ResourceRequest&, const ResourceLoadInfo&, const std::optional<IPC::FormDataReference>&, std::optional<WebCore::FrameIdentifier> mainFrameIdentifier);
+    void resourceLoadDidBlockBeforeRequest(WebExtensionTabIdentifier, WebExtensionWindowIdentifier, const ResourceLoadInfo&, std::optional<WebCore::FrameIdentifier> mainFrameIdentifier);
+    void resourceLoadDidPerformHTTPRedirection(WebExtensionTabIdentifier, WebExtensionWindowIdentifier, const WebCore::ResourceResponse&, const ResourceLoadInfo&, const WebCore::ResourceRequest& newRequest, std::optional<WebCore::FrameIdentifier> mainFrameIdentifier);
+    void resourceLoadDidReceiveChallenge(WebExtensionTabIdentifier, WebExtensionWindowIdentifier, const WebCore::AuthenticationChallenge&, const ResourceLoadInfo&, std::optional<WebCore::FrameIdentifier> mainFrameIdentifier);
+    void resourceLoadDidReceiveResponse(WebExtensionTabIdentifier, WebExtensionWindowIdentifier, const WebCore::ResourceResponse&, const ResourceLoadInfo&, std::optional<WebCore::FrameIdentifier> mainFrameIdentifier);
+    void resourceLoadDidCompleteWithError(WebExtensionTabIdentifier, WebExtensionWindowIdentifier, const WebCore::ResourceResponse&, const WebCore::ResourceError&, const ResourceLoadInfo&, std::optional<WebCore::FrameIdentifier> mainFrameIdentifier);
+#if PLATFORM(HAIKU)
+    // Blocking webRequest: invokes only blocking listeners and replies with one
+    // JSON BlockingResponse per listener (empty for no decision).
+    void dispatchBlockingWebRequestHaiku(uint8_t phase, WebExtensionTabIdentifier, WebExtensionWindowIdentifier, const ResourceLoadInfo&, const WebCore::ResourceRequest&, const std::optional<IPC::FormDataReference>&, const std::optional<WebCore::ResourceResponse>&, const std::optional<WebCore::AuthenticationChallenge>&, std::optional<WebCore::FrameIdentifier> mainFrameIdentifier, CompletionHandler<void(Vector<String>&&)>&&);
+#endif
 
     // Windows
     void dispatchWindowsEvent(WebExtensionEventListenerType, const std::optional<WebExtensionWindowParameters>&);
@@ -265,8 +310,17 @@ private:
     mutable PermissionsMap m_grantedPermissions;
     mutable WallTime m_nextGrantedPermissionsExpirationDate { WallTime::nan() };
     RefPtr<WebCore::DOMWrapperWorld> m_contentScriptWorld;
+#if PLATFORM(HAIKU)
+    std::optional<ContentWorldIdentifier> m_contentScriptWorldIdentifier;
+#endif
     WeakFrameSet m_extensionContentFrames;
+#if PLATFORM(HAIKU)
+    WeakHashSet<WebExtensionMenuClickHandlerStore> m_menuClickHandlerStores;
+#endif
     WeakPtr<WebPage> m_backgroundPage;
+#if PLATFORM(HAIKU)
+    Vector<std::pair<uint64_t, uint8_t>> m_blockingWebRequestDeliveriesHaiku;
+#endif
 #if ENABLE(WK_WEB_EXTENSIONS_OFFSCREEN)
     WeakPtr<WebPage> m_offscreenPage;
 #endif

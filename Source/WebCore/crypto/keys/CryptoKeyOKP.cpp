@@ -232,7 +232,7 @@ CryptoKey::Data CryptoKeyOKP::data() const
     };
 }
 
-#if !PLATFORM(COCOA) && !USE(GCRYPT)
+#if !PLATFORM(COCOA) && !USE(GCRYPT) && !USE(OPENSSL)
 
 bool CryptoKeyOKP::supportsNamedCurve()
 {

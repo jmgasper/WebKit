@@ -28,9 +28,6 @@
 
 #if ENABLE(WK_WEB_EXTENSIONS)
 
-#include "WebProcessMessages.h"
-#include "WebProcessPool.h"
-#include <WebCore/LegacySchemeRegistry.h>
 #include <WebCore/LocalizedStrings.h>
 #include <WebCore/PublicSuffixStore.h>
 #include <wtf/HashMap.h>
@@ -90,21 +87,6 @@ static HashMap<String, RefPtr<WebExtensionMatchPattern>>& NODELETE patternCache(
 {
     static MainRunLoopNeverDestroyed<HashMap<String, RefPtr<WebExtensionMatchPattern>>> cache;
     return cache;
-}
-
-void WebExtensionMatchPattern::registerCustomURLScheme(String urlScheme)
-{
-    auto canonicalScheme = URLParser::maybeCanonicalizeScheme(String(urlScheme));
-    ASSERT(canonicalScheme);
-
-    extensionSchemes().addVoid(canonicalScheme.value());
-    validSchemes().addVoid(canonicalScheme.value());
-    supportedSchemes().addVoid(canonicalScheme.value());
-
-    LegacySchemeRegistry::registerURLSchemeAsAllowingServiceWorkerClients(canonicalScheme.value());
-
-    for (auto& pool : WebProcessPool::allProcessPools())
-        pool->sendToAllProcesses(Messages::WebProcess::RegisterURLSchemeAsWebExtension(urlScheme));
 }
 
 bool WebExtensionMatchPattern::isWebExtensionURL(const URL& url)

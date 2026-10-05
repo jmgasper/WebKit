@@ -55,6 +55,11 @@ public:
     unsigned shareCount(const String& path);
 
     size_t approximateSize() const { return m_approximateSize; }
+#if OS(HAIKU)
+    // BFS has no hard links, so every record owns its body file and the cache
+    // storage reports their combined size after walking the record directories.
+    void setUnsharedBlobsSize(size_t size) { m_approximateSize = size; }
+#endif
 
     void synchronize();
 

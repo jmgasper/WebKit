@@ -41,7 +41,12 @@ messages -> WebExtensionContextProxy {
     DispatchCommandsChangedEvent(String identifier, String oldShortcut, String newShortcut)
 
     // Cookies
+#if PLATFORM(HAIKU) && USE(CURL)
+    DispatchCookiesChangedEvent(PAL::SessionID sessionID, Vector<WebCore::CookieChange> changes)
+#endif
+#if !(PLATFORM(HAIKU) && USE(CURL))
     DispatchCookiesChangedEvent()
+#endif
 
 #if ENABLE(DNR_ON_RULE_MATCHED_DEBUG)
     // DeclarativeNetRequest
@@ -69,7 +74,21 @@ messages -> WebExtensionContextProxy {
 #endif
 
     // Menus
+#if !PLATFORM(HAIKU)
     DispatchMenusClickedEvent(struct WebKit::WebExtensionMenuItemParameters menuItemParameters, bool wasChecked, struct WebKit::WebExtensionMenuItemContextParameters contextParameters, std::optional<WebKit::WebExtensionTabParameters> tabParameters)
+#endif
+#if PLATFORM(HAIKU)
+    DispatchMenusClickedEvent(struct WebKit::WebExtensionMenuItemParameters menuItemParameters, bool wasChecked, struct WebKit::WebExtensionMenuItemContextParameters contextParameters, std::optional<WebKit::WebExtensionTabParameters> tabParameters, std::optional<WTF::UUID> callbackIdentifier)
+    RemoveMenusClickHandlers(Vector<WTF::UUID> callbackIdentifiers)
+#endif
+
+#if PLATFORM(HAIKU)
+    DispatchPrivacyChanged(String setting, String detailsJSON)
+#endif
+
+#if PLATFORM(HAIKU)
+    DispatchDownloadsEvent(WebKit::WebExtensionEventListenerType type, String argumentJSON)
+#endif
 
     // Permissions
     UpdateGrantedPermissions(HashMap<String, WallTime> permissions)
@@ -77,10 +96,13 @@ messages -> WebExtensionContextProxy {
 
     // Ports
     DispatchPortMessageEvent(std::optional<WebKit::WebPageProxyIdentifier> sendingPageProxyIdentifier, WebKit::WebExtensionPortChannelIdentifier channelIdentifier, String messageJSON, bool userGesture)
-    DispatchPortDisconnectEvent(WebKit::WebExtensionPortChannelIdentifier channelIdentifier)
+    DispatchPortDisconnectEvent(WebKit::WebExtensionPortChannelIdentifier channelIdentifier, std::optional<String> errorMessage)
 
     // Runtime
     DispatchRuntimeMessageEvent(WebKit::WebExtensionContentWorldType contentWorldType, String messageJSON, struct std::optional<WebKit::WebExtensionMessageTargetParameters> targetParameters, struct WebKit::WebExtensionMessageSenderParameters senderParameters, bool userGesture) -> (String replyJSON)
+#if PLATFORM(HAIKU)
+    DispatchTabsMessageEvent(WebKit::WebExtensionContentWorldType contentWorldType, String messageJSON, struct WebKit::WebExtensionMessageTargetParameters targetParameters, struct WebKit::WebExtensionMessageSenderParameters senderParameters, bool userGesture) -> (String replyJSON, bool hadListener)
+#endif
     DispatchRuntimeConnectEvent(WebKit::WebExtensionContentWorldType contentWorldType, WebKit::WebExtensionPortChannelIdentifier channelIdentifier, String name, struct std::optional<WebKit::WebExtensionMessageTargetParameters> targetParameters, struct WebKit::WebExtensionMessageSenderParameters senderParameters, bool userGesture) -> (HashCountedSet<WebKit::WebPageProxyIdentifier> addedPortCounts)
     DispatchRuntimeInstalledEvent(enum:uint8_t WebKit::WebExtensionContextInstallReason installReason, String previousVersion)
     DispatchRuntimeStartupEvent()
@@ -109,12 +131,15 @@ messages -> WebExtensionContextProxy {
     DispatchWebNavigationEvent(WebKit::WebExtensionEventListenerType type, WebKit::WebExtensionTabIdentifier tabID, struct WebKit::WebExtensionFrameParameters frameParamaters, WallTime timestamp)
 
     // Web Request
-    ResourceLoadDidSendRequest(WebKit::WebExtensionTabIdentifier tabIdentifier, WebKit::WebExtensionWindowIdentifier windowIdentifier, WebCore::ResourceRequest request, struct WebKit::ResourceLoadInfo resourceLoadInfo, std::optional<IPC::FormDataReference> formData)
-    ResourceLoadDidBlockBeforeRequest(WebKit::WebExtensionTabIdentifier tabIdentifier, WebKit::WebExtensionWindowIdentifier windowIdentifier, struct WebKit::ResourceLoadInfo resourceLoadInfo)
-    ResourceLoadDidPerformHTTPRedirection(WebKit::WebExtensionTabIdentifier tabIdentifier, WebKit::WebExtensionWindowIdentifier windowIdentifier, WebCore::ResourceResponse response, struct WebKit::ResourceLoadInfo resourceLoadInfo, WebCore::ResourceRequest newRequest)
-    ResourceLoadDidReceiveChallenge(WebKit::WebExtensionTabIdentifier tabIdentifier, WebKit::WebExtensionWindowIdentifier windowIdentifier, WebCore::AuthenticationChallenge challenge, struct WebKit::ResourceLoadInfo resourceLoadInfo)
-    ResourceLoadDidReceiveResponse(WebKit::WebExtensionTabIdentifier tabIdentifier, WebKit::WebExtensionWindowIdentifier windowIdentifier, WebCore::ResourceResponse response, struct WebKit::ResourceLoadInfo resourceLoadInfo)
-    ResourceLoadDidCompleteWithError(WebKit::WebExtensionTabIdentifier tabIdentifier, WebKit::WebExtensionWindowIdentifier windowIdentifier, WebCore::ResourceResponse response, WebCore::ResourceError error, struct WebKit::ResourceLoadInfo resourceLoadInfo)
+    ResourceLoadDidSendRequest(WebKit::WebExtensionTabIdentifier tabIdentifier, WebKit::WebExtensionWindowIdentifier windowIdentifier, WebCore::ResourceRequest request, struct WebKit::ResourceLoadInfo resourceLoadInfo, std::optional<IPC::FormDataReference> formData, std::optional<WebCore::FrameIdentifier> mainFrameIdentifier)
+    ResourceLoadDidBlockBeforeRequest(WebKit::WebExtensionTabIdentifier tabIdentifier, WebKit::WebExtensionWindowIdentifier windowIdentifier, struct WebKit::ResourceLoadInfo resourceLoadInfo, std::optional<WebCore::FrameIdentifier> mainFrameIdentifier)
+    ResourceLoadDidPerformHTTPRedirection(WebKit::WebExtensionTabIdentifier tabIdentifier, WebKit::WebExtensionWindowIdentifier windowIdentifier, WebCore::ResourceResponse response, struct WebKit::ResourceLoadInfo resourceLoadInfo, WebCore::ResourceRequest newRequest, std::optional<WebCore::FrameIdentifier> mainFrameIdentifier)
+    ResourceLoadDidReceiveChallenge(WebKit::WebExtensionTabIdentifier tabIdentifier, WebKit::WebExtensionWindowIdentifier windowIdentifier, WebCore::AuthenticationChallenge challenge, struct WebKit::ResourceLoadInfo resourceLoadInfo, std::optional<WebCore::FrameIdentifier> mainFrameIdentifier)
+    ResourceLoadDidReceiveResponse(WebKit::WebExtensionTabIdentifier tabIdentifier, WebKit::WebExtensionWindowIdentifier windowIdentifier, WebCore::ResourceResponse response, struct WebKit::ResourceLoadInfo resourceLoadInfo, std::optional<WebCore::FrameIdentifier> mainFrameIdentifier)
+    ResourceLoadDidCompleteWithError(WebKit::WebExtensionTabIdentifier tabIdentifier, WebKit::WebExtensionWindowIdentifier windowIdentifier, WebCore::ResourceResponse response, WebCore::ResourceError error, struct WebKit::ResourceLoadInfo resourceLoadInfo, std::optional<WebCore::FrameIdentifier> mainFrameIdentifier)
+#if PLATFORM(HAIKU)
+    DispatchBlockingWebRequestHaiku(uint8_t phase, WebKit::WebExtensionTabIdentifier tabIdentifier, WebKit::WebExtensionWindowIdentifier windowIdentifier, struct WebKit::ResourceLoadInfo resourceLoadInfo, WebCore::ResourceRequest request, std::optional<IPC::FormDataReference> formData, std::optional<WebCore::ResourceResponse> response, std::optional<WebCore::AuthenticationChallenge> challenge, std::optional<WebCore::FrameIdentifier> mainFrameIdentifier) -> (Vector<String> replies)
+#endif
 
     // Windows
     DispatchWindowsEvent(WebKit::WebExtensionEventListenerType type, std::optional<WebKit::WebExtensionWindowParameters> windowParameters)

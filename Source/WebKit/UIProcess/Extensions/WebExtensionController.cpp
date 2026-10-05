@@ -30,6 +30,10 @@
 
 #include "APIError.h"
 #include "Logging.h"
+#if PLATFORM(HAIKU)
+#include "haiku/WebExtensionDownloadsHaiku.h"
+#include "haiku/WebExtensionPrivacyControllerHaiku.h"
+#endif
 #include "WebExtensionContextMessages.h"
 #include "WebExtensionControllerMessages.h"
 #include "WebExtensionControllerParameters.h"
@@ -42,20 +46,13 @@
 #include <wtf/HashMap.h>
 #include <wtf/NeverDestroyed.h>
 
-#if PLATFORM(COCOA)
-#include <wtf/BlockPtr.h>
-#include <wtf/darwin/DispatchExtras.h>
-#endif
-
 namespace WebKit {
 
-#if PLATFORM(COCOA)
 constexpr auto freshlyCreatedTimeout = 5_s;
-#endif
 
 static void addContextMessageReceivers(WebProcessPool& processPool, WebExtensionContext& context)
 {
-#if PLATFORM(COCOA)
+#if PLATFORM(COCOA) || PLATFORM(HAIKU)
     processPool.addMessageReceiver(Messages::WebExtensionContext::messageReceiverName(), context.identifier(), context);
     processPool.addMessageReceiver(Messages::WebExtensionContext::messageReceiverName(), context.privilegedIdentifier(), context);
 #else
@@ -66,7 +63,7 @@ static void addContextMessageReceivers(WebProcessPool& processPool, WebExtension
 
 static void removeContextMessageReceivers(WebProcessPool& processPool, WebExtensionContext& context)
 {
-#if PLATFORM(COCOA)
+#if PLATFORM(COCOA) || PLATFORM(HAIKU)
     processPool.removeMessageReceiver(Messages::WebExtensionContext::messageReceiverName(), context.identifier());
     processPool.removeMessageReceiver(Messages::WebExtensionContext::messageReceiverName(), context.privilegedIdentifier());
 #else
@@ -96,16 +93,14 @@ WebExtensionController::WebExtensionController(Ref<WebExtensionControllerConfigu
 
     // A freshly created extension controller will be used to determine if the startup event
     // should be fired for any loaded extensions during a brief time window. Start a timer
-    // when the first extension is about to be loaded.
+    // when this controller is created.
 
-#if PLATFORM(COCOA)
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(freshlyCreatedTimeout.seconds() * NSEC_PER_SEC)), mainDispatchQueueSingleton(), makeBlockPtr([this, weakThis = WeakPtr { *this }] {
+    RunLoop::mainSingleton().dispatchAfter(freshlyCreatedTimeout, [this, weakThis = WeakPtr { *this }] {
         if (!weakThis)
             return;
 
         m_freshlyCreated = false;
-    }).get());
-#endif
+    });
 }
 
 WebExtensionController::~WebExtensionController()
@@ -115,6 +110,12 @@ WebExtensionController::~WebExtensionController()
     for (Ref pool : m_processPools)
         pool->removeMessageReceiver(Messages::WebExtensionController::messageReceiverName(), identifier());
 
+#if PLATFORM(HAIKU)
+    if (m_nativePrivacy)
+        m_nativePrivacy->shutdown();
+    if (m_nativeDownloads)
+        m_nativeDownloads->shutdown();
+#endif
     unloadAll();
 }
 
@@ -146,6 +147,15 @@ WebExtensionController::WebProcessProxySet WebExtensionController::allProcesses(
 
 std::expected<bool, RefPtr<API::Error>> WebExtensionController::load(WebExtensionContext& extensionContext)
 {
+#if PLATFORM(HAIKU)
+    if (extensionContext.nativeInstallationOrder()) {
+        for (Ref other : m_extensionContexts) {
+            if (other->nativeInstallationOrder() == extensionContext.nativeInstallationOrder()
+                || other->nativeInstallationIdentifier() == extensionContext.nativeInstallationIdentifier())
+                return makeUnexpected(extensionContext.createError(WebExtensionContext::Error::AlreadyLoaded));
+        }
+    }
+#endif
     if (!m_extensionContexts.add(extensionContext)) {
         RELEASE_LOG_ERROR(Extensions, "Extension context already loaded");
         return makeUnexpected(extensionContext.createError(WebExtensionContext::Error::AlreadyLoaded));
@@ -185,6 +195,9 @@ std::expected<bool, RefPtr<API::Error>> WebExtensionController::load(WebExtensio
         return makeUnexpected(loadResult.error());
     }
 
+#if PLATFORM(HAIKU)
+    nativePrivacy().refresh();
+#endif
     return true;
 }
 
@@ -207,6 +220,9 @@ std::expected<bool, RefPtr<API::Error>> WebExtensionController::unload(WebExtens
         removeContextMessageReceivers(processPool, extensionContext);
 
     auto unloadResult = extensionContext.unload();
+#if PLATFORM(HAIKU)
+    nativePrivacy().refresh();
+#endif
     if (!unloadResult)
         return makeUnexpected(unloadResult.error());
 
@@ -247,6 +263,9 @@ void WebExtensionController::addPage(WebPageProxy& page)
     Ref controller = page.userContentController();
     bool isOwnStore = !dataStore->isPersistent() && (&dataStore.get() == &m_configuration->defaultWebsiteDataStore());
     addUserContentController(controller, (dataStore->isPersistent() || isOwnStore) ? ForPrivateBrowsing::No : ForPrivateBrowsing::Yes);
+#if PLATFORM(HAIKU)
+    nativePrivacy().addPage(page);
+#endif
 }
 
 void WebExtensionController::removePage(WebPageProxy& page)
@@ -265,6 +284,9 @@ void WebExtensionController::removePage(WebPageProxy& page)
 
     for (Ref context : m_extensionContexts)
         context->removePage(page);
+#if PLATFORM(HAIKU)
+    nativePrivacy().removePage(page);
+#endif
 }
 
 void WebExtensionController::addProcessPool(WebProcessPool& processPool)
@@ -406,11 +428,24 @@ void WebExtensionController::didFailLoadForFrame(WebPageProxyIdentifier pageID, 
 
 void WebExtensionController::cookiesDidChange(API::HTTPCookieStore& cookieStore)
 {
+#if PLATFORM(HAIKU)
+    // Generic invalidations have no cookie identity or cause. Extension events
+    // use the typed observer entry point below; never invent an empty payload.
+    UNUSED_PARAM(cookieStore);
+#else
     // FIXME: <https://webkit.org/b/267514> Add support for changeInfo.
-
     for (Ref context : m_extensionContexts)
         context->cookiesDidChange(cookieStore);
+#endif
 }
+
+#if PLATFORM(HAIKU) && USE(CURL)
+void WebExtensionController::cookiesDidChange(API::HTTPCookieStore& cookieStore, const Vector<WebCore::CookieChange>& changes)
+{
+    for (Ref context : m_extensionContexts)
+        context->cookiesDidChange(cookieStore, changes);
+}
+#endif
 
 RefPtr<WebExtensionContext> WebExtensionController::extensionContext(const WebExtension& extension) const
 {
@@ -462,6 +497,31 @@ String WebExtensionController::stateFilePath(const String& uniqueIdentifier) con
 {
     return FileSystem::pathByAppendingComponent(storageDirectory(uniqueIdentifier), WebExtensionContext::stateFileName());
 }
+
+#if PLATFORM(HAIKU)
+void WebExtensionController::restoreNativeBaseURL(WebExtensionContext& context) const
+{
+    if (!m_configuration->storageIsPersistent() || context.uniqueIdentifier().isEmpty())
+        return;
+
+    URL lastSeenBaseURL;
+    if (!WebExtensionContext::readLastBaseURLFromState(stateFilePath(context.uniqueIdentifier()), lastSeenBaseURL))
+        return;
+
+    if (!WebExtensionContext::isURLForAnyExtension(lastSeenBaseURL))
+        return;
+
+    // Two extensions sharing an origin would read each other's data, so a
+    // recorded origin that is already taken is left for the loaded context.
+    auto origin = lastSeenBaseURL.protocolHostAndPort().convertToASCIILowercase();
+    for (Ref loaded : m_extensionContexts) {
+        if (loaded->baseURL().protocolHostAndPort().convertToASCIILowercase() == origin)
+            return;
+    }
+
+    context.setBaseURL(WTF::move(lastSeenBaseURL));
+}
+#endif
 
 HashSet<String> WebExtensionController::activeExtensionURLs() const
 {

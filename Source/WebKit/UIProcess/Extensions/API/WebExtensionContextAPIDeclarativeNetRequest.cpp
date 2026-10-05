@@ -30,11 +30,42 @@
 #if ENABLE(WK_WEB_EXTENSIONS)
 
 #include "WebExtensionConstants.h"
+#include "WebExtensionController.h"
+#include "WebUserContentControllerProxy.h"
 #include "WebExtensionDeclarativeNetRequestSQLiteStore.h"
 #include "WebExtensionPermission.h"
 #include <wtf/JSONValues.h>
 
 namespace WebKit {
+
+void WebExtensionContext::unloadDeclarativeNetRequestState()
+{
+#if PLATFORM(HAIKU)
+    clearNativeDeclarativeNetRequestRules();
+#else
+    removeDeclarativeNetRequestRules();
+#endif
+
+    m_sessionRulesIDs.clear();
+    m_dynamicRulesIDs.clear();
+    m_matchedRules.clear();
+    m_enabledStaticRulesetIDs.clear();
+
+    m_declarativeNetRequestDynamicRulesStore = nullptr;
+    m_declarativeNetRequestSessionRulesStore = nullptr;
+}
+
+void WebExtensionContext::removeDeclarativeNetRequestRules()
+{
+    if (!isLoaded())
+        return;
+
+    // Use all user content controllers in case the extension was briefly allowed in private browsing
+    // and content was injected into any of those content controllers.
+    for (Ref userContentController : extensionController()->allUserContentControllers())
+        userContentController->removeContentRuleList(uniqueIdentifier());
+}
+
 
 bool WebExtensionContext::isDeclarativeNetRequestMessageAllowed(IPC::Decoder& message)
 {
@@ -122,7 +153,12 @@ void WebExtensionContext::updateDeclarativeNetRequestRulesInStorage(RefPtr<WebEx
                                     return;
                                 }
 
+#if PLATFORM(HAIKU)
+                                // The update was rolled back; it must not be reported as applied.
+                                completionHandler(toWebExtensionError(apiName, nullString(), "Failed to apply rules."_s));
+#else
                                 completionHandler({ });
+#endif
                             });
                         });
 
@@ -165,11 +201,18 @@ void WebExtensionContext::declarativeNetRequestUpdateDynamicRules(String&& rules
 {
     static constexpr auto apiName = "declarativeNetRequest.updateDynamicRules()"_s;
 
-    auto ruleIDsToDelete = compactMap(ruleIDsToDeleteVector, [&](auto& ruleID) -> std::optional<double> {
-        if (!m_dynamicRulesIDs.contains(ruleID))
-            return std::nullopt;
-        return ruleID;
-    });
+    // Only IDs known to exist count against the limit, but every requested ID
+    // goes to the store. m_dynamicRulesIDs learns of an addition only once the
+    // store has written it, so a second update that removes and re-adds the
+    // same rule (Ghostery does this for its GPC rule) would otherwise skip the
+    // removal and fail the addition as a duplicate. The store applies updates
+    // in order, removals first, and ignores IDs it does not have.
+    size_t existingRulesToDelete = 0;
+    for (auto& ruleID : ruleIDsToDeleteVector) {
+        if (m_dynamicRulesIDs.contains(ruleID))
+            ++existingRulesToDelete;
+    }
+    auto ruleIDsToDelete = WTF::move(ruleIDsToDeleteVector);
 
     Ref rulesToAdd = JSON::Array::create();
     if (!rulesToAddJSON.isEmpty()) {
@@ -184,7 +227,16 @@ void WebExtensionContext::declarativeNetRequestUpdateDynamicRules(String&& rules
         return;
     }
 
-    auto updatedDynamicRulesCount = m_dynamicRulesIDs.size() + rulesToAdd->length() - ruleIDsToDelete.size();
+#if PLATFORM(HAIKU)
+    // Reject a rule the native content-rule translator cannot enforce before
+    // storing it, with the translator's reason for that rule.
+    if (auto valid = validateNativeDeclarativeNetRequestUpdate(apiName, rulesToAdd.get(), ruleIDsToDelete, false); !valid) {
+        completionHandler(makeUnexpected(valid.error()));
+        return;
+    }
+#endif
+
+    auto updatedDynamicRulesCount = m_dynamicRulesIDs.size() + rulesToAdd->length() - existingRulesToDelete;
     if (updatedDynamicRulesCount + m_dynamicRulesIDs.size() > webExtensionDeclarativeNetRequestMaximumNumberOfDynamicAndSessionRules) {
         completionHandler(toWebExtensionError(apiName, nullString(), "Failed to add dynamic rules. Maximum number of dynamic and session rules exceeded."_s));
         return;
@@ -234,6 +286,15 @@ void WebExtensionContext::declarativeNetRequestUpdateSessionRules(String&& rules
         completionHandler({ });
         return;
     }
+
+#if PLATFORM(HAIKU)
+    // Reject a rule the native content-rule translator cannot enforce before
+    // storing it, with the translator's reason for that rule.
+    if (auto valid = validateNativeDeclarativeNetRequestUpdate(apiName, rulesToAdd.get(), ruleIDsToDelete, true); !valid) {
+        completionHandler(makeUnexpected(valid.error()));
+        return;
+    }
+#endif
 
     auto updatedSessionRulesCount = m_sessionRulesIDs.size() + rulesToAdd->length() - ruleIDsToDelete.size();
     if (updatedSessionRulesCount + m_sessionRulesIDs.size() > webExtensionDeclarativeNetRequestMaximumNumberOfDynamicAndSessionRules) {

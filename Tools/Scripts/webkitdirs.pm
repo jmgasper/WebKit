@@ -871,6 +871,7 @@ sub argumentsForConfiguration()
     # the same BuildSystem marker this process did.
     push(@args, isCMakeBuild() ? '--cmake' : '--xcode') if (isAppleCocoaWebKit() && passedBuildSystem());
     push(@args, '--gtk') if isGtk();
+    push(@args, '--haiku') if isHaiku();
     push(@args, '--wpe') if isWPE();
     push(@args, '--jsc-only') if isJSCOnly();
     push(@args, '--win') if isWin();
@@ -1721,6 +1722,12 @@ sub builtDylibPathForName
 
         return "";
     }
+    if (isHaiku()) {
+        if (isWK2()) {
+            return "$configurationProductDir/lib/libWebKit2.so";
+        }
+        return "$configurationProductDir/lib/libWebKit.so";
+    }
     if (isIOSWebKit()) {
         return "$configurationProductDir/$libraryName.framework/$libraryName";
     }
@@ -1903,6 +1910,7 @@ sub determinePortName()
         if ($unknownPortProhibited) {
             my $portsChoice = join "\n\t", qw(
                 --gtk
+                --haiku
                 --jsc-only
                 --wpe
             );
@@ -2413,6 +2421,8 @@ sub launcherName()
         return "MiniBrowser";
     } elsif (isAppleMacWebKit()) {
         return "Safari";
+    } elsif (isHaiku()) {
+        return "HaikuLauncher";
     }
 }
 
@@ -2583,6 +2593,8 @@ sub getJhbuildPath()
     }
     if (isGtk()) {
         push(@jhbuildPath, "DependenciesGTK");
+    } elsif (isHaiku()) {
+        return () # Unused on Haiku.
     } elsif (isWPE()) {
         push(@jhbuildPath, "DependenciesWPE");
     } else {

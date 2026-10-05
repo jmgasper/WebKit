@@ -33,6 +33,19 @@ import webkit.messages
 import webkit.parser
 import webkit.model
 
+
+def write_output_if_changed(filename, contents):
+    data = contents.encode('utf-8')
+    try:
+        with open(filename, 'rb') as existing:
+            if existing.read() == data:
+                return
+    except FileNotFoundError:
+        pass
+    with open(filename, 'wb') as output:
+        output.write(data)
+
+
 def main(argv):
     parser = argparse.ArgumentParser(description='Generate message receivers from input files')
     parser.add_argument('base_dir', help='Base directory for message receiver files')
@@ -52,13 +65,14 @@ def main(argv):
                 m = re.match(r'^(\w+)MessageReceiver\.cpp\b\s*(.*)', line)
                 if m:
                     attrs_by_name[m.group(1)] = m.group(2).strip()
-        with open(args.output_sources, 'w') as f:
-            for message_receiver in args.message_receivers:
-                name = message_receiver.rsplit('/', 1).pop()
-                receiver_dir = os.path.dirname(message_receiver) if args.preserve_subdirs else ''
-                path = os.path.join(receiver_dir, '%sMessageReceiver.cpp' % name)
-                attrs = attrs_by_name.get(name, '')
-                f.write('%s %s\n' % (path, attrs) if attrs else '%s\n' % path)
+        contents = []
+        for message_receiver in args.message_receivers:
+            name = message_receiver.rsplit('/', 1).pop()
+            receiver_dir = os.path.dirname(message_receiver) if args.preserve_subdirs else ''
+            path = os.path.join(receiver_dir, '%sMessageReceiver.cpp' % name)
+            attrs = attrs_by_name.get(name, '')
+            contents.append('%s %s\n' % (path, attrs) if attrs else '%s\n' % path)
+        write_output_if_changed(args.output_sources, ''.join(contents))
         return 0
 
     receivers = []
@@ -110,25 +124,22 @@ def main(argv):
         receiver_dir = receiver_dirs.get(receiver.name, '')
         if receiver_dir and not os.path.isdir(output_path(receiver_dir)):
             os.makedirs(output_path(receiver_dir))
-        with open(output_path(os.path.join(receiver_dir, '%sMessageReceiver.cpp' % receiver.name)), "w+") as implementation_output:
-            implementation_output.write(webkit.messages.generate_message_handler(receiver))
+        write_output_if_changed(output_path(os.path.join(receiver_dir, '%sMessageReceiver.cpp' % receiver.name)),
+            webkit.messages.generate_message_handler(receiver))
         if receiver.swift_receiver or receiver.swift_receiver_build_enabled_by:
-            with open(output_path('%sMessageReceiver.swift' % receiver.name), "w+") as swift_implementation_output:
-                swift_implementation_output.write(webkit.messages.generate_swift_message_handler(receiver))
+            write_output_if_changed(output_path('%sMessageReceiver.swift' % receiver.name),
+                webkit.messages.generate_swift_message_handler(receiver))
 
         receiver_message_header = '%sMessages.h' % receiver.name
         receiver_header_files.append(receiver_message_header)
-        with open(output_path(receiver_message_header), "w+") as header_output:
-            header_output.write(webkit.messages.generate_messages_header(receiver))
+        write_output_if_changed(output_path(receiver_message_header), webkit.messages.generate_messages_header(receiver))
 
-    with open(output_path('MessageNames.h'), "w+") as message_names_header_output:
-        message_names_header_output.write(webkit.messages.generate_message_names_header(receivers))
+    write_output_if_changed(output_path('MessageNames.h'), webkit.messages.generate_message_names_header(receivers))
 
-    with open(output_path('MessageNames.cpp'), "w+") as message_names_implementation_output:
-        message_names_implementation_output.write(webkit.messages.generate_message_names_implementation(receivers))
+    write_output_if_changed(output_path('MessageNames.cpp'), webkit.messages.generate_message_names_implementation(receivers))
 
-    with open(output_path('MessageArgumentDescriptions.cpp'), "w+") as message_descriptions_implementation_output:
-        message_descriptions_implementation_output.write(webkit.messages.generate_message_argument_description_implementation(receivers, receiver_header_files))
+    write_output_if_changed(output_path('MessageArgumentDescriptions.cpp'),
+        webkit.messages.generate_message_argument_description_implementation(receivers, receiver_header_files))
 
     return 0
 

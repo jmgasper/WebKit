@@ -30,6 +30,11 @@
 #include <wtf/ProcessPrivilege.h>
 #include <wtf/TZoneMallocInlines.h>
 
+#if PLATFORM(HAIKU) && USE(CURL)
+#include "CookieJarDB.h"
+#include <cstdlib>
+#endif
+
 namespace WebCore {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(CookieStorageSession);
@@ -59,6 +64,12 @@ CookieStorageSession::CookieStorageSession(PAL::SessionID sessionID, IsInMemoryC
     : m_sessionID(sessionID)
     , m_isInMemoryCookieStore(isInMemoryCookieStore == IsInMemoryCookieStore::Yes)
 {
+#if PLATFORM(HAIKU) && USE(CURL)
+    auto* configuredPath = getenv("CURL_COOKIE_JAR_PATH");
+    auto path = sessionID.isEphemeral() || m_isInMemoryCookieStore ? ":memory:"_s
+        : configuredPath && *configuredPath ? String::fromUTF8(configuredPath) : "cookie.jar.db"_s;
+    m_cookieDatabase = makeUnique<CookieJarDB>(path);
+#endif
 }
 
 CookieStorageSession::~CookieStorageSession() = default;

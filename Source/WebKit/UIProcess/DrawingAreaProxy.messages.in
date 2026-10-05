@@ -26,6 +26,9 @@
     DispatchedTo=UI
 ]
 messages -> DrawingAreaProxy {
+#if PLATFORM(HAIKU)
+    UpdateBitmapHaiku(uint64_t geometryIdentifier, uint64_t frameIdentifier, WebCore::IntSize viewSize, float deviceScaleFactor, WebCore::ShareableBitmapHandle handle)
+#endif
     EnterAcceleratedCompositingMode(uint64_t backingStoreStateID, WebKit::LayerTreeContext context)
     UpdateAcceleratedCompositingMode(uint64_t backingStoreStateID, WebKit::LayerTreeContext context)
     DidFirstLayerFlush(uint64_t backingStoreStateID, WebKit::LayerTreeContext context)

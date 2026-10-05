@@ -43,6 +43,10 @@
 #include <wtf/glib/GUniquePtr.h>
 #endif
 
+#if USE(HAIKU)
+#include <String.h>
+#endif
+
 namespace WebCore {
 
 #if PLATFORM(COCOA)
@@ -82,6 +86,16 @@ String formatLocalizedString(const char* format, ...)
     GUniquePtr<gchar> result(g_strdup_vprintf(format, arguments));
     va_end(arguments);
     return String::fromUTF8(result.get());
+#elif USE(HAIKU)
+    BString formatted;
+    va_list arguments;
+    va_start(arguments, format);
+
+    formatted.SetToFormatVarArgs(format, arguments);
+
+    va_end(arguments);
+
+    return String::fromUTF8(formatted.String());
 #else
     notImplemented();
     return String::fromUTF8(format);
@@ -1601,7 +1615,7 @@ String unacceptableTLSCertificate()
 }
 #endif
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && PLATFORM(COCOA)
 // On macOS, Touch ID prompt is not guaranteed to show on top of the UI client, and therefore additional
 // information is provided to help users to make decisions.
 String makeCredentialTouchIDPromptTitle(const String& bundleName, const String& domain)
@@ -1618,7 +1632,7 @@ String genericTouchIDPromptTitle()
 {
     return WEB_UI_STRING("Continue with Touch ID.", "Continue with Touch ID.");
 }
-#endif // ENABLE(WEB_AUTHN)
+#endif // ENABLE(WEB_AUTHN) && PLATFORM(COCOA)
 
 String pdfPasswordFormTitle()
 {

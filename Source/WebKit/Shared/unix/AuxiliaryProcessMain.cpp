@@ -24,6 +24,11 @@
  */
 
 #include "config.h"
+#if PLATFORM(HAIKU)
+#include <fcntl.h>
+#include <sys/resource.h>
+#include <unistd.h>
+#endif
 #include "AuxiliaryProcessMain.h"
 
 #include <JavaScriptCore/Options.h>
@@ -82,6 +87,24 @@ bool AuxiliaryProcessMainCommon::parseCommandLine(int argc, char** argv)
 
     if (!m_parameters.processIdentifier->toUInt64() || m_parameters.connectionIdentifier.handle.value() <= 0)
         return false;
+
+#if PLATFORM(HAIKU)
+    // Processes are started with load_image() (HaikuProcess.h), which hands
+    // the new team every descriptor without FD_CLOEXEC, and several are
+    // started at once: another process's IPC endpoint may have come along.
+    // Keeping it open would keep that process's connection alive after it
+    // ends, so everything but standard I/O and our own endpoint goes.
+    {
+        int connection = m_parameters.connectionIdentifier.handle.value();
+        struct rlimit limit;
+        int last = !getrlimit(RLIMIT_NOFILE, &limit) && limit.rlim_cur != RLIM_INFINITY ? static_cast<int>(limit.rlim_cur) : 4096;
+        for (int descriptor = 3; descriptor < last; ++descriptor) {
+            if (descriptor != connection)
+                close(descriptor);
+        }
+        fcntl(connection, F_SETFD, FD_CLOEXEC);
+    }
+#endif
 
 #if ENABLE(DEVELOPER_MODE)
     // Check last remaining options for JSC testing

@@ -43,6 +43,7 @@
 #include "ResourceRequest.h"
 #include "SecurityOrigin.h"
 #include "SecurityPolicy.h"
+#include "Settings.h"
 
 namespace WebCore {
 
@@ -122,7 +123,9 @@ static ResourceRequest makePrefetchRequest(URL&& url, const Vector<String>& tags
 void DocumentPrefetcher::prefetch(const URL& url, const Vector<String>& tags, std::optional<ReferrerPolicy> referrerPolicy, bool lowPriority)
 {
     RefPtr document = m_frame ? m_frame->document() : nullptr;
-    if (!document)
+    // Previously parsed rules and anchor candidates can survive disabling the
+    // feature. Honor the current setting at the final request entry point.
+    if (!document || !document->settings().speculationRulesPrefetchEnabled())
         return;
 
     if (!url.isValid())

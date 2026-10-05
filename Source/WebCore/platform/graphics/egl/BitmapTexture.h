@@ -74,6 +74,11 @@ public:
         UseBGRALayout = 1 << 4,
         NearestFiltering = 1 << 5,
         ExternalOESRenderTarget = 1 << 6,
+#if PLATFORM(HAIKU)
+        // One byte a pixel (GL_LUMINANCE, read as .r): a plane of a YUV
+        // picture, never a render target.
+        SingleChannel = 1 << 7,
+#endif
     };
 
     static Ref<BitmapTexture> create(const IntSize& size, OptionSet<Flags> flags = { })

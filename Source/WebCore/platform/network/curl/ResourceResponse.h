@@ -50,14 +50,20 @@ public:
     {
     }
 
+    ~ResourceResponse()
+    {
+    }
+
     WEBCORE_EXPORT ResourceResponse(CurlResponse&);
 
     bool isMovedPermanently() const { return httpStatusCode() == httpStatus301MovedPermanently; };
     bool isFound() const { return httpStatusCode() == httpStatus302Found; }
+    bool isNotModified() const { return httpStatusCode() == 304; }
     bool isSeeOther() const { return httpStatusCode() == httpStatus303SeeOther; }
     bool isUnauthorized() const { return httpStatusCode() == httpStatus401Unauthorized; }
     bool isProxyAuthenticationRequired() const { return httpStatusCode() == httpStatus407ProxyAuthenticationRequired; }
 
+    bool shouldRedirect();
 private:
     friend class ResourceResponseBase;
 

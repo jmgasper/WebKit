@@ -358,7 +358,11 @@ public:
     void addSecKeyProxyStore(Ref<SecKeyProxyStore>&&);
 #endif
 
-#if ENABLE(WEB_AUTHN)
+// KunanyiOS has no authenticators to manage: no platform authenticator and no
+// CTAP transport. The API is still built for password managers that extend it
+// from their content scripts, and its requests are answered by
+// WebAuthenticatorCoordinatorProxyHaiku.cpp without a manager.
+#if ENABLE(WEB_AUTHN) && !PLATFORM(HAIKU)
     AuthenticatorManager& authenticatorManager() { return m_authenticatorManager.get(); }
     void setMockWebAuthenticationConfiguration(WebCore::MockWebAuthenticationConfiguration&&);
     VirtualAuthenticatorManager& virtualAuthenticatorManager();
@@ -533,6 +537,9 @@ public:
 
     bool isRemovingData() const { return!!m_removeDataTaskCounter.value(); }
     uint64_t cookiesVersion() const { return m_cookiesVersion; }
+#if PLATFORM(HAIKU) && USE(CURL)
+    void setCookieWithResult(const WebCore::Cookie&, CompletionHandler<void(bool, std::optional<WebCore::Cookie>&&)>&&);
+#endif
     void setCookies(Vector<WebCore::Cookie>&&, CompletionHandler<void()>&&);
 
     void setStorageAccessPermissionForTesting(bool, WebPageProxyIdentifier, const String& topFrameDomain, const String& subFrameDomain, CompletionHandler<void()>&&);
@@ -670,7 +677,7 @@ private:
     Vector<Ref<SecKeyProxyStore>> m_secKeyProxyStores;
 #endif
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(HAIKU)
     Ref<AuthenticatorManager> m_authenticatorManager;
 #endif
 

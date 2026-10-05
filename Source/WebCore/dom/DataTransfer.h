@@ -123,7 +123,9 @@ private:
 
     bool allowsFileAccess() const
     {
-#if PLATFORM(COCOA)
+#if PLATFORM(COCOA) || PLATFORM(HAIKU)
+        // Haiku: pasted images and dropped files become File objects; a drag
+        // that carries no files exposes none (webkit.org/b/271957).
         return !forDrag() || forFileDrag();
 #else
         // Check https://webkit.org/b/271957 before allowing file access for your port.

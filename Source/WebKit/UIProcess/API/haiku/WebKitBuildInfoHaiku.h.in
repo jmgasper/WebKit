@@ -1,0 +1,4 @@
+/* Generated from the upstream engine version configuration. */
+#pragma once
+
+#define WEBKIT_ENGINE_VERSION_HAIKU "@WebKit_HAIKU_MAJOR_VERSION@.@WebKit_HAIKU_MINOR_VERSION@.@WebKit_HAIKU_TINY_VERSION@"

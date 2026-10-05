@@ -38,6 +38,10 @@
 typedef struct _GModule GModule;
 #endif
 
+#if PLATFORM(HAIKU)
+#include <image.h>
+#endif
+
 #if OS(WINDOWS)
 #include <windows.h>
 #endif
@@ -73,6 +77,8 @@ private:
     RetainPtr<CFBundleRef> m_bundle;
 #elif USE(GLIB)
     GModule* m_handle;
+#elif PLATFORM(HAIKU)
+    image_id m_module { -1 };
 #endif
 };
 

@@ -45,6 +45,7 @@
 #include <WebCore/ContentRuleListResults.h>
 #include <WebCore/Timer.h>
 #include <wtf/Forward.h>
+#include <memory>
 #include <wtf/Identified.h>
 #include <wtf/RunLoop.h>
 #include <wtf/TZoneMallocInlines.h>
@@ -66,6 +67,11 @@ class WebsitePolicies;
 
 namespace WebKit {
 
+class BrowserCommandBrokerHaiku;
+class BrowserTabRegistryHaiku;
+class WebExtensionPrivacyControllerHaiku;
+class WebExtensionDownloadsHaiku;
+class ExtensionPermissionPromptHaiku;
 class ContextMenuContextData;
 class WebExtensionContext;
 class WebExtensionDataRecord;
@@ -73,6 +79,9 @@ class WebPageProxy;
 class WebProcessPool;
 class WebsiteDataStore;
 struct WebExtensionContentRuleListBlockedLoadInfo;
+#if PLATFORM(HAIKU)
+struct WebExtensionWebRequestGateResultHaiku;
+#endif
 struct WebExtensionControllerParameters;
 struct WebExtensionFrameParameters;
 
@@ -113,6 +122,13 @@ public:
     enum class ForPrivateBrowsing { No, Yes };
 
     WebExtensionControllerConfiguration& configuration() const LIFETIME_BOUND { return m_configuration.get(); }
+#if PLATFORM(HAIKU)
+    const std::shared_ptr<BrowserTabRegistryHaiku>& nativeBrowserTabs() const { return m_nativeBrowserTabs; }
+    WebExtensionPrivacyControllerHaiku& nativePrivacy();
+    const std::shared_ptr<ExtensionPermissionPromptHaiku>& nativePermissionPrompts() const { return m_nativePermissionPrompts; }
+    const std::shared_ptr<BrowserCommandBrokerHaiku>& nativeBrowserCommands() const { return m_nativeBrowserCommands; }
+    WebExtensionDownloadsHaiku& nativeDownloads();
+#endif
     WebExtensionControllerParameters parameters(const API::PageConfiguration&, WebProcessProxy& destinationProcess) const;
 
     bool operator==(const WebExtensionController& other) const { return (this == &other); }
@@ -134,6 +150,14 @@ public:
 
     std::expected<bool, RefPtr<API::Error>> load(WebExtensionContext&);
     std::expected<bool, RefPtr<API::Error>> unload(WebExtensionContext&);
+
+#if PLATFORM(HAIKU)
+    // Give a context the origin it had when its data was written. A fresh
+    // origin per load would rely on renaming the extension's website data at
+    // every start, and a run that ends before that rename leaves the data
+    // stranded under the previous origin. Call before load().
+    void restoreNativeBaseURL(WebExtensionContext&) const;
+#endif
 
     void unloadAll();
 
@@ -163,6 +187,9 @@ public:
     WebExtensionSet extensions() const;
 
     void cookiesDidChange(API::HTTPCookieStore&);
+#if PLATFORM(HAIKU) && USE(CURL)
+    void cookiesDidChange(API::HTTPCookieStore&, const Vector<WebCore::CookieChange>&);
+#endif
 
     template<typename T>
     void sendToAllProcesses(const T& message, const ObjectIdentifierGenericBase& destinationID);
@@ -191,6 +218,11 @@ public:
     void resourceLoadDidReceiveChallenge(WebPageProxyIdentifier, const ResourceLoadInfo&, const WebCore::AuthenticationChallenge&);
     void resourceLoadDidReceiveResponse(WebPageProxyIdentifier, const ResourceLoadInfo&, const WebCore::ResourceResponse&);
     void resourceLoadDidCompleteWithError(WebPageProxyIdentifier, const ResourceLoadInfo&, const WebCore::ResourceResponse&, const WebCore::ResourceError&);
+#if PLATFORM(HAIKU)
+    // Blocking webRequest (UIProcess/Extensions/haiku/WebExtensionControllerWebRequestBlockingHaiku.cpp).
+    void decideWebRequestHaiku(WebPageProxyIdentifier, uint8_t phase, ResourceLoadInfo&&, WebCore::ResourceRequest&&, std::optional<WebCore::ResourceResponse>&&, std::optional<WebCore::AuthenticationChallenge>&&, CompletionHandler<void(WebExtensionWebRequestGateResultHaiku&&)>&&);
+    void updateWebRequestBlockingPhasesHaiku();
+#endif
 
 #if ENABLE(CONTENT_EXTENSIONS)
     void resourceLoadWasBlockedByContentRuleList(WebPageProxyIdentifier, const WebExtensionContentRuleListBlockedLoadInfo&);
@@ -266,17 +298,30 @@ private:
         {
             // FIXME: <https://webkit.org/b/267514> Add support for changeInfo.
 
-#if PLATFORM(COCOA)
             if (RefPtr extensionController = m_extensionController)
                 extensionController->cookiesDidChange(cookieStore);
-#endif
         }
+
+#if PLATFORM(HAIKU) && USE(CURL)
+        void cookiesDidChange(API::HTTPCookieStore& cookieStore, const Vector<WebCore::CookieChange>& changes) final
+        {
+            if (RefPtr extensionController = m_extensionController)
+                extensionController->cookiesDidChange(cookieStore, changes);
+        }
+#endif
 
         WeakPtr<WebExtensionController> m_extensionController;
     };
 
 
     const Ref<WebExtensionControllerConfiguration> m_configuration;
+#if PLATFORM(HAIKU)
+    std::shared_ptr<BrowserTabRegistryHaiku> m_nativeBrowserTabs;
+    std::unique_ptr<WebExtensionPrivacyControllerHaiku> m_nativePrivacy;
+    std::shared_ptr<ExtensionPermissionPromptHaiku> m_nativePermissionPrompts;
+    std::shared_ptr<BrowserCommandBrokerHaiku> m_nativeBrowserCommands;
+    std::unique_ptr<WebExtensionDownloadsHaiku> m_nativeDownloads;
+#endif
 
 #if PLATFORM(COCOA)
     RetainPtr<_WKWebExtensionControllerHelper> m_webExtensionControllerHelper;

@@ -133,6 +133,17 @@ void DrawingAreaCoordinatedGraphics::updatePreferences(const WebPreferencesStore
             m_supportsAsyncScrolling = false;
     }
 #endif
+#if PLATFORM(HAIKU)
+    // The upstream switch above is behind ENABLE(DEVELOPER_MODE), which release
+    // builds do not set. SUMMIT_DISABLE_ASYNC_SCROLLING=1 keeps the scrolling
+    // thread out of the picture, which is how a scrolling problem is told apart
+    // from a painting one.
+    if (m_supportsAsyncScrolling) {
+        const char* value = getenv("SUMMIT_DISABLE_ASYNC_SCROLLING");
+        if (value && strcmp(value, "0"))
+            m_supportsAsyncScrolling = false;
+    }
+#endif
 
     // If async scrolling is disabled, we have to force-disable async frame and overflow scrolling
     // to keep the non-async scrolling on those elements working.
@@ -145,10 +156,22 @@ void DrawingAreaCoordinatedGraphics::updatePreferences(const WebPreferencesStore
 bool DrawingAreaCoordinatedGraphics::enterAcceleratedCompositingModeIfNeeded()
 {
     Ref webPage = m_webPage;
-    if (webPage->corePage()->settings().acceleratedCompositingEnabled())
+    // SUMMIT_COORDINATED_COMPOSITING=0 takes the non-composited renderer, which
+    // paints the page with Skia on the CPU and needs no GL context. It is the
+    // way to tell a compositing problem apart from a painting one.
+    static const bool compositingAllowed = [] {
+        const char* value = getenv("SUMMIT_COORDINATED_COMPOSITING");
+        return !value || strcmp(value, "0");
+    }();
+    if (compositingAllowed && webPage->corePage()->settings().acceleratedCompositingEnabled())
         m_renderer = LayerTreeHost::create(webPage.get());
     else
         m_renderer = NonCompositedFrameRenderer::create(webPage.get());
+    if (getenv("SUMMIT_FRAME_STATS")) {
+        WTFLogAlways("Summit coordinated: renderer %s surface %llu",
+            m_renderer ? (compositingAllowed && webPage->corePage()->settings().acceleratedCompositingEnabled() ? "layer tree" : "non-composited") : "none",
+            m_renderer ? (unsigned long long)m_renderer->surfaceID() : 0ull);
+    }
 
     if (m_renderer) {
         if (m_layerTreeStateIsFrozen)
@@ -236,10 +259,12 @@ void DrawingAreaCoordinatedGraphics::triggerRenderingUpdate()
     m_renderer->scheduleRenderingUpdate();
 }
 
+#if HAVE(DISPLAY_LINK)
 RefPtr<DisplayRefreshMonitor> DrawingAreaCoordinatedGraphics::createDisplayRefreshMonitor(PlatformDisplayID displayID)
 {
     return WebDisplayRefreshMonitor::create(displayID);
 }
+#endif // HAVE(DISPLAY_LINK)
 
 void DrawingAreaCoordinatedGraphics::activityStateDidChange(OptionSet<ActivityState> changed, ActivityStateChangeID, CompletionHandler<void()>&& completionHandler)
 {

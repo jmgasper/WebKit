@@ -33,6 +33,10 @@
 #include <wtf/SystemTracing.h>
 #include <wtf/TZoneMallocInlines.h>
 #include <wtf/text/StringToIntegerConversion.h>
+#if PLATFORM(HAIKU)
+#include <cstdio>
+#include <cstdlib>
+#endif
 
 #if USE(SKIA)
 #include "SkiaPaintingEngine.h"
@@ -142,6 +146,20 @@ OptionSet<CoordinatedBackingStoreProxy::UpdateResult> CoordinatedBackingStorePro
     OptionSet<UpdateResult> result;
     if (m_pendingTileCreation)
         result.add(UpdateResult::TilesPending);
+
+#if PLATFORM(HAIKU)
+    static bool traceTileCoverage = [] {
+        const char* value = std::getenv("SUMMIT_TILE_COVERAGE_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    if (traceTileCoverage && unscaledSize.height() > 1000)
+        std::fprintf(stderr, "Summit tile coverage: layer=%p size=%.0fx%.0f visible=%d,%d,%d,%d cover=%d,%d,%d,%d tiles=%u create=%u remove=%u pending=%d refresh=%d\n",
+            &layer, unscaledSize.width(), unscaledSize.height(), unscaledVisibleRect.x(), unscaledVisibleRect.y(),
+            unscaledVisibleRect.width(), unscaledVisibleRect.height(), m_coverRect.x(), m_coverRect.y(),
+            m_coverRect.width(), m_coverRect.height(), static_cast<unsigned>(m_tiles.size()),
+            static_cast<unsigned>(tilesToCreate.size()), static_cast<unsigned>(tilesToRemove.size()),
+            m_pendingTileCreation, shouldCreateAndDestroyTiles);
+#endif
 
     // Update the dirty tiles.
     IntRect tileDirtyRectUnion;
@@ -407,11 +425,14 @@ IntSize CoordinatedBackingStoreProxy::computeTileSize(const IntSize& viewportSiz
         return overridenTileSize;
 
     IntSize tileSize;
-#if USE(SKIA)
-    if (ProcessCapabilities::canUseAcceleratedBuffers() && PlatformDisplay::sharedDisplay().skiaGLContext()) {
+#if PLATFORM(HAIKU) && USE(SKIA)
+    const bool canUseAcceleratedTiles = false;
+#elif USE(SKIA)
+    const bool canUseAcceleratedTiles = ProcessCapabilities::canUseAcceleratedBuffers() && PlatformDisplay::sharedDisplay().skiaGLContext();
 #else
-    if (ProcessCapabilities::canUseAcceleratedBuffers()) {
+    const bool canUseAcceleratedTiles = ProcessCapabilities::canUseAcceleratedBuffers();
 #endif
+    if (canUseAcceleratedTiles) {
         static constexpr int minGPUTileHeight = 256;
 
         auto gpuTileSize = [&](const IntSize& baseSize) -> IntSize {
@@ -434,9 +455,25 @@ IntSize CoordinatedBackingStoreProxy::computeTileSize(const IntSize& viewportSiz
             tileSize = gpuTileSize(baseSize);
         }
     } else {
+#if PLATFORM(HAIKU)
+        // 256 pixels are 128 of the page's at 200%: 105 tiles to a window of
+        // 3840x1756, and the graphics card takes 9 us for each tile it
+        // draws whatever its size (2.4 ms for a layer of 105 tiles, 1.9 for
+        // one of 32, 1.4 for one quad). A tile covers the same part of the
+        // page at 200% as at 100%. SUMMIT_TILE_SCALING=0 keeps 256.
+        static const bool scalesTiles = [] {
+            const char* value = getenv("SUMMIT_TILE_SCALING");
+            return !value || value[0] != '0' || value[1];
+        }();
+        const int tileScale = scalesTiles && m_contentsScale >= 1.5 ? 2 : 1;
+        tileSize = { s_defaultCPUTileSize * tileScale, s_defaultCPUTileSize * tileScale };
+
+        const int maxUntiledContentSize = 512 * tileScale;
+#else
         tileSize = { s_defaultCPUTileSize, s_defaultCPUTileSize };
 
         static constexpr int maxUntiledContentSize = 512;
+#endif
         // If the contents width is small, increase tile size vertically.
         if (m_contentsRect.width() < tileSize.width())
             tileSize.setHeight(maxUntiledContentSize);
@@ -512,6 +549,31 @@ std::pair<IntRect, IntRect> CoordinatedBackingStoreProxy::computeCoverAndKeepRec
     }
 
     adjustForContentsRect(coverRect);
+
+#if PLATFORM(HAIKU)
+    // The page's own layer is as wide as the viewport, so the area it may
+    // cover goes into its height: tiles one and a half viewports above and
+    // below what shows. A layer of a part of the page (a picture with a
+    // filter behind it, a post's gallery) got tiles only once it was within
+    // half a viewport, 400 pixels of the page: scrolled at an ordinary speed
+    // it was in view before the page had painted it, and Reddit's pictures
+    // came in as the black boxes they lie on. Such a layer now has tiles as
+    // far out as the page around it. SUMMIT_LAYER_TILE_REACH=<viewports>
+    // sets the distance, 0 the old one.
+    static const float reach = [] {
+        const char* value = getenv("SUMMIT_LAYER_TILE_REACH");
+        return value && *value ? std::max(0.0, std::atof(value)) : 1.5;
+    }();
+    if (reach > 0 && m_coverAreaMultiplier > 1 && !m_visibleRect.isEmpty()
+        && static_cast<int64_t>(m_contentsRect.width()) * m_contentsRect.height() <= 2 * static_cast<int64_t>(m_visibleRect.width()) * m_visibleRect.height()) {
+        IntRect reachRect = m_visibleRect;
+        reachRect.inflateX(m_visibleRect.width() * (m_coverAreaMultiplier - 1) / 2);
+        reachRect.inflateY(m_visibleRect.height() * reach);
+        reachRect.intersect(m_contentsRect);
+        if (!reachRect.isEmpty())
+            coverRect.unite(reachRect);
+    }
+#endif
 
     // The keep rect is an inflated version of the cover rect, inflated in tile dimensions.
     keepRect.unite(coverRect);

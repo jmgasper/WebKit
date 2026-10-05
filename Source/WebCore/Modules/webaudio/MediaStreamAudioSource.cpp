@@ -31,6 +31,12 @@
 #include "NotImplemented.h"
 #include "PlatformAudioData.h"
 
+#if PLATFORM(HAIKU)
+#include "AudioBus.h"
+#include "AudioChannel.h"
+#include "HaikuAudioData.h"
+#endif
+
 namespace WebCore {
 
 MediaStreamAudioSource::MediaStreamAudioSource(float sampleRate)
@@ -70,7 +76,30 @@ void MediaStreamAudioSource::setNumberOfChannels(unsigned)
 }
 #endif
 
-#if !PLATFORM(COCOA) && !USE(GSTREAMER)
+#if PLATFORM(HAIKU)
+// MediaStreamAudioDestinationNode: the context's output as interleaved float
+// (HaikuAudioData), the format of every Haiku audio source.
+void MediaStreamAudioSource::consumeAudio(AudioBus& bus, size_t numberOfFrames)
+{
+    unsigned channels = bus.numberOfChannels();
+    double sampleRate = m_currentSettings.sampleRate();
+    if (!channels || sampleRate <= 0)
+        return;
+
+    MediaTime mediaTime(m_numberOfFrames * 1000000 / static_cast<uint64_t>(sampleRate), 1000000);
+    m_numberOfFrames += numberOfFrames;
+
+    m_interleaved.resize(numberOfFrames * channels);
+    for (unsigned channel = 0; channel < channels; ++channel) {
+        auto source = bus.channel(channel)->span();
+        size_t frames = std::min(numberOfFrames, source.size());
+        for (size_t frame = 0; frame < frames; ++frame)
+            m_interleaved[frame * channels + channel] = source[frame];
+    }
+    HaikuAudioData data(m_interleaved.span(), channels);
+    audioSamplesAvailable(mediaTime, data, HaikuAudioStreamDescription(sampleRate, channels), numberOfFrames);
+}
+#elif !PLATFORM(COCOA) && !USE(GSTREAMER)
 void MediaStreamAudioSource::consumeAudio(AudioBus&, size_t)
 {
 }

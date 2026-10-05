@@ -21,6 +21,16 @@
 #include "config.h"
 #include "TextureMapperLayer.h"
 
+#if PLATFORM(HAIKU)
+#include "FilterOperation.h"
+#include <cmath>
+#endif
+
+#if PLATFORM(HAIKU)
+#include <cstdlib>
+#include <cstring>
+#endif
+
 #include "BitmapTexturePool.h"
 #include "ClipPath.h"
 #include "FloatQuad.h"
@@ -32,11 +42,28 @@
 #include <wtf/SetForScope.h>
 #include <wtf/TZoneMallocInlines.h>
 
+#if PLATFORM(HAIKU)
+#include <OS.h>
+#include <cstdio>
+#include <cstdlib>
+#endif
+
 #if USE(COORDINATED_GRAPHICS)
 #include "CoordinatedAnimatedBackingStoreClient.h"
 #endif
 
 namespace WebCore {
+
+#if PLATFORM(HAIKU)
+static bool traceLayerPaint()
+{
+    static bool enabled = [] {
+        const char* value = std::getenv("SUMMIT_LAYER_PAINT_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    return enabled;
+}
+#endif
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(TextureMapperLayer);
 
@@ -363,6 +390,10 @@ void TextureMapperLayer::prepareForPainting(TextureMapper& textureMapper)
 
 void TextureMapperLayer::paint(TextureMapper& textureMapper)
 {
+#if PLATFORM(HAIKU)
+    const bool tracePaint = traceLayerPaint();
+    const bigtime_t startedAt = tracePaint ? system_time() : 0;
+#endif
 #if !ENABLE(DAMAGE_TRACKING)
     prepareForPainting(textureMapper);
 #endif
@@ -371,6 +402,14 @@ void TextureMapperLayer::paint(TextureMapper& textureMapper)
     paintRecursive(options);
 
     destroyFlattenedDescendantLayers();
+#if PLATFORM(HAIKU)
+    if (tracePaint) {
+        const bigtime_t elapsed = system_time() - startedAt;
+        if (elapsed >= 20000)
+            std::fprintf(stderr, "Summit layer paint tree: at=%lld total=%.1f id=%u children=%zu\n",
+                static_cast<long long>(startedAt), elapsed / 1000.0, m_id, m_children.size());
+    }
+#endif
 }
 
 #if ENABLE(DAMAGE_TRACKING)
@@ -390,11 +429,32 @@ void TextureMapperLayer::setDamage(Damage&& damage)
         m_damageInLayerCoordinateSpace = WTF::move(damage);
 }
 
+#if PLATFORM(HAIKU)
+// The regions of layers with a filter or a mask that did not change in this
+// composition. Filled and emptied by collectDamage() on the compositor thread.
+static thread_local Vector<FloatRect> s_unchangedFilterRegionsHaiku;
+
+static bool damagesFilterLayersAlwaysHaiku()
+{
+    // Off unless asked for: on YouTube it took 40 surfaces, 10 blur passes
+    // and a millisecond of the GPU's time out of every video frame, and the
+    // frame rate stayed what it was (56-57 a second in two alternated pairs).
+    static const bool always = [] {
+        const char* value = getenv("SUMMIT_FILTER_LAYER_DAMAGE");
+        return !value || strcmp(value, "changed");
+    }();
+    return always;
+}
+#endif
+
 void TextureMapperLayer::collectDamage(TextureMapper& textureMapper, Damage& damage)
 {
     TextureMapperPaintOptions options(textureMapper);
     options.surface = textureMapper.currentSurface();
 
+#if PLATFORM(HAIKU)
+    s_unchangedFilterRegionsHaiku.clear();
+#endif
     collectDamageRecursive(options, damage);
 
     // Use the damage information we inferred while performing
@@ -404,6 +464,27 @@ void TextureMapperLayer::collectDamage(TextureMapper& textureMapper, Damage& dam
     for (const auto& rect : *m_damageInGlobalCoordinateSpace)
         damage.add(intersection(rect, clipBounds));
     *m_damageInGlobalCoordinateSpace = Damage(m_state.size);
+
+#if PLATFORM(HAIKU)
+    // A filter or a mask is drawn over, or from, what lies where it is: a
+    // change there changes what it shows. One that joins the damage can
+    // reach the next, so this repeats until none joins.
+    auto regions = std::exchange(s_unchangedFilterRegionsHaiku, { });
+    bool joined = !damage.isEmpty();
+    while (joined && !regions.isEmpty()) {
+        joined = false;
+        regions.removeAllMatching([&](const FloatRect& region) {
+            for (const auto& rect : damage) {
+                if (!FloatRect(rect).intersects(region))
+                    continue;
+                damage.add(region);
+                joined = true;
+                return true;
+            }
+            return false;
+        });
+    }
+#endif
 }
 
 void TextureMapperLayer::collectDamageRecursive(TextureMapperPaintOptions& options, Damage& damage)
@@ -490,11 +571,26 @@ void TextureMapperLayer::collectDamageSelf(TextureMapperPaintOptions& options, D
         return;
     }
 
+#if PLATFORM(HAIKU)
+    // CoordinatedPlatformLayer damages a layer whenever a new contents buffer
+    // or image arrives. Damaging every contents layer on every composition
+    // besides made each page scrollbar, canvas and directly composited image
+    // on screen part of every frame's readback (at 200%, a scrollbar and a
+    // speck in opposite corners made it the whole frame).
+    // SUMMIT_CONTENTS_LAYER_DAMAGE=full restores it.
+    static const bool damageContentsLayersAlways = [] {
+        const char* value = getenv("SUMMIT_CONTENTS_LAYER_DAMAGE");
+        return value && !strcmp(value, "full");
+    }();
+    if (damageContentsLayersAlways && m_contentsLayer && (!m_damageInLayerCoordinateSpace || m_damageInLayerCoordinateSpace->isEmpty()))
+        damageWholeLayer();
+#else
     if (m_contentsLayer && (!m_damageInLayerCoordinateSpace || m_damageInLayerCoordinateSpace->isEmpty())) {
         // Layers with content layer are fully damaged for now.
         // FIXME: Remove that special case.
         damageWholeLayer();
     }
+#endif
 
     TransformationMatrix transform;
     transform.translate(options.offset.width(), options.offset.height());
@@ -533,6 +629,24 @@ void TextureMapperLayer::collectDamageSelfChildrenReplicaFilterAndMask(TextureMa
 
 void TextureMapperLayer::collectDamageSelfChildrenFilterAndMask(TextureMapperPaintOptions& options, Damage& damage)
 {
+#if PLATFORM(HAIKU)
+    // A layer with a filter or a mask is damaged in every composition,
+    // changed or not: YouTube has five elements of 190x23 with a blur under
+    // its video, so each video frame draws them again and has them read
+    // back. With SUMMIT_FILTER_LAYER_DAMAGE=changed such a layer is damaged
+    // when it or something in it changed, while it animates, and when
+    // something else changed where it is (collectDamage() adds those).
+    // A mask is a layer of its own that this does not look into.
+    bool changed = damagesFilterLayersAlwaysHaiku() || m_state.maskLayer || (m_state.replicaLayer && m_state.replicaLayer->m_state.maskLayer);
+    if (!changed) {
+        changed = (m_damageInLayerCoordinateSpace && !m_damageInLayerCoordinateSpace->isEmpty()) || m_animations.hasRunningAnimations();
+        Damage within(IntRect { 0, 0, 1 << 16, 1 << 16 }, Damage::Mode::BoundingBox);
+        collectDamageSelfAndChildren(options, within);
+        if (!within.isEmpty())
+            changed = true;
+    }
+    const FloatRect regionBefore = m_accumulatedOverlapRegionDamage;
+#endif
     const IntSize maxTextureSize = options.textureMapper.maxTextureSize();
     for (auto& rect : computeConsolidatedOverlapRegionRects(options)) {
         for (int x = rect.x(); x < rect.maxX(); x += maxTextureSize.width()) {
@@ -545,6 +659,13 @@ void TextureMapperLayer::collectDamageSelfChildrenFilterAndMask(TextureMapperPai
         }
     }
 
+#if PLATFORM(HAIKU)
+    if (!changed && m_accumulatedOverlapRegionDamage == regionBefore) {
+        if (!m_accumulatedOverlapRegionDamage.isEmpty())
+            s_unchangedFilterRegionsHaiku.append(m_accumulatedOverlapRegionDamage);
+        return;
+    }
+#endif
     if (!m_accumulatedOverlapRegionDamage.isEmpty())
         damage.add(m_accumulatedOverlapRegionDamage);
 }
@@ -578,12 +699,37 @@ void TextureMapperLayer::paintSelf(TextureMapperPaintOptions& options)
     auto targetRect = layerRect();
     if (targetRect.isEmpty())
         return;
+#if PLATFORM(HAIKU)
+    const bool tracePaint = traceLayerPaint();
+    const bigtime_t startedAt = tracePaint ? system_time() : 0;
+    bigtime_t transformedAt = startedAt;
+    bigtime_t wrappedAt = startedAt;
+    bigtime_t backingPaintedAt = startedAt;
+    bigtime_t contentsPaintedAt = startedAt;
+    auto reportPaint = makeScopeExit([&] {
+        if (!tracePaint)
+            return;
+        const bigtime_t elapsed = system_time() - startedAt;
+        if (elapsed >= 4000)
+            std::fprintf(stderr, "Summit layer paint self: at=%lld total=%.1f transform=%.1f wrap=%.1f backingPaint=%.1f contentsPaint=%.1f layer=%p id=%u backing=%d contents=%d background=%d solid=%d flat=%d size=%.0fx%.0f\n",
+                static_cast<long long>(startedAt), elapsed / 1000.0, (transformedAt - startedAt) / 1000.0,
+                (wrappedAt - transformedAt) / 1000.0, (backingPaintedAt - wrappedAt) / 1000.0,
+                (contentsPaintedAt - backingPaintedAt) / 1000.0, static_cast<void*>(this), m_id,
+                !!m_backingStore, !!m_contentsLayer, m_state.backgroundColor.isValid(),
+                m_state.solidColor.isValid() && m_state.solidColor.isVisible(), isFlattened(),
+                m_state.size.width(), m_state.size.height());
+    });
+#endif
 
     // We apply the following transform to compensate for painting into a surface, and then apply the offset so that the painting fits in the target rect.
     TransformationMatrix transform;
     transform.translate(options.offset.width(), options.offset.height());
     transform.multiply(options.transform);
     transform.multiply(m_layerTransforms.combined);
+#if PLATFORM(HAIKU)
+    if (tracePaint)
+        contentsPaintedAt = backingPaintedAt = wrappedAt = transformedAt = system_time();
+#endif
 
     if (isFlattened() && !m_flattenedLayer->needsUpdate()) {
         m_flattenedLayer->paintToTextureMapper(options.textureMapper, m_flattenedLayer->layerRect(), transform, options.opacity);
@@ -592,6 +738,20 @@ void TextureMapperLayer::paintSelf(TextureMapperPaintOptions& options)
 
     TextureMapperSolidColorLayer solidColorLayer;
     TextureMapperBackingStore* backingStore = m_backingStore;
+#if PLATFORM(HAIKU)
+    // A layer with a background color and tiles (the page's root layer has the
+    // document's background color) draws the color under its tiles. Upstream
+    // draws the color alone, which hid pages that set their background after
+    // the first paint (topcoder.com, GitHub issue #13); tiles alone showed black
+    // wherever a tile was not painted yet (GitHub's issue list, a window that
+    // was made wider).
+    if (m_state.backgroundColor.isValid() && m_backingStore) {
+        solidColorLayer.setColor(m_state.backgroundColor);
+        options.textureMapper.setWrapMode(TextureMapper::WrapMode::Stretch);
+        options.textureMapper.setPatternTransform(TransformationMatrix());
+        solidColorLayer.paintToTextureMapper(options.textureMapper, targetRect, transform, options.opacity);
+    } else
+#endif
     if (m_state.backgroundColor.isValid()) {
         solidColorLayer.setColor(m_state.backgroundColor);
         backingStore = &solidColorLayer;
@@ -599,6 +759,10 @@ void TextureMapperLayer::paintSelf(TextureMapperPaintOptions& options)
 
     options.textureMapper.setWrapMode(TextureMapper::WrapMode::Stretch);
     options.textureMapper.setPatternTransform(TransformationMatrix());
+#if PLATFORM(HAIKU)
+    if (tracePaint)
+        contentsPaintedAt = backingPaintedAt = wrappedAt = system_time();
+#endif
 
     if (backingStore) {
         backingStore->paintToTextureMapper(options.textureMapper, targetRect, transform, options.opacity);
@@ -608,6 +772,10 @@ void TextureMapperLayer::paintSelf(TextureMapperPaintOptions& options)
         if (m_state.showRepaintCounter)
             backingStore->drawRepaintCounter(options.textureMapper, m_state.repaintCount, m_state.debugBorderColor, targetRect, transform);
     }
+#if PLATFORM(HAIKU)
+    if (tracePaint)
+        contentsPaintedAt = backingPaintedAt = system_time();
+#endif
 
     TextureMapperPlatformLayer* contentsLayer = m_contentsLayer;
     if (m_state.solidColor.isValid() && m_state.solidColor.isVisible()) {
@@ -638,6 +806,10 @@ void TextureMapperLayer::paintSelf(TextureMapperPaintOptions& options)
 
     if (m_state.showDebugBorders)
         contentsLayer->drawBorder(options.textureMapper, m_state.debugBorderColor, m_state.debugBorderWidth, m_state.contentsRect, transform);
+#if PLATFORM(HAIKU)
+    if (tracePaint)
+        contentsPaintedAt = system_time();
+#endif
 }
 
 void TextureMapperLayer::paintBackdrop(TextureMapperPaintOptions& options)
@@ -1079,6 +1251,33 @@ void TextureMapperLayer::applyMask(TextureMapperPaintOptions& options)
     options.textureMapper.setMaskMode(false);
 }
 
+#if PLATFORM(HAIKU)
+// Filter values are in the layer's CSS pixels, but intermediate surfaces are
+// painted in the root's device pixels, so at 200% a composited blur(15px) came
+// out like blur(7.5px) (YouTube's blurred thumbnail behind the player, and
+// every backdrop-filter). Scale the blurs and shadows by the layer's scale.
+static FilterOperations filtersInSurfacePixelsHaiku(const FilterOperations& filters, const TransformationMatrix& toSurface)
+{
+    double scale = std::sqrt(std::hypot(toSurface.m11(), toSurface.m12()) * std::hypot(toSurface.m21(), toSurface.m22()));
+    if (!std::isfinite(scale) || scale <= 0 || std::abs(scale - 1) < 0.01)
+        return filters;
+    bool changed = false;
+    Vector<Ref<FilterOperation>> scaled;
+    for (auto& operation : filters) {
+        if (auto* blur = dynamicDowncast<BlurFilterOperation>(operation.get())) {
+            scaled.append(BlurFilterOperation::create(blur->stdDeviation() * scale));
+            changed = true;
+        } else if (auto* shadow = dynamicDowncast<DropShadowFilterOperation>(operation.get())) {
+            scaled.append(DropShadowFilterOperation::create(shadow->color(), IntPoint(std::lround(shadow->x() * scale), std::lround(shadow->y() * scale)),
+                static_cast<int>(std::lround(shadow->stdDeviation() * scale))));
+            changed = true;
+        } else
+            scaled.append(operation.copyRef());
+    }
+    return changed ? FilterOperations { WTF::move(scaled) } : filters;
+}
+#endif
+
 void TextureMapperLayer::paintIntoSurface(TextureMapperPaintOptions& options)
 {
     options.textureMapper.bindSurface(options.surface.get());
@@ -1093,7 +1292,11 @@ void TextureMapperLayer::paintIntoSurface(TextureMapperPaintOptions& options)
     bool hasMask = !!m_state.maskLayer;
     bool hasReplicaMask = options.replicaLayer == this && m_state.replicaLayer->m_state.maskLayer;
     bool defersLastFilterPass = !hasMask && !hasReplicaMask;
+#if PLATFORM(HAIKU)
+    options.surface = options.textureMapper.applyFilters(options.surface, filtersInSurfacePixelsHaiku(m_currentFilters, m_layerTransforms.combined), defersLastFilterPass);
+#else
     options.surface = options.textureMapper.applyFilters(options.surface, m_currentFilters, defersLastFilterPass);
+#endif
     options.textureMapper.bindSurface(options.surface.get());
     if (hasMask)
         m_state.maskLayer->applyMask(options);
@@ -1167,6 +1370,18 @@ void TextureMapperLayer::paintRecursive(TextureMapperPaintOptions& options)
 {
     if (!isVisible())
         return;
+#if PLATFORM(HAIKU)
+    const bool tracePaint = traceLayerPaint() && m_parent;
+    const bigtime_t startedAt = tracePaint ? system_time() : 0;
+    auto reportPaint = makeScopeExit([&] {
+        if (!tracePaint)
+            return;
+        const bigtime_t elapsed = system_time() - startedAt;
+        if (elapsed >= 10000)
+            std::fprintf(stderr, "Summit layer paint branch: at=%lld total=%.1f id=%u children=%zu flat=%d blend=%d\n",
+                static_cast<long long>(startedAt), elapsed / 1000.0, m_id, m_children.size(), isFlattened(), shouldBlend());
+    });
+#endif
 
     SetForScope scopedOpacity(options.opacity, options.opacity * m_currentOpacity);
 
@@ -1495,6 +1710,11 @@ void TextureMapperLayer::setBackgroundColor(const Color& color)
 void TextureMapperLayer::setFilters(const FilterOperations& filters)
 {
     m_state.filters = filters;
+#if PLATFORM(HAIKU) && ENABLE(DAMAGE_TRACKING)
+    // For SUMMIT_FILTER_LAYER_DAMAGE=changed.
+    if (m_damagePropagationEnabled)
+        damageWholeLayer();
+#endif
 }
 
 void TextureMapperLayer::setContentsLayer(TextureMapperPlatformLayer* platformLayer)

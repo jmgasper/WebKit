@@ -40,6 +40,10 @@
 #include <wtf/RetainPtr.h>
 #endif
 
+#if USE(CURL)
+#include "CurlResourceHandleDelegate.h"
+#endif
+
 #if USE(CF)
 typedef const struct __CFData * CFDataRef;
 #endif
@@ -55,6 +59,10 @@ OBJC_CLASS NSURLRequest;
 
 #if PLATFORM(COCOA)
 typedef const struct __CFURLStorageSession* CFURLStorageSessionRef;
+#endif
+
+#if PLATFORM(HAIKU)
+class BCertificate;
 #endif
 
 namespace WTF {
@@ -79,6 +87,11 @@ class SecurityOrigin;
 class FragmentedSharedBuffer;
 class SynchronousLoaderMessageQueue;
 class Timer;
+
+#if USE(CURL)
+class CurlRequest;
+class CurlResourceHandleDelegate;
+#endif
 
 class ResourceHandle : public RefCounted<ResourceHandle>, public AuthenticationClient {
 public:
@@ -122,12 +135,29 @@ public:
     void unschedule(WTF::SchedulePair&);
 #endif
 
+#if PLATFORM(HAIKU) && !USE(CURL)
+    bool didReceiveInvalidCertificate(BCertificate& certificate, const char* message);
+#endif
+
     bool NODELETE shouldContentSniff() const;
     static bool shouldContentSniffURL(const URL&);
 
     ContentEncodingSniffingPolicy NODELETE contentEncodingSniffingPolicy() const;
 
     WEBCORE_EXPORT static void NODELETE forceContentSniffing();
+
+#if USE(CURL) || USE(HAIKU)
+    ResourceHandleInternal* getInternal() { return d.get(); }
+#endif
+
+#if USE(CURL)
+    bool cancelledOrClientless();
+    CurlResourceHandleDelegate* delegate();
+
+    void continueAfterDidReceiveResponse();
+    void willSendRequest();
+    void continueAfterWillSendRequest(ResourceRequest&&);
+#endif
 
     bool NODELETE hasAuthenticationChallenge() const;
     void clearAuthentication();
@@ -184,6 +214,8 @@ private:
 
     void platformSetDefersLoading(bool);
 
+    void platformContinueSynchronousDidReceiveResponse();
+
     void scheduleFailure(FailureType);
 
     bool start();
@@ -203,6 +235,23 @@ private:
 
 #if PLATFORM(COCOA)
     NSURLRequest *applySniffingPoliciesIfNeeded(NSURLRequest *, bool shouldContentSniff, ContentEncodingSniffingPolicy);
+#endif
+
+#if USE(CURL)
+    enum class RequestStatus {
+        NewRequest,
+        ReusedRequest
+    };
+
+    void addCacheValidationHeaders(ResourceRequest&);
+    Ref<CurlRequest> createCurlRequest(ResourceRequest&&, RequestStatus = RequestStatus::NewRequest);
+
+    bool shouldRedirectAsGET(const ResourceRequest&, bool crossOrigin);
+
+    std::optional<Credential> getCredential(const ResourceRequest&, bool);
+    void restartRequestWithCredential(const ProtectionSpace&, const Credential&);
+
+    void handleDataURL();
 #endif
 
     friend class ResourceHandleInternal;

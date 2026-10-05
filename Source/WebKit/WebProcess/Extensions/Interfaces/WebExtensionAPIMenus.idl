@@ -65,12 +65,13 @@ dictionary WebExtensionMenuItemProperties {
 [
     Conditional=WK_WEB_EXTENSIONS,
     MainWorldOnly,
+    UseCPPAPI,
 ] interface WebExtensionAPIMenus {
 
-    [RaisesException, ImplementedAs=createMenu, NeedsPage, NeedsFrame] any create([NSDictionary=NullAllowed] any properties, [Optional, CallbackHandler] function callback);
-    [RaisesException, ReturnsPromiseWhenCallbackIsOmitted, NeedsPage, NeedsFrame] void update([NSObject] any identifier, [NSDictionary=NullAllowed] any properties, [Optional, CallbackHandler] function callback);
+    [RaisesStringException, ImplementedAs=createMenu, NeedsPage, NeedsFrame, NeedsScriptContext] any create([ValuesAllowed] any properties, [Optional, CallbackHandler] function callback);
+    [RaisesStringException, ReturnsPromiseWhenCallbackIsOmitted, NeedsPage, NeedsFrame, NeedsScriptContext] void update([ValuesAllowed] any identifier, [ValuesAllowed] any properties, [Optional, CallbackHandler] function callback);
 
-    [RaisesException, ReturnsPromiseWhenCallbackIsOmitted] void remove([NSObject] any identifier, [Optional, CallbackHandler] function callback);
+    [RaisesStringException, ReturnsPromiseWhenCallbackIsOmitted, NeedsScriptContext] void remove([ValuesAllowed] any identifier, [Optional, CallbackHandler] function callback);
     [ReturnsPromiseWhenCallbackIsOmitted] void removeAll([Optional, CallbackHandler] function callback);
 
     readonly attribute WebExtensionAPIEvent onClicked;

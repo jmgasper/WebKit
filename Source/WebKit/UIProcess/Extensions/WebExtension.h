@@ -29,6 +29,7 @@
 
 #include "APIData.h"
 #include "APIObject.h"
+#include "WebExtensionCommandShortcut.h"
 #include "WebExtensionContentWorldType.h"
 #include "WebExtensionLocalization.h"
 #include "WebExtensionMatchPattern.h"
@@ -56,6 +57,8 @@ OBJC_CLASS WKWebExtension;
 
 namespace WebKit {
 
+class WebExtensionPackageSnapshotHaiku;
+
 class WebExtension : public API::ObjectImpl<API::Object::Type::WebExtension>, public CanMakeWeakPtr<WebExtension> {
     WTF_MAKE_NONCOPYABLE(WebExtension);
 
@@ -75,8 +78,11 @@ public:
 #if PLATFORM(COCOA)
     explicit WebExtension(NSBundle *appExtensionBundle, NSURL *resourceURL, RefPtr<API::Error>&);
     explicit WebExtension(NSDictionary *manifest, Resources&& = { });
-#else
+#elif USE(GLIB)
     explicit WebExtension(GFile *resourcesFile, RefPtr<API::Error>&);
+#elif PLATFORM(HAIKU)
+    explicit WebExtension(const String& resourcePath, RefPtr<API::Error>&);
+    explicit WebExtension(WebExtensionPackageSnapshotHaiku&&, RefPtr<API::Error>&);
 #endif
     explicit WebExtension(const JSON::Value& manifest, Resources&& = { });
 
@@ -146,12 +152,7 @@ public:
     using MatchPatternSet = HashSet<Ref<WebExtensionMatchPattern>>;
 
     // Needs to match UIKeyModifierFlags and NSEventModifierFlags.
-    enum class ModifierFlags : uint32_t {
-        Shift   = 1 << 17,
-        Control = 1 << 18,
-        Option  = 1 << 19,
-        Command = 1 << 20
-    };
+    using ModifierFlags = WebExtensionCommandModifier;
 
     static constexpr OptionSet<ModifierFlags> allModifierFlags()
     {
@@ -236,6 +237,11 @@ public:
     NSBundle *bundle() const { return m_bundle.get(); }
     SecStaticCodeRef bundleStaticCode() const;
     NSData *bundleHash() const;
+#endif
+
+#if PLATFORM(HAIKU)
+    const String& nativeResourceFingerprint() const { return m_nativeResourceFingerprint; }
+    const String& nativeVerifiedCRXIdentifier() const { return m_nativeVerifiedCRXIdentifier; }
 #endif
 
 #if PLATFORM(MAC)
@@ -407,6 +413,13 @@ private:
 #if PLATFORM(COCOA)
     RetainPtr<NSBundle> m_bundle;
     mutable RetainPtr<SecStaticCodeRef> m_bundleStaticCode;
+#endif
+
+#if PLATFORM(HAIKU)
+    void initializeNativeResourceSnapshot();
+    void initializeNativeResourceSnapshot(WebExtensionPackageSnapshotHaiku&&, RefPtr<API::Error>&);
+    String m_nativeResourceFingerprint;
+    String m_nativeVerifiedCRXIdentifier;
 #endif
 
     URL m_resourceBaseURL;

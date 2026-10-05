@@ -31,6 +31,7 @@
 #include <WebCore/DocumentLoader.h>
 #include <WebCore/FetchOptions.h>
 #include <WebCore/FrameLoader.h>
+#include <WebCore/LocalFrame.h>
 #include <WebCore/LocalFrameInlines.h>
 #include <WebCore/NetscapePlugInStreamLoader.h>
 #include <WebCore/NetworkStateNotifier.h>

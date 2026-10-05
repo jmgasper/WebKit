@@ -28,11 +28,27 @@
 
 #if ENABLE(WK_WEB_EXTENSIONS)
 
+#include "JSWebExtensionAPINamespace.h"
+#include "JSWebExtensionAPIWebPageNamespace.h"
+#include "JSWebExtensionWrapper.h"
+#include "MessageSenderInlines.h"
+#include "WebExtensionAPINamespace.h"
+#include "WebExtensionAPIWebPageNamespace.h"
 #include "WebExtensionContextProxy.h"
 #include "WebExtensionControllerMessages.h"
 #include "WebExtensionControllerProxyMessages.h"
+#include "WebExtensionFrameIdentifier.h"
 #include "WebFrame.h"
+#include "WebPage.h"
 #include "WebProcess.h"
+#include <JavaScriptCore/APICast.h>
+#include <WebCore/JSDOMGlobalObject.h>
+#if PLATFORM(HAIKU)
+#include <JavaScriptCore/JSCInlines.h>
+#include <JavaScriptCore/TopExceptionScope.h>
+#include <WebCore/LocalFrame.h>
+#include <WebCore/ScriptController.h>
+#endif
 #include <wtf/HashMap.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/TZoneMallocInlines.h>
@@ -138,10 +154,314 @@ RefPtr<WebExtensionContextProxy> WebExtensionControllerProxy::extensionContext(W
 
         auto prefixLength = prefix.length();
         auto uniqueIdentifier = world.name().substring(prefixLength);
+#if PLATFORM(HAIKU)
+        // Old documents can keep an unloaded extension's world alive. Its
+        // name is reused on reenable, but it must never replace the current
+        // world's bindings or receive the new extension's messages.
+        RefPtr context = extensionContext(uniqueIdentifier);
+        return context && context->matchesContentScriptWorld(world) ? context : nullptr;
+#else
         return extensionContext(uniqueIdentifier);
+#endif
     }
 
     return extensionContext(frame.url());
+}
+
+#if PLATFORM(HAIKU)
+// Firefox gives content scripts the page's own window as
+// window.wrappedJSObject. uBlock Origin's Firefox build looks there for the
+// sentinel its injected scriptlets set in the page before it records them as
+// injected; without the object the check threw, nothing was recorded, and
+// each later trigger (response headers, navigation committed, the content
+// script starting) injected them again. On YouTube that stacked the same
+// JSON.stringify trap five deep, each layer calling through the others: a
+// SyntaxError thrown and caught 2^5 times per call, 126,000 a second
+// (issue #22). This one reads, writes, tests and deletes the page's global
+// properties with plain values only (strings, numbers, booleans, null,
+// undefined); the page's objects stay in the page's world.
+struct PageWorldBridgeHaiku {
+    WebCore::FrameIdentifier frameID;
+};
+
+static JSValueRef pageWorldBridgeHaiku(JSContextRef context, JSObjectRef function, JSObjectRef, size_t argumentCount, const JSValueRef arguments[], JSValueRef*)
+{
+    auto* globalObject = toJS(context);
+    auto& vm = globalObject->vm();
+    JSC::JSLockHolder lock(vm);
+    auto scope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
+    JSValueRef result = JSValueMakeUndefined(context);
+    auto* bridge = static_cast<PageWorldBridgeHaiku*>(JSObjectGetPrivate(function));
+    RefPtr webFrame = bridge ? WebProcess::singleton().webFrame(bridge->frameID) : nullptr;
+    RefPtr frame = webFrame ? webFrame->coreLocalFrame() : nullptr;
+    auto* pageGlobalObject = frame ? frame->script().globalObject(WebCore::mainThreadNormalWorldSingleton()) : nullptr;
+    if (!pageGlobalObject || argumentCount < 2)
+        return result;
+    JSC::JSValue nameValue = toJS(globalObject, arguments[1]);
+    if (!nameValue.isString())
+        return result;
+    auto name = asString(nameValue)->value(globalObject);
+    if (scope.exception()) [[unlikely]] {
+        scope.clearException();
+        return result;
+    }
+    auto identifier = JSC::Identifier::fromString(vm, name.data);
+    auto isPlain = [](JSC::JSValue value) {
+        return !value.isCell() || value.isString();
+    };
+    JSC::JSValue operation = toJS(globalObject, arguments[0]);
+    switch (operation.isInt32() ? operation.asInt32() : -1) {
+    case 0: {
+        JSC::JSValue value = pageGlobalObject->get(pageGlobalObject, identifier);
+        if (!scope.exception() && isPlain(value))
+            result = toRef(globalObject, value);
+        break;
+    }
+    case 1: {
+        JSC::JSValue value = argumentCount > 2 ? toJS(globalObject, arguments[2]) : JSC::jsUndefined();
+        if (isPlain(value)) {
+            JSC::PutPropertySlot slot(pageGlobalObject);
+            pageGlobalObject->methodTable()->put(pageGlobalObject, pageGlobalObject, identifier, value, slot);
+        }
+        result = JSValueMakeBoolean(context, true);
+        break;
+    }
+    case 2:
+        result = JSValueMakeBoolean(context, pageGlobalObject->hasProperty(pageGlobalObject, identifier));
+        break;
+    case 3: {
+        JSC::DeletePropertySlot slot;
+        pageGlobalObject->methodTable()->deleteProperty(pageGlobalObject, pageGlobalObject, identifier, slot);
+        result = JSValueMakeBoolean(context, true);
+        break;
+    }
+    }
+    scope.clearException();
+    return result;
+}
+
+static void installWrappedJSObjectHaiku(JSContextRef context, JSObjectRef globalObject, WebFrame& frame)
+{
+    static JSClassRef bridgeClass = [] {
+        JSClassDefinition definition = kJSClassDefinitionEmpty;
+        definition.className = "SummitPageWorld";
+        definition.callAsFunction = pageWorldBridgeHaiku;
+        definition.finalize = [](JSObjectRef object) {
+            delete static_cast<PageWorldBridgeHaiku*>(JSObjectGetPrivate(object));
+        };
+        return JSClassCreate(&definition);
+    }();
+    JSRetainPtr name = toJSString("wrappedJSObject"_s);
+    if (!name)
+        return;
+    JSRetainPtr factorySource = toJSString(
+        "(function(bridge) {"
+        "  return new Proxy({}, {"
+        "    get(target, name) { return typeof name === 'string' ? bridge(0, name) : undefined; },"
+        "    set(target, name, value) { if (typeof name === 'string') bridge(1, name, value); return true; },"
+        "    has(target, name) { return typeof name === 'string' && bridge(2, name); },"
+        "    deleteProperty(target, name) { if (typeof name === 'string') bridge(3, name); return true; },"
+        "  });"
+        "})"_s);
+    if (!factorySource)
+        return;
+    JSValueRef factory = JSEvaluateScript(context, factorySource.get(), nullptr, nullptr, 1, nullptr);
+    if (!factory || !JSValueIsObject(context, factory))
+        return;
+    JSValueRef bridge = JSObjectMake(context, bridgeClass, new PageWorldBridgeHaiku { frame.frameID() });
+    JSValueRef proxy = JSObjectCallAsFunction(context, const_cast<JSObjectRef>(factory), nullptr, 1, &bridge, nullptr);
+    if (!proxy)
+        return;
+    JSObjectSetProperty(context, globalObject, name.get(), proxy, kJSPropertyAttributeDontEnum, nullptr);
+}
+#endif
+
+void WebExtensionControllerProxy::globalObjectIsAvailableForFrame(WebPage& page, WebFrame& frame, DOMWrapperWorld& world)
+{
+    RefPtr extension = extensionContext(frame, world);
+    bool isMainWorld = world.isNormal();
+
+    if (!extension && isMainWorld) {
+        addBindingsToWebPageFrameIfNecessary(frame, world);
+        return;
+    }
+
+    if (!extension)
+        return;
+
+    auto context = frame.jsContextForWorld(world);
+    auto globalObject = JSContextGetGlobalObject(context);
+
+    JSRetainPtr browserString = toJSString("browser"_s);
+    if (!browserString)
+        return;
+
+    // This is a safer cpp false positive (rdar://163760990).
+    SUPPRESS_UNCOUNTED_ARG auto namespaceObject = JSObjectGetProperty(context, globalObject, browserString.get(), nullptr);
+    if (namespaceObject && JSValueIsObject(context, namespaceObject))
+        return;
+
+    extension->addFrameWithExtensionContent(frame);
+
+    if (!isMainWorld)
+        extension->setContentScriptWorld(world);
+
+    auto contentWorldType = isMainWorld ? WebExtensionContentWorldType::Main : WebExtensionContentWorldType::ContentScript;
+
+#if ENABLE(INSPECTOR_EXTENSIONS)
+    if (page.isInspectorPage() || extension->isInspectorBackgroundPage(page)) {
+        // Inspector pages have a limited set of APIs (like content scripts).
+        contentWorldType = WebExtensionContentWorldType::Inspector;
+    }
+#endif
+
+    namespaceObject = toJS(context, WebExtensionAPINamespace::create(contentWorldType, *extension).ptr());
+
+    // This is a safer cpp false positive (rdar://163760990).
+    SUPPRESS_UNCOUNTED_ARG JSObjectSetProperty(context, globalObject, browserString.get(), namespaceObject, kJSPropertyAttributeNone, nullptr);
+
+    if (JSRetainPtr chromeString = toJSString("chrome"_s)) {
+        // This is a safer cpp false positive (rdar://163760990).
+        SUPPRESS_UNCOUNTED_ARG JSObjectSetProperty(context, globalObject, chromeString.get(), namespaceObject, kJSPropertyAttributeNone, nullptr);
+    }
+
+#if PLATFORM(HAIKU)
+    if (contentWorldType == WebExtensionContentWorldType::ContentScript)
+        installWrappedJSObjectHaiku(context, globalObject, frame);
+#endif
+
+    if (auto* domGlobalObject = dynamicDowncast<JSDOMGlobalObject>(toJS(context))) {
+        domGlobalObject->addScriptErrorCallback([extension = Ref { *extension }, contentWorldType](const String& message, const String& sourceURL, unsigned lineNumber, unsigned columnNumber) {
+            extension->didEncounterScriptError(message, sourceURL, lineNumber, columnNumber, contentWorldType);
+        });
+    }
+}
+
+void WebExtensionControllerProxy::serviceWorkerGlobalObjectIsAvailableForFrame(WebPage& page, WebFrame& frame, DOMWrapperWorld& world)
+{
+    RELEASE_ASSERT(world.isNormal());
+
+    RefPtr extension = extensionContext(frame, world);
+    if (!extension)
+        return;
+
+    auto context = frame.jsContextForServiceWorkerWorld(world);
+    auto globalObject = JSContextGetGlobalObject(context);
+
+    JSRetainPtr browserString = toJSString("browser"_s);
+    if (!browserString)
+        return;
+
+    // This is a safer cpp false positive (rdar://163760990).
+    SUPPRESS_UNCOUNTED_ARG auto namespaceObject = JSObjectGetProperty(context, globalObject, browserString.get(), nullptr);
+    if (namespaceObject && JSValueIsObject(context, namespaceObject))
+        return;
+
+    extension->addFrameWithExtensionContent(frame);
+
+    namespaceObject = toJS(context, WebExtensionAPINamespace::create(WebExtensionContentWorldType::Main, *extension).ptr());
+
+    // This is a safer cpp false positive (rdar://163760990).
+    SUPPRESS_UNCOUNTED_ARG JSObjectSetProperty(context, globalObject, browserString.get(), namespaceObject, kJSPropertyAttributeNone, nullptr);
+    if (JSRetainPtr chromeString = toJSString("chrome"_s)) {
+        // This is a safer cpp false positive (rdar://163760990).
+        SUPPRESS_UNCOUNTED_ARG JSObjectSetProperty(context, globalObject, chromeString.get(), namespaceObject, kJSPropertyAttributeNone, nullptr);
+    }
+
+    if (auto* domGlobalObject = dynamicDowncast<JSDOMGlobalObject>(toJS(context))) {
+        domGlobalObject->addScriptErrorCallback([extension = Ref { *extension }](const String& message, const String& sourceURL, unsigned lineNumber, unsigned columnNumber) {
+            extension->didEncounterScriptError(message, sourceURL, lineNumber, columnNumber, WebExtensionContentWorldType::Main);
+        });
+    }
+}
+
+void WebExtensionControllerProxy::addBindingsToWebPageFrameIfNecessary(WebFrame& frame, DOMWrapperWorld& world)
+{
+    auto context = frame.jsContextForWorld(world);
+    auto globalObject = JSContextGetGlobalObject(context);
+
+    JSRetainPtr browserString = toJSString("browser"_s);
+    if (!browserString)
+        return;
+
+    // This is a safer cpp false positive (rdar://163760990).
+    SUPPRESS_UNCOUNTED_ARG auto namespaceObject = JSObjectGetProperty(context, globalObject, browserString.get(), nullptr);
+    bool browserAlreadySet = namespaceObject && JSValueIsObject(context, namespaceObject);
+
+    auto* domGlobalObject = dynamicDowncast<JSDOMGlobalObject>(toJS(context));
+    bool callbacksAlreadyRegistered = !domGlobalObject || domGlobalObject->hasScriptErrorCallbacks();
+
+    // If both browser and callbacks are already set up, nothing to do.
+    if (browserAlreadySet && callbacksAlreadyRegistered)
+        return;
+
+    if (!browserAlreadySet) {
+        namespaceObject = toJS(context, WebExtensionAPIWebPageNamespace::create(WebExtensionContentWorldType::WebPage).ptr());
+
+        // This is a safer cpp false positive (rdar://163760990).
+        SUPPRESS_UNCOUNTED_ARG JSObjectSetProperty(context, globalObject, browserString.get(), namespaceObject, kJSPropertyAttributeNone, nullptr);
+    }
+
+    // For each loaded extension, install a callback that fires only when an error's sourceURL
+    // originates from that extension (main-world content script case). Guard against registering
+    // duplicate callbacks: if no callbacks are registered yet (e.g. extension contexts were not
+    // yet loaded when the global object was first created), register them now.
+    if (domGlobalObject && !domGlobalObject->hasScriptErrorCallbacks()) {
+        for (Ref extensionContext : m_extensionContexts) {
+            domGlobalObject->addScriptErrorCallback([extensionContext = extensionContext.copyRef()](const String& message, const String& sourceURL, unsigned lineNumber, unsigned columnNumber) {
+                if (!extensionContext->isURLForThisExtension(URL(URL(), sourceURL)))
+                    return;
+
+                extensionContext->didEncounterScriptError(message, sourceURL, lineNumber, columnNumber, WebExtensionContentWorldType::Main);
+            });
+        }
+    }
+}
+
+static WebExtensionFrameParameters toFrameParameters(WebFrame& frame, const URL& url, bool includeDocumentIdentifier = true)
+{
+    auto parentFrameIdentifier = WebExtensionFrameConstants::NoneIdentifier;
+    if (RefPtr parentFrame = frame.parentFrame())
+        parentFrameIdentifier = toWebExtensionFrameIdentifier(*parentFrame);
+
+    return {
+        .url = url,
+        .parentFrameIdentifier = parentFrameIdentifier,
+        .frameIdentifier = toWebExtensionFrameIdentifier(frame),
+        .documentIdentifier = includeDocumentIdentifier ? toDocumentIdentifier(frame) : std::nullopt
+    };
+}
+
+void WebExtensionControllerProxy::didStartProvisionalLoadForFrame(WebPage& page, WebFrame& frame, const URL& url)
+{
+    if (!hasLoadedContexts())
+        return;
+
+    WebProcess::singleton().send(Messages::WebExtensionController::DidStartProvisionalLoadForFrame(page.webPageProxyIdentifier(), toFrameParameters(frame, url, false), WallTime::now()), identifier());
+}
+
+void WebExtensionControllerProxy::didCommitLoadForFrame(WebPage& page, WebFrame& frame, const URL& url)
+{
+    if (!hasLoadedContexts())
+        return;
+
+    WebProcess::singleton().send(Messages::WebExtensionController::DidCommitLoadForFrame(page.webPageProxyIdentifier(), toFrameParameters(frame, url), WallTime::now()), identifier());
+}
+
+void WebExtensionControllerProxy::didFinishLoadForFrame(WebPage& page, WebFrame& frame, const URL& url)
+{
+    if (!hasLoadedContexts())
+        return;
+
+    WebProcess::singleton().send(Messages::WebExtensionController::DidFinishLoadForFrame(page.webPageProxyIdentifier(), toFrameParameters(frame, url), WallTime::now()), identifier());
+}
+
+void WebExtensionControllerProxy::didFailLoadForFrame(WebPage& page, WebFrame& frame, const URL& url)
+{
+    if (!hasLoadedContexts())
+        return;
+
+    WebProcess::singleton().send(Messages::WebExtensionController::DidFailLoadForFrame(page.webPageProxyIdentifier(), toFrameParameters(frame, url), WallTime::now()), identifier());
 }
 
 } // namespace WebKit

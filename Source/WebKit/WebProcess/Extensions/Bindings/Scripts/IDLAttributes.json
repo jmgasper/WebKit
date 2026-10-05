@@ -24,7 +24,7 @@
             "supportsConjunction": true
         },
         "Platform": {
-            "contextsAllowed": ["attribute"],
+            "contextsAllowed": ["attribute", "operation"],
             "values": ["*"]
         },
         "CallbackHandler": {
@@ -121,6 +121,9 @@
         },
         "NSObject": {
             "contextsAllowed": ["argument", "attribute", "operation"]
+        },
+        "Finite": {
+            "contextsAllowed": ["argument"]
         },
         "Optional": {
             "contextsAllowed": ["argument"]

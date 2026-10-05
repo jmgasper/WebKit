@@ -40,6 +40,9 @@
 #include "WebExtensionCommand.h"
 #include "WebExtensionContextIdentifier.h"
 #include "WebExtensionController.h"
+#if PLATFORM(HAIKU)
+#include "WebExtensionPrivacySettingsHaiku.h"
+#endif
 #include "WebExtensionDataType.h"
 #include "WebExtensionDeclarativeNetRequestSQLiteStore.h"
 #include "WebExtensionDynamicScripts.h"
@@ -51,13 +54,20 @@
 #include "WebExtensionMatchedRuleParameters.h"
 #include "WebExtensionMenuItem.h"
 #include "WebExtensionMessagePort.h"
+#if PLATFORM(HAIKU)
+#include "haiku/WebExtensionInstallStateHaiku.h"
+#endif
 #include "WebExtensionMessageSenderParameters.h"
+#include "WebExtensionPagePortMap.h"
 #include "WebExtensionPortChannelIdentifier.h"
 #include "WebExtensionRegisteredScriptsSQLiteStore.h"
 #include "WebExtensionStorageAccessLevel.h"
 #include "WebExtensionStorageSQLiteStore.h"
 #include "WebExtensionTab.h"
 #include "WebExtensionTabIdentifier.h"
+#if PLATFORM(HAIKU)
+#include "WebExtensionTabScriptExecution.h"
+#endif
 #include "WebExtensionUtilities.h"
 #include "WebExtensionWindow.h"
 #include "WebExtensionWindowIdentifier.h"
@@ -84,6 +94,12 @@
 #include <wtf/WeakHashCountedSet.h>
 #include <wtf/WeakHashMap.h>
 #include <wtf/WeakPtr.h>
+
+#if PLATFORM(HAIKU)
+#include <wtf/JSONValues.h>
+#include <wtf/SharedTask.h>
+class BMessage;
+#endif
 
 #if ENABLE(INSPECTOR_EXTENSIONS)
 #include "APIInspectorExtension.h"
@@ -144,9 +160,21 @@ namespace PAL {
 class SessionID;
 }
 
+namespace API {
+class ContentRuleList;
+class NavigationAction;
+class PageConfiguration;
+}
+
 namespace WebKit {
 
-#if ENABLE(2022_GLIB_API)
+struct WebExtensionPermissionState;
+
+#if PLATFORM(HAIKU)
+using WebViewClass = WebPageProxy;
+using WebViewConfiguration = RefPtr<API::PageConfiguration>;
+using NavigationPolicyAction = API::NavigationAction;
+#elif ENABLE(2022_GLIB_API)
 using WebViewClass = WebKitWebView;
 using WebViewConfiguration = GRefPtr<WebKitSettings>;
 using NavigationPolicyAction = WebKitNavigationPolicyDecision;
@@ -179,6 +207,11 @@ enum class WebExtensionContextInstallReason : uint8_t {
     BrowserUpdate,
 };
 
+#if PLATFORM(HAIKU)
+class WebView;
+class ExtensionActionPopupHaiku;
+#endif
+
 class WebExtensionContext : public API::ObjectImpl<API::Object::Type::WebExtensionContext>, public IPC::MessageReceiver, public Identified<WebExtensionContextIdentifier> {
     WTF_MAKE_NONCOPYABLE(WebExtensionContext);
 
@@ -198,6 +231,8 @@ public:
     {
 #if PLATFORM(COCOA)
         return "State.plist"_s;
+#elif PLATFORM(HAIKU)
+        return "State.json"_s;
 #else
         return "State.ini"_s;
 #endif
@@ -206,6 +241,8 @@ public:
     static NSMutableDictionary *readStateFromPath(const String&);
 #elif ENABLE(2022_GLIB_API)
     static GRefPtr<GKeyFile> readStateFromPath(const String&);
+#elif PLATFORM(HAIKU)
+    static RefPtr<JSON::Object> readStateFromPath(const String&);
 #endif
     static bool readLastBaseURLFromState(const String& filePath, URL& outLastBaseURL);
     static bool readDisplayNameFromState(const String& filePath, String& outDisplayName);
@@ -214,7 +251,7 @@ public:
 
     static WebExtensionContext* NODELETE get(WebExtensionContextIdentifier);
 
-#if PLATFORM(COCOA)
+#if PLATFORM(COCOA) || PLATFORM(HAIKU)
     explicit WebExtensionContext(Ref<WebExtension>&&);
 #elif ENABLE(2022_GLIB_API)
     explicit WebExtensionContext(WebKitWebExtensionContext*);
@@ -265,11 +302,8 @@ public:
         bool userGesture { false };
     };
 
-    using PortWorldTuple = std::tuple<WebExtensionContentWorldType, WebExtensionContentWorldType, WebExtensionPortChannelIdentifier>;
     using PortWorldPair = std::pair<WebExtensionContentWorldType, WebExtensionPortChannelIdentifier>;
     using PortCountedSet = HashCountedSet<PortWorldPair>;
-    using PortTupleCountedSet = HashCountedSet<PortWorldTuple>;
-    using PageProxyIdentifierPortMap = HashMap<WebPageProxyIdentifier, PortTupleCountedSet>;
     using PortQueuedMessageMap = HashMap<PortWorldPair, Vector<PortQueuedMessage>>;
     using NativePortMap = HashMap<WebExtensionPortChannelIdentifier, Ref<WebExtensionMessagePort>>;
 
@@ -333,6 +367,21 @@ public:
         GrantedPermissionMatchPatternsWereRemoved,
         DeniedPermissionMatchPatternsWereRemoved,
     };
+
+#if PLATFORM(HAIKU)
+    // Main-thread host observer. Replacing or clearing it cancels queued
+    // deliveries; permission and pattern sets describe the recorded change.
+    using NativePermissionChangeHandler = SharedTask<void(PermissionNotification, const PermissionsSet&, const MatchPatternSet&)>;
+    void setNativePermissionChangeHandler(RefPtr<NativePermissionChangeHandler>&&);
+
+    using NativeActionChangeHandler = SharedTask<void(WebExtensionAction&)>;
+    void setNativeActionChangeHandler(RefPtr<NativeActionChangeHandler>&&);
+    void nativeActionPropertiesDidChange(WebExtensionAction&);
+    void closeNativeActionPopup();
+    void closeNativeActionPopupForTab(WebExtensionTab&);
+    void validateNativeActionPopup();
+    friend class ExtensionActionPopupHaiku;
+#endif
 
     enum class PermissionState : int8_t {
         DeniedExplicitly    = -3,
@@ -416,6 +465,35 @@ public:
 
     const String& uniqueIdentifier() const LIFETIME_BOUND { return m_uniqueIdentifier; }
     void setUniqueIdentifier(String&&);
+#if PLATFORM(HAIKU)
+    bool setNativeInstallationMetadata(String identifier, uint64_t order)
+    {
+        ASSERT(isMainThread());
+        if (isLoaded() || identifier.isEmpty() != !order || identifier.length() > 255 || identifier.contains(static_cast<UChar>(0)))
+            return false;
+        m_nativeInstallationIdentifier = WTF::move(identifier);
+        m_nativeInstallationOrder = order;
+        return true;
+    }
+    const String& nativeInstallationIdentifier() const { return m_nativeInstallationIdentifier; }
+    uint64_t nativeInstallationOrder() const { return m_nativeInstallationOrder; }
+    const WebExtensionPrivacySettingsHaiku& nativePrivacySettings() const { return m_nativePrivacySettings; }
+    uint64_t nativePrivacyGeneration() const { return m_nativePrivacyGeneration; }
+    std::expected<void, String> restoreNativePrivacySettings();
+
+    void privacyGet(const String& setting, const String& detailsJSON, CompletionHandler<void(String, String)>&&);
+    void privacyUpdate(const String& setting, const String& operation, const String& detailsJSON, CompletionHandler<void(bool, String)>&&);
+
+    // The browser host sets the purpose before load; it is consumed once.
+    bool setNativeLoadPurpose(WebExtensionLoadPurposeHaiku purpose)
+    {
+        ASSERT(isMainThread());
+        if (isLoaded())
+            return false;
+        m_nativeLoadPurpose = purpose;
+        return true;
+    }
+#endif
 
     RefPtr<WebExtensionLocalization> localization();
 
@@ -504,6 +582,35 @@ public:
 
     void removePage(WebPageProxy&);
 
+#if PLATFORM(HAIKU)
+    RefPtr<WebPageProxy> nativePage(WebPageProxyIdentifier) const;
+    RefPtr<WebExtensionWindow> getOrCreateNativeWindow(uint64_t) const;
+    RefPtr<WebExtensionTab> getOrCreateNativeTab(WebPageProxyIdentifier) const;
+    void pruneNativeHostObjects() const;
+    void nativeBrowserWindowsDidChange(const Vector<uint64_t>& before, const Vector<uint64_t>& after,
+        std::optional<uint64_t> previousFocus, std::optional<uint64_t> newFocus);
+    // One committed registry transition, flattened in window then tab order.
+    struct NativeBrowserTabState {
+        WebPageProxyIdentifier page;
+        uint64_t window { 0 };
+        size_t index { 0 };
+        bool active { false };
+    };
+    void nativeBrowserTabsWillChange(const Vector<NativeBrowserTabState>& before, const Vector<NativeBrowserTabState>& after);
+    void nativeBrowserTabsDidChange(const Vector<NativeBrowserTabState>& before, const Vector<NativeBrowserTabState>& after);
+    bool canDeliverNativeTabEvent(WebExtensionContextIdentifier loadIdentifier) const;
+
+    // Ask the host browser to change its own tab or window model. The message
+    // must be a B_WEBKIT_BROWSER_COMMAND with its command and targets; this adds
+    // the calling extension. Completion is always asynchronous and reports the
+    // pages of any views the host created. No listener, no answer before the
+    // deadline and unloading this extension all fail with an extension error.
+    using NativeBrowserCommandResult = std::expected<Vector<WebPageProxyIdentifier>, WebExtensionError>;
+    void sendNativeBrowserCommand(BMessage&&, const String& apiName, CompletionHandler<void(NativeBrowserCommandResult&&)>&&);
+    // False when the tab or window has no live native counterpart to name.
+    bool addNativeBrowserCommandTab(BMessage&, const WebExtensionTab&, const char* viewField = "view", const char* pageField = "page_identifier") const;
+    bool addNativeBrowserCommandWindow(BMessage&, const WebExtensionWindow&) const;
+#endif
     Ref<WebExtensionWindow> getOrCreateWindow(WKWebExtensionWindow *) const;
     RefPtr<WebExtensionWindow> getWindow(WebExtensionWindowIdentifier, std::optional<WebPageProxyIdentifier> = std::nullopt, IgnoreExtensionAccess = IgnoreExtensionAccess::No) const;
     void forgetWindow(WebExtensionWindowIdentifier) const;
@@ -596,6 +703,9 @@ public:
     const CommandsVector& commands();
     WebExtensionCommand* command(const String& identifier);
     void performCommand(WebExtensionCommand&, UserTriggered = UserTriggered::No);
+#if PLATFORM(HAIKU)
+    void performCommand(WebExtensionCommand&, WebExtensionTab*, UserTriggered);
+#endif
     void resetCommands();
 
 #if TARGET_OS_IPHONE
@@ -630,6 +740,10 @@ public:
     void sendTestStarted(id argument);
     void sendTestFinished(id argument);
     void reloadBackgroundContentForTesting();
+#elif PLATFORM(HAIKU)
+    void sendTestMessage(const String& message, Ref<JSON::Value> argument);
+    void sendTestStarted(Ref<JSON::Value> argument);
+    void sendTestFinished(Ref<JSON::Value> argument);
 #endif
 
     URL backgroundContentURL();
@@ -638,6 +752,11 @@ public:
 #if ENABLE(WK_WEB_EXTENSIONS_OFFSCREEN) && PLATFORM(COCOA)
     WKWebView *offscreenWebView() const { return m_offscreenWebView.get(); }
     bool isOffscreenWebView(WKWebView *webView) const { return webView == m_offscreenWebView; }
+#elif ENABLE(WK_WEB_EXTENSIONS_OFFSCREEN) && PLATFORM(HAIKU)
+    WebPageProxy* offscreenWebView() const { return m_offscreenWebView.get(); }
+    bool isOffscreenWebView(const WebPageProxy& page) const { return &page == m_offscreenWebView.get(); }
+    void offscreenDocumentDidFinishLoad(WebPageProxy&);
+    void offscreenDocumentDidFail(WebPageProxy&, const String& reason);
 #endif
     bool safeToLoadBackgroundContent() const { return m_safeToLoadBackgroundContent; }
 
@@ -655,6 +774,7 @@ public:
     void runOpenPanel(WKWebView *, WKOpenPanelParameters *, void (^)(NSArray *));
 #endif
 
+    void dispatchNativePortMessage(WebExtensionPortChannelIdentifier, const String& messageJSON);
 #if PLATFORM(COCOA)
     void sendNativeMessage(const String& applicationID, id message, CompletionHandler<void(std::expected<RetainPtr<id>, WebExtensionError>&&)>&&);
 #endif
@@ -700,7 +820,11 @@ public:
 
     WebsiteDataStore* websiteDataStore(std::optional<PAL::SessionID> = std::nullopt) const;
 
+#if PLATFORM(HAIKU) && USE(CURL)
+    void cookiesDidChange(API::HTTPCookieStore&, const Vector<WebCore::CookieChange>&);
+#else
     void cookiesDidChange(API::HTTPCookieStore&);
+#endif
 
     void loadBackgroundContent(CompletionHandler<void(RefPtr<API::Error>)>&&);
 
@@ -749,11 +873,18 @@ private:
 #if PLATFORM(COCOA)
     NSDictionary *currentState() const;
     NSDictionary *readStateFromStorage();
-#else
+#elif ENABLE(2022_GLIB_API)
     GRefPtr<GKeyFile> currentState() const;
     GRefPtr<GKeyFile> readStateFromStorage();
+#elif PLATFORM(HAIKU)
+    RefPtr<const JSON::Object> currentState() const;
+    RefPtr<JSON::Object> readStateFromStorage();
 #endif
     void writeStateToStorage() const;
+    URL updatePersistedMetadataDuringLoad();
+#if PLATFORM(COCOA)
+    void clearTabDelegateMap();
+#endif
 
     void loadStorageAccessLevelsFromStorage();
     void saveStorageAccessLevelsToStorage();
@@ -761,6 +892,10 @@ private:
     void determineInstallReasonDuringLoad();
     void moveLocalStorageIfNeeded(const URL& previousBaseURL, CompletionHandler<void()>&&);
     void removeStaleExtensionWebsiteData();
+
+#if PLATFORM(HAIKU)
+    void notifyNativePermissionChange(PermissionNotification, const PermissionsSet&, const MatchPatternSet&);
+#endif
 
     void permissionsDidChange(PermissionNotification, const PermissionsSet&);
     void permissionsDidChange(PermissionNotification, const MatchPatternSet&);
@@ -796,6 +931,7 @@ private:
     void saveBackgroundPageListenersToStorage();
 
     void performTasksAfterBackgroundContentLoads();
+    void cancelBackgroundContentTasks();
 
 #ifdef NDEBUG
     // This is method is a no-op in release builds since it has a performance impact with little benefit to release builds.
@@ -844,6 +980,9 @@ private:
     void loadDeclarativeNetRequestRules(CompletionHandler<void(bool)>&&);
     void compileDeclarativeNetRequestRules(NSDictionary *, CompletionHandler<void(bool)>&&);
     void unloadDeclarativeNetRequestState();
+#if PLATFORM(HAIKU)
+    void clearNativeDeclarativeNetRequestRules();
+#endif
     String declarativeNetRequestContentRuleListFilePath();
 
     // Updating user content controllers with new rules.
@@ -882,6 +1021,10 @@ private:
     Ref<WebExtensionStorageSQLiteStore> syncStorageStore();
 
     void fetchCookies(WebsiteDataStore&, const URL&, const WebExtensionCookieFilterParameters&, CompletionHandler<void(std::expected<Vector<WebExtensionCookieParameters>, WebExtensionError>&&)>&&);
+#if PLATFORM(HAIKU)
+    void fetchCookies(WebsiteDataStore&, const URL&, const WebExtensionCookieFilterParameters&, bool requireCookieHostPermission, CompletionHandler<void(std::expected<Vector<WebExtensionCookieParameters>, WebExtensionError>&&)>&&);
+    void cookiesSetJSON(const String&, CompletionHandler<void(std::expected<std::optional<WebExtensionCookieParameters>, WebExtensionError>&&)>&&);
+#endif
 
     // Action APIs
     bool isActionMessageAllowed(IPC::Decoder&);
@@ -893,6 +1036,10 @@ private:
     void actionOpenPopup(WebPageProxyIdentifier, std::optional<WebExtensionWindowIdentifier>, std::optional<WebExtensionTabIdentifier>, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
     void actionGetBadgeText(std::optional<WebExtensionWindowIdentifier>, std::optional<WebExtensionTabIdentifier>, CompletionHandler<void(std::expected<String, WebExtensionError>&&)>&&);
     void actionSetBadgeText(std::optional<WebExtensionWindowIdentifier>, std::optional<WebExtensionTabIdentifier>, const String& text, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
+#if PLATFORM(HAIKU)
+    void actionGetBadgeColor(std::optional<WebExtensionWindowIdentifier>, std::optional<WebExtensionTabIdentifier>, bool background, CompletionHandler<void(std::expected<uint32_t, WebExtensionError>&&)>&&);
+    void actionSetBadgeColor(std::optional<WebExtensionWindowIdentifier>, std::optional<WebExtensionTabIdentifier>, bool background, const String& cssColor, std::optional<uint32_t> color, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
+#endif
     void actionGetEnabled(std::optional<WebExtensionWindowIdentifier>, std::optional<WebExtensionTabIdentifier>, CompletionHandler<void(std::expected<bool, WebExtensionError>&&)>&&);
     void actionSetEnabled(std::optional<WebExtensionTabIdentifier>, bool enabled, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
     void fireActionClickedEventIfNeeded(WebExtensionTab*);
@@ -924,6 +1071,11 @@ private:
     // Commands APIs
     bool isCommandsMessageAllowed(IPC::Decoder&);
     void commandsGetAll(CompletionHandler<void(Vector<WebExtensionCommandParameters>)>&&);
+#if PLATFORM(HAIKU)
+    void commandsUpdate(const String&, const std::optional<String>& description, const std::optional<String>& shortcut, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
+    void commandsReset(const String&, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
+    std::expected<void, WebExtensionError> saveCommandState(Ref<JSON::Object>&&);
+#endif
     void fireCommandEventIfNeeded(const WebExtensionCommand&, WebExtensionTab*);
     void fireCommandChangedEventIfNeeded(const WebExtensionCommand&, const String& oldShortcut);
 
@@ -934,7 +1086,9 @@ private:
     void cookiesSet(std::optional<PAL::SessionID>, const WebExtensionCookieParameters&, CompletionHandler<void(std::expected<std::optional<WebExtensionCookieParameters>, WebExtensionError>&&)>&&);
     void cookiesRemove(std::optional<PAL::SessionID>, const String& name, const URL&, CompletionHandler<void(std::expected<std::optional<WebExtensionCookieParameters>, WebExtensionError>&&)>&&);
     void cookiesGetAllCookieStores(CompletionHandler<void(std::expected<HashMap<PAL::SessionID, Vector<WebExtensionTabIdentifier>>, WebExtensionError>&&)>&&);
+#if !PLATFORM(HAIKU)
     void fireCookiesChangedEventIfNeeded();
+#endif
 
     // DeclarativeNetRequest APIs
     bool isDeclarativeNetRequestMessageAllowed(IPC::Decoder&);
@@ -950,6 +1104,27 @@ private:
     void declarativeNetRequestUpdateDynamicRules(String&& rulesToAddJSON, Vector<double>&& ruleIDsToDelete, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
     void declarativeNetRequestGetSessionRules(Vector<double>&& filter, CompletionHandler<void(std::expected<String, WebExtensionError>&&)>&&);
     void declarativeNetRequestUpdateSessionRules(String&& rulesToAddJSON, Vector<double>&& ruleIDsToDelete, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
+#if PLATFORM(HAIKU)
+    void declarativeNetRequestGetAvailableStaticRuleCount(CompletionHandler<void(double)>&&);
+    // Native content rules enforce DNR for the whole browser. An extension with only
+    // declarativeNetRequestWithHostAccess gets them when it may access every URL,
+    // where host-limited enforcement would change nothing.
+    bool nativeDeclarativeNetRequestAllowed();
+    std::expected<void, WebExtensionError> validateNativeDeclarativeNetRequestUpdate(const String& apiName, const JSON::Array& rulesToAdd, const Vector<double>& ruleIDsToDelete, bool session);
+    void saveDeclarativeNetRequestRulesetStateToStorage(const HashMap<String, bool>&);
+
+    // Downloads APIs
+    bool isDownloadsMessageAllowed(IPC::Decoder&);
+    void downloadsDownload(WebPageProxyIdentifier, String&& optionsJSON, CompletionHandler<void(std::expected<double, WebExtensionError>&&)>&&);
+    void downloadsSearch(String&& queryJSON, CompletionHandler<void(std::expected<String, WebExtensionError>&&)>&&);
+    void downloadsCancel(double downloadIdentifier, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
+    void downloadsErase(String&& queryJSON, CompletionHandler<void(std::expected<String, WebExtensionError>&&)>&&);
+    void downloadsShow(double downloadIdentifier, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
+    void downloadsShowDefaultFolder(CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
+public:
+    void fireDownloadsEventIfNeeded(WebExtensionEventListenerType, const String& argumentJSON);
+private:
+#endif
 
 #if ENABLE(INSPECTOR_EXTENSIONS)
     // DevTools APIs
@@ -965,12 +1140,20 @@ private:
 
     // Extension APIs
     void extensionIsAllowedIncognitoAccess(CompletionHandler<void(bool)>&&);
+#if PLATFORM(HAIKU)
+    void extensionIsAllowedFileSchemeAccess(CompletionHandler<void(bool)>&&);
+#endif
 
     // Runtime Error Reporting
     void didEncounterScriptError(const String& message, const String& sourceURL, uint32_t lineNumber, uint32_t columnNumber, WebExtensionContentWorldType);
 
     // Menus APIs
     bool isMenusMessageAllowed(IPC::Decoder&);
+#if PLATFORM(HAIKU)
+    void menusCreateWithCallback(const WebExtensionMenuItemParameters&, bool explicitIdentifier, const std::optional<WTF::UUID>&, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
+    void menusUpdateWithCallback(const String&, const WebExtensionMenuItemParameters&, bool callbackSpecified, const std::optional<WTF::UUID>&, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
+    void removeMenusClickHandlers(const Vector<WTF::UUID>&);
+#endif
     void menusCreate(const WebExtensionMenuItemParameters&, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
     void menusUpdate(const String& identifier, const WebExtensionMenuItemParameters&, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
     void menusRemove(const String& identifier, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
@@ -988,9 +1171,18 @@ private:
 
     // Permissions APIs
     void permissionsGetAll(CompletionHandler<void(Vector<String>&& permissions, Vector<String>&& origins)>&&);
+#if PLATFORM(HAIKU)
+    void permissionsContains(HashSet<String> permissions, HashSet<String> origins, CompletionHandler<void(std::expected<bool, WebExtensionError>&&)>&&);
+    void permissionsRequest(HashSet<String> permissions, HashSet<String> origins, bool userGesture, CompletionHandler<void(std::expected<bool, WebExtensionError>&&)>&&);
+    void permissionsRemove(HashSet<String> permissions, HashSet<String> origins, CompletionHandler<void(std::expected<bool, WebExtensionError>&&)>&&);
+    WebExtensionPermissionState nativePermissionState() const;
+    std::expected<void, String> restoreNativePermissionState();
+    std::expected<void, WebExtensionError> commitNativePermissionState(PermissionsMap&&, PermissionMatchPatternsMap&&, const String& callingAPI);
+#else
     void permissionsContains(HashSet<String> permissions, HashSet<String> origins, CompletionHandler<void(bool)>&&);
     void permissionsRequest(HashSet<String> permissions, HashSet<String> origins, CompletionHandler<void(bool)>&&);
     void permissionsRemove(HashSet<String> permissions, HashSet<String> origins, CompletionHandler<void(bool)>&&);
+#endif
     void firePermissionsEventListenerIfNecessary(WebExtensionEventListenerType, const PermissionsSet&, const MatchPatternSet&);
 
     // Port APIs
@@ -1000,7 +1192,7 @@ private:
     void disconnectPortsForPage(WebPageProxy&);
     void addPorts(WebExtensionContentWorldType sourceContentWorldType, WebExtensionContentWorldType targetContentWorldType, WebExtensionPortChannelIdentifier, HashCountedSet<WebPageProxyIdentifier>&&);
     void removePort(WebExtensionContentWorldType sourceContentWorldType, WebExtensionContentWorldType targetContentWorldType, WebExtensionPortChannelIdentifier, WebPageProxyIdentifier);
-    void addNativePort(WebExtensionMessagePort&);
+    bool addNativePort(WebExtensionMessagePort&);
     void removeNativePort(WebExtensionMessagePort&);
     unsigned openPortCount(WebExtensionContentWorldType, WebExtensionPortChannelIdentifier);
     bool isPortConnected(WebExtensionContentWorldType sourceContentWorldType, WebExtensionContentWorldType targetContentWorldType, WebExtensionPortChannelIdentifier);
@@ -1009,7 +1201,7 @@ private:
     void firePortMessageEventsIfNeeded(WebExtensionContentWorldType, std::optional<WebPageProxyIdentifier>, WebExtensionPortChannelIdentifier, const String& messageJSON, bool userGesture);
     void fireQueuedPortMessageEventsIfNeeded(WebExtensionContentWorldType, WebExtensionPortChannelIdentifier);
     void sendQueuedNativePortMessagesIfNeeded(WebExtensionPortChannelIdentifier);
-    void firePortDisconnectEventIfNeeded(WebExtensionContentWorldType sourceContentWorldType, WebExtensionContentWorldType targetContentWorldType, WebExtensionPortChannelIdentifier);
+    void firePortDisconnectEventIfNeeded(WebExtensionContentWorldType sourceContentWorldType, WebExtensionContentWorldType targetContentWorldType, WebExtensionPortChannelIdentifier, const std::optional<String>& errorMessage = std::nullopt);
 
     // Runtime APIs
     void runtimeGetBackgroundPage(CompletionHandler<void(std::expected<std::optional<WebCore::PageIdentifier>, WebExtensionError>&&)>&&);
@@ -1034,6 +1226,15 @@ private:
     void scriptingGetRegisteredScripts(const Vector<String>&, CompletionHandler<void(std::expected<Vector<WebExtensionRegisteredScriptParameters>, WebExtensionError>&&)>&&);
     void scriptingUnregisterContentScripts(const Vector<String>&, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
     bool createInjectedContentForScripts(const Vector<WebExtensionRegisteredScriptParameters>&, WebExtensionDynamicScripts::WebExtensionRegisteredScript::FirstTimeRegistration, DynamicInjectedContentsMap&, NSString *callingAPIName, NSString **errorMessage);
+    bool createInjectedContentForScripts(const Vector<WebExtensionRegisteredScriptParameters>&, WebExtensionDynamicScripts::WebExtensionRegisteredScript::FirstTimeRegistration, DynamicInjectedContentsMap&, const String& callingAPIName, String* errorMessage);
+#if PLATFORM(HAIKU)
+    // scripting.executeScript() through the native tab-script executor: results
+    // stay structured clones and carry the frame they came from.
+    void scriptingExecuteScriptNative(const WebExtensionScriptInjectionParameters&, bool injectImmediately, bool userGesture, CompletionHandler<void(std::expected<Vector<WebExtensionTabScriptFrameResult>, WebExtensionError>&&)>&&);
+    void executeNativeScriptSources(WebPageProxy&, API::ContentWorld& contentScriptWorld, bool mainWorld, const WebExtensionTabScriptTarget&, const URL& authorizedURL, WebExtensionDynamicScripts::SourcePairs&&, size_t index, bool userGesture, CompletionHandler<void(WebExtensionTabScriptExecutionResult&&)>&&);
+    void insertNativeCSS(WebExtensionTab*, const WebExtensionScriptInjectionParameters&, const String& apiName, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
+    void removeNativeCSS(WebExtensionTab*, const WebExtensionScriptInjectionParameters&, const String& apiName, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
+#endif
 
     // Sidebar APIs
 #if ENABLE(WK_WEB_EXTENSIONS_SIDEBAR)
@@ -1082,6 +1283,9 @@ private:
     void tabsSetZoom(WebPageProxyIdentifier, std::optional<WebExtensionTabIdentifier>, double, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
     void tabsMove(Vector<WebExtensionTabIdentifier>, std::optional<WebExtensionWindowIdentifier>, double, CompletionHandler<void(std::expected<Vector<WebExtensionTabParameters>, WebExtensionError>&&)>&&);
     void tabsRemove(Vector<WebExtensionTabIdentifier>, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
+#if PLATFORM(HAIKU)
+    void tabsExecuteScriptNative(WebPageProxyIdentifier, std::optional<WebExtensionTabIdentifier>, const WebExtensionTabScriptParameters&, bool userGesture, CompletionHandler<void(std::expected<Vector<RefPtr<WebCore::SerializedScriptValue>>, WebExtensionError>&&)>&&);
+#endif
     void tabsExecuteScript(WebPageProxyIdentifier, std::optional<WebExtensionTabIdentifier>, const WebExtensionScriptInjectionParameters&, bool userGesture, CompletionHandler<void(std::expected<Vector<WebExtensionScriptInjectionResultParameters>, WebExtensionError>&&)>&&);
     void tabsInsertCSS(WebPageProxyIdentifier, std::optional<WebExtensionTabIdentifier>, const WebExtensionScriptInjectionParameters&, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
     void tabsRemoveCSS(WebPageProxyIdentifier, std::optional<WebExtensionTabIdentifier>, const WebExtensionScriptInjectionParameters&, CompletionHandler<void(std::expected<void, WebExtensionError>&&)>&&);
@@ -1113,6 +1317,19 @@ private:
 
     // webRequest support.
     bool hasPermissionToSendWebRequestEvent(WebExtensionTab*, const URL& resourceURL, const ResourceLoadInfo&);
+#if PLATFORM(HAIKU)
+public:
+    // Blocking webRequest (UIProcess/Extensions/haiku/WebExtensionContextWebRequestBlockingHaiku.cpp).
+    bool hasBlockingWebRequestListenersHaiku(WebExtensionEventListenerType) const;
+    bool canBlockWebRequestHaiku(WebPageProxyIdentifier, const URL& resourceURL, const ResourceLoadInfo&, uint8_t phase);
+    // Invokes this extension's blocking listeners for phase and replies with
+    // (listener order, JSON reply) pairs. Replies are untrusted and undecoded.
+    void dispatchBlockingWebRequestHaiku(uint8_t phase, WebPageProxyIdentifier, const ResourceLoadInfo&, const WebCore::ResourceRequest&, const std::optional<WebCore::ResourceResponse>&, const std::optional<WebCore::AuthenticationChallenge>&, CompletionHandler<void(Vector<std::pair<uint64_t, String>>&&)>&&);
+
+private:
+    void addBlockingWebRequestListenerHaiku(WebCore::FrameIdentifier, WebExtensionEventListenerType);
+    void removeBlockingWebRequestListenerHaiku(WebCore::FrameIdentifier, WebExtensionEventListenerType, uint64_t removedCount);
+#endif
 
     // IPC::MessageReceiver.
     void didReceiveMessage(IPC::Connection&, IPC::Decoder&) override;
@@ -1129,6 +1346,13 @@ private:
     RetainPtr<NSMutableDictionary> m_state;
 #elif ENABLE(2022_GLIB_API)
     GRefPtr<GKeyFile> m_state;
+#elif PLATFORM(HAIKU)
+    RefPtr<JSON::Object> m_state;
+    RefPtr<NativePermissionChangeHandler> m_nativePermissionChangeHandler;
+    uint64_t m_nativePermissionChangeHandlerGeneration { 0 };
+    RefPtr<ExtensionActionPopupHaiku> m_nativeActionPopup;
+    RefPtr<NativeActionChangeHandler> m_nativeActionChangeHandler;
+    uint64_t m_nativeActionChangeHandlerGeneration { 0 };
 #endif
     Vector<Ref<API::Error>> m_errors;
 
@@ -1147,6 +1371,15 @@ private:
 
     RefPtr<API::ContentWorld> m_contentScriptWorld;
 
+#if PLATFORM(HAIKU)
+    bool m_nativePermissionStateInitialized { false };
+    bool m_nativeGrantedPermissionsWereSet { false };
+    bool m_nativeGrantedPatternsWereSet { false };
+    bool m_nativePermissionTransaction { false };
+    uint64_t m_nativePermissionRevocationGeneration { 0 };
+    PermissionsSet m_nativeRemovedPermissionsBeforeLoad;
+    Vector<std::pair<Ref<WebExtensionMatchPattern>, EqualityOnly>> m_nativeRemovedPatternsBeforeLoad;
+#endif
     PermissionsMap m_grantedPermissions;
     PermissionsMap m_deniedPermissions;
 
@@ -1172,6 +1405,14 @@ private:
     EventListenerTypeCountedSet m_backgroundContentEventListeners;
     EventListenerTypeFrameMap m_eventListenerFrames;
 
+#if PLATFORM(HAIKU)
+    HashMap<WebExtensionEventListenerType, WeakFrameCountedSet> m_blockingWebRequestListenerFramesHaiku;
+    WebExtensionLoadPurposeHaiku m_nativeLoadPurpose { WebExtensionLoadPurposeHaiku::UserInitiated };
+    String m_nativeInstallationIdentifier;
+    uint64_t m_nativeInstallationOrder { 0 };
+    WebExtensionPrivacySettingsHaiku m_nativePrivacySettings;
+    uint64_t m_nativePrivacyGeneration { 0 };
+#endif
     bool m_shouldFireStartupEvent { false };
     InstallReason m_installReason { InstallReason::None };
     String m_previousVersion;
@@ -1194,6 +1435,16 @@ private:
 #elif ENABLE(2022_GLIB_API)
     GRefPtr<WebKitWebView> m_backgroundWebView;
     GWeakPtr<WebKitWebExtensionContext> m_delegate;
+#elif PLATFORM(HAIKU)
+    RefPtr<WebPageProxy> m_backgroundWebView;
+    RefPtr<WebView> m_backgroundPageClient;
+#if ENABLE(WK_WEB_EXTENSIONS_OFFSCREEN)
+    // chrome.offscreen: at most one hidden extension document, owned like the background page.
+    RefPtr<WebPageProxy> m_offscreenWebView;
+    RefPtr<WebView> m_offscreenPageClient;
+    Variant<std::monostate, Ref<ProcessThrottlerActivity>, Ref<ProcessActivityGroup>> m_offscreenWebViewActivity;
+    Vector<CompletionHandler<void(std::expected<void, WebExtensionError>&&)>> m_offscreenDocumentLoadCompletionHandlers;
+#endif
 #endif
     Variant<std::monostate, Ref<ProcessThrottlerActivity>, Ref<ProcessActivityGroup>> m_backgroundWebViewActivity;
     RefPtr<API::Error> m_backgroundContentLoadError;
@@ -1215,6 +1466,7 @@ private:
     HashMap<Ref<WebExtensionMatchPattern>, UserScriptVector> m_injectedScriptsPerPatternMap;
     HashMap<Ref<WebExtensionMatchPattern>, UserStyleSheetVector> m_injectedStyleSheetsPerPatternMap;
 
+    uint64_t m_registeredContentScriptsGeneration { 0 };
     HashMap<String, Ref<WebExtensionDynamicScripts::WebExtensionRegisteredScript>> m_registeredScriptsMap;
     RefPtr<WebExtensionRegisteredScriptsSQLiteStore> m_registeredContentScriptsStorage;
 
@@ -1234,11 +1486,17 @@ private:
 #endif // ENABLE(WK_WEB_EXTENSIONS_SIDEBAR)
 
     PortCountedSet m_ports;
-    PageProxyIdentifierPortMap m_pagePortMap;
+    WebExtensionPagePortMap m_pagePortMap;
     PortQueuedMessageMap m_portQueuedMessages;
     NativePortMap m_nativePortMap;
 
     mutable WindowIdentifierMap m_windowMap;
+#if PLATFORM(HAIKU)
+    HashMap<uint64_t, WebExtensionWindowIdentifier> m_nativeWindowEventIdentifiers;
+    // The public identity last reported for each registered page, kept until
+    // its removal event: the wrapper itself may already have been pruned.
+    HashMap<WebPageProxyIdentifier, std::pair<WebExtensionTabIdentifier, WebExtensionWindowIdentifier>> m_nativeTabEventIdentifiers;
+#endif
     mutable WindowIdentifierVector m_windowOrderVector;
     mutable std::optional<WebExtensionWindowIdentifier> m_focusedWindowIdentifier;
 
@@ -1254,6 +1512,12 @@ private:
     bool m_populatedCommands { false };
 
     String m_declarativeNetRequestContentRuleListFilePath;
+#if PLATFORM(HAIKU)
+    uint64_t m_nativeDNRLoadGeneration { 0 };
+    RefPtr<API::ContentRuleList> m_nativeDNRRules;
+    String m_nativeDNRRuleFile;
+    size_t m_nativeDNRStaticRuleCount { 0 };
+#endif
     DeclarativeNetRequestMatchedRuleVector m_matchedRules;
     RefPtr<WebExtensionDeclarativeNetRequestSQLiteStore> m_declarativeNetRequestDynamicRulesStore;
     RefPtr<WebExtensionDeclarativeNetRequestSQLiteStore> m_declarativeNetRequestSessionRulesStore;
@@ -1261,6 +1525,9 @@ private:
     HashSet<double> m_sessionRulesIDs;
     HashSet<double> m_dynamicRulesIDs;
 
+#if PLATFORM(HAIKU)
+    HashMap<String, WTF::UUID> m_menuClickHandlerIdentifiers;
+#endif
     MenuItemMap m_menuItems;
     MenuItemVector m_mainMenuItems;
 
@@ -1274,12 +1541,16 @@ private:
         String message;
 #if PLATFORM(COCOA)
         RetainPtr<id> argument;
+#elif PLATFORM(HAIKU)
+        Ref<JSON::Value> argument;
 #endif
     };
 
+#if !PLATFORM(HAIKU)
     size_t m_testMessageListenersCount { 0 };
     size_t m_testStartedListenersCount { 0 };
     size_t m_testFinishedListenersCount { 0 };
+#endif
 
     Deque<TestMessage> m_testMessageQueue;
     Deque<TestMessage> m_testStartedQueue;
@@ -1289,6 +1560,8 @@ private:
     void sendQueuedTestMessagesIfNeeded(WebExtensionEventListenerType);
 #if PLATFORM(COCOA)
     void addTestMessageToQueue(const String& message, id argument, WebExtensionEventListenerType);
+#elif PLATFORM(HAIKU)
+    void addTestMessageToQueue(const String& message, Ref<JSON::Value> argument, WebExtensionEventListenerType);
 #endif
 };
 

@@ -38,6 +38,7 @@ public:
         None,
         WebAudioBufferList,
         GStreamerAudioData,
+        HaikuAudioData,
     };
 
     virtual Kind kind() const { return Kind::None; }

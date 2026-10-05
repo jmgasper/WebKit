@@ -31,6 +31,10 @@
 #include <wtf/MainThread.h>
 #include <wtf/TZoneMallocInlines.h>
 
+#if PLATFORM(HAIKU)
+#include <cstdlib>
+#endif
+
 namespace WebKit {
 using namespace WebCore;
 
@@ -127,7 +131,25 @@ void CoordinatedSceneState::commitPendingLayers()
 
 void CoordinatedSceneState::flushCompositingState(const OptionSet<CompositionReason>& reasons)
 {
+#if PLATFORM(HAIKU)
+    // The set of layers belongs to the rendering update that made it. A
+    // composition for a scroll alone, while that update still waits for its
+    // tiles, took the new set and released the layers the page had replaced:
+    // their replacements are attached by the update (children, tiles), so
+    // until it came the frames showed neither. On Reddit, which makes the
+    // layers of a post's picture anew as the page changes around it, the
+    // picture was gone for a frame or more of every such scroll.
+    // SUMMIT_COMMIT_LAYERS_WITH_UPDATE=0 commits with every composition, as
+    // before.
+    static const bool commitsWithUpdate = [] {
+        const char* value = getenv("SUMMIT_COMMIT_LAYERS_WITH_UPDATE");
+        return !value || value[0] != '0' || value[1];
+    }();
+    if (!commitsWithUpdate || reasons.contains(CompositionReason::RenderingUpdate))
+        commitPendingLayers();
+#else
     commitPendingLayers();
+#endif
 
     {
         Locker stateLock { m_stateLock };

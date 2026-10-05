@@ -30,7 +30,10 @@
 #include "APIPageConfiguration.h"
 #include "APIPageHandle.h"
 #include "APIUIClient.h"
+// The authenticators this manager drives are not built on this port.
+#if !PLATFORM(HAIKU)
 #include "AuthenticatorManager.h"
+#endif
 #include "DownloadProxyMap.h"
 #include "DrawingAreaProxy.h"
 #include "GPUProcessConnectionParameters.h"
@@ -945,6 +948,14 @@ void WebProcessProxy::shutDown()
 #if ENABLE(WEBASSEMBLY_DEBUGGER) && ENABLE(REMOTE_INSPECTOR)
     if (m_wasmDebuggerDebuggable) [[unlikely]]
         destroyWasmDebuggerTarget();
+#endif
+
+#if PLATFORM(HAIKU)
+    // A process handles the end of its connection on its main thread; a hung
+    // one never does and would stay behind (WebPageProxy::tryCloseTimedOut()
+    // closes pages of such processes).
+    if (m_isResponsive == NoOrMaybe::No)
+        terminate();
 #endif
 
     shutDownProcess();
@@ -2020,6 +2031,12 @@ bool WebProcessProxy::canBeAddedToWebProcessCache() const
     if (WebKit::isInspectorProcessPool(processPool()))
         return false;
 
+#if PLATFORM(HAIKU)
+    // A hung process has to end (see maybeShutDown()), not wait to be reused.
+    if (m_isResponsive == NoOrMaybe::No)
+        return false;
+#endif
+
     return true;
 }
 
@@ -2041,6 +2058,20 @@ void WebProcessProxy::maybeShutDown()
         protect(processPool())->disconnectProcess(*this);
         return;
     }
+
+#if PLATFORM(HAIKU)
+    // A hung process never sends the replies it owes (the close request's, for
+    // one), and each keeps a shutdown-preventing scope open, so it would stay
+    // behind for good once its last page closed (WebPageProxy::tryCloseTimedOut()
+    // closes pages of such processes).
+    if (m_isResponsive == NoOrMaybe::No && state() == State::Running && !m_isShuttingDown
+        && m_pageMap.isEmpty() && m_remotePages.isEmptyIgnoringNullReferences()
+        && m_suspendedPages.isEmptyIgnoringNullReferences()
+        && m_provisionalPages.isEmptyIgnoringNullReferences() && !m_frameProcessCount) {
+        requestTermination(ProcessTerminationReason::Unresponsive);
+        return;
+    }
+#endif
 
     // shutDownProcess() can re-entrantly trigger maybeShutDown() when
     // cancelAsyncReplyHandlers() releases shutdown-preventing scope tokens.

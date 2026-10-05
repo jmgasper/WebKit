@@ -960,6 +960,7 @@ static inline uintptr_t pas_pair_high(pas_pair pair)
 
 #endif
 
+#if LIBPAS_ENABLED
 static inline bool pas_compare_and_swap_pair_weak(void* raw_ptr,
                                                   pas_pair old_value, pas_pair new_value)
 {
@@ -1106,6 +1107,7 @@ PAS_IGNORE_WARNINGS_END
     __atomic_store_n((pas_pair*)raw_ptr, value, __ATOMIC_RELAXED);
 #endif
 }
+#endif
 
 static inline uint64_t pas_atomic_fetch_add_uint64_relaxed(uint64_t* ptr, uint64_t addend)
 {

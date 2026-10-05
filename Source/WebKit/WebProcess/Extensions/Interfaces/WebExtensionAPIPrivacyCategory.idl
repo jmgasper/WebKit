@@ -1,0 +1,14 @@
+/* Copyright (C) 2026 KunanyiOS contributors. SPDX-License-Identifier: BSD-2-Clause */
+[
+    Conditional=WK_WEB_EXTENSIONS,
+    MainWorldOnly,
+    UseCPPAPI
+] interface WebExtensionAPIPrivacyCategory {
+    [Dynamic] readonly attribute WebExtensionAPIPrivacySetting networkPredictionEnabled;
+    [Dynamic] readonly attribute WebExtensionAPIPrivacySetting webRTCIPHandlingPolicy;
+    [Dynamic] readonly attribute WebExtensionAPIPrivacySetting hyperlinkAuditingEnabled;
+    [Dynamic] readonly attribute WebExtensionAPIPrivacySetting autofillAddressEnabled;
+    [Dynamic] readonly attribute WebExtensionAPIPrivacySetting autofillCreditCardEnabled;
+    [Dynamic] readonly attribute WebExtensionAPIPrivacySetting autofillEnabled;
+    [Dynamic] readonly attribute WebExtensionAPIPrivacySetting passwordSavingEnabled;
+};

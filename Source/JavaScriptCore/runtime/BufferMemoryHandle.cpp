@@ -38,6 +38,12 @@
 #include <wtf/OSAllocator.h>
 #include <wtf/Platform.h>
 #include <wtf/PrintStream.h>
+
+#if OS(HAIKU)
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#endif
 #include <wtf/TZoneMallocInlines.h>
 #include <wtf/Vector.h>
 
@@ -79,6 +85,24 @@ void BufferMemoryResult::dump(PrintStream& out) const
     out.print("{basePtr = ", RawPointer(basePtr), ", kind = ", kind, "}");
 }
 
+#if OS(HAIKU)
+// Haiku's mprotect() visits every page of its range, so changing the protection
+// of a signaling memory's 4 GiB reservation takes about 60 ms. A memory used to
+// be protected twice (its tail made inaccessible when created, all of it made
+// writable again before the allocator took it back), which made every
+// WebAssembly memory cost ~130 ms to create and free (GitHub issue #6). Here
+// the reservation is mapped inaccessible, the memory opens only the pages it
+// uses (signalingMemoryStartsInaccessible), and freeing unmaps it.
+bool BufferMemoryHandle::signalingMemoryStartsInaccessible()
+{
+    static const bool enabled = [] {
+        const char* value = getenv("SUMMIT_WASM_RESERVE_INACCESSIBLE");
+        return !value || strcmp(value, "0");
+    }();
+    return enabled;
+}
+#endif
+
 BufferMemoryResult BufferMemoryManager::tryAllocateFastMemory()
 {
     BufferMemoryResult result = [&] {
@@ -86,7 +110,15 @@ BufferMemoryResult BufferMemoryManager::tryAllocateFastMemory()
         if (m_fastMemories.size() >= m_maxFastMemoryCount)
             return BufferMemoryResult(nullptr, BufferMemoryResult::Kind::SyncTryToReclaimMemory);
 
-        void* result = Gigacage::tryAllocateZeroedVirtualPages(Gigacage::Primitive, BufferMemoryHandle::fastMappedBytes());
+        void* result;
+#if OS(HAIKU)
+        if (BufferMemoryHandle::signalingMemoryStartsInaccessible()) {
+            result = mmap(nullptr, BufferMemoryHandle::fastMappedBytes(), PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+            if (result == MAP_FAILED)
+                result = nullptr;
+        } else
+#endif
+            result = Gigacage::tryAllocateZeroedVirtualPages(Gigacage::Primitive, BufferMemoryHandle::fastMappedBytes());
         if (!result)
             return BufferMemoryResult(nullptr, BufferMemoryResult::Kind::SyncTryToReclaimMemory);
 
@@ -106,7 +138,12 @@ void BufferMemoryManager::freeFastMemory(void* basePtr)
 {
     {
         Locker locker { m_lock };
-        Gigacage::freeVirtualPages(Gigacage::Primitive, basePtr, BufferMemoryHandle::fastMappedBytes());
+#if OS(HAIKU)
+        if (BufferMemoryHandle::signalingMemoryStartsInaccessible())
+            munmap(basePtr, BufferMemoryHandle::fastMappedBytes());
+        else
+#endif
+            Gigacage::freeVirtualPages(Gigacage::Primitive, basePtr, BufferMemoryHandle::fastMappedBytes());
         m_fastMemories.removeFirst(basePtr);
     }
 
@@ -117,7 +154,16 @@ BufferMemoryResult BufferMemoryManager::tryAllocateGrowableBoundsCheckingMemory(
 {
     BufferMemoryResult result = [&] {
         Locker locker { m_lock };
-        void* result = Gigacage::tryAllocateZeroedVirtualPages(Gigacage::Primitive, mappedCapacity);
+        void* result;
+#if OS(HAIKU)
+        // As with signaling memories: reserved inaccessible, opened as used.
+        if (BufferMemoryHandle::signalingMemoryStartsInaccessible()) {
+            result = mmap(nullptr, mappedCapacity, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+            if (result == MAP_FAILED)
+                result = nullptr;
+        } else
+#endif
+            result = Gigacage::tryAllocateZeroedVirtualPages(Gigacage::Primitive, mappedCapacity);
         if (!result)
             return BufferMemoryResult(nullptr, BufferMemoryResult::Kind::SyncTryToReclaimMemory);
 
@@ -135,7 +181,12 @@ void BufferMemoryManager::freeGrowableBoundsCheckingMemory(void* basePtr, size_t
 {
     {
         Locker locker { m_lock };
-        Gigacage::freeVirtualPages(Gigacage::Primitive, basePtr, mappedCapacity);
+#if OS(HAIKU)
+        if (BufferMemoryHandle::signalingMemoryStartsInaccessible())
+            munmap(basePtr, mappedCapacity);
+        else
+#endif
+            Gigacage::freeVirtualPages(Gigacage::Primitive, basePtr, mappedCapacity);
         m_growableBoundsCheckingMemories.erase(std::make_pair(std::bit_cast<uintptr_t>(basePtr), mappedCapacity));
     }
 
@@ -256,7 +307,11 @@ BufferMemoryHandle::~BufferMemoryHandle()
             // nullBasePointer's zero-sized memory is not used for MemoryMode::Signaling.
             constexpr bool readable = true;
             constexpr bool writable = true;
-            OSAllocator::protect(memory, BufferMemoryHandle::fastMappedBytes(), readable, writable);
+#if OS(HAIKU)
+            // The reservation is unmapped, not reused: no need to open it first.
+            if (!signalingMemoryStartsInaccessible())
+#endif
+                OSAllocator::protect(memory, BufferMemoryHandle::fastMappedBytes(), readable, writable);
             BufferMemoryManager::singleton().freeFastMemory(memory);
             break;
         }
@@ -275,7 +330,10 @@ BufferMemoryHandle::~BufferMemoryHandle()
                 }
                 constexpr bool readable = true;
                 constexpr bool writable = true;
-                OSAllocator::protect(memory, m_mappedCapacity, readable, writable);
+#if OS(HAIKU)
+                if (!signalingMemoryStartsInaccessible())
+#endif
+                    OSAllocator::protect(memory, m_mappedCapacity, readable, writable);
                 BufferMemoryManager::singleton().freeGrowableBoundsCheckingMemory(memory, m_mappedCapacity);
                 break;
             }

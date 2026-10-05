@@ -25,13 +25,14 @@
 
 [
     Conditional=WK_WEB_EXTENSIONS,
+    UseCPPAPI,
 ] interface WebExtensionAPIPort {
 
     readonly attribute DOMString name;
     [NeedsScriptContext] readonly attribute any sender;
-    readonly attribute any error;
+    [NeedsScriptContext] readonly attribute any error;
 
-    [RaisesException, NeedsFrame] void postMessage([Serialization=JSON] any message);
+    [RaisesStringException, NeedsFrame] void postMessage([Serialization=JSON] any message);
     void disconnect();
 
     readonly attribute WebExtensionAPIEvent onDisconnect;

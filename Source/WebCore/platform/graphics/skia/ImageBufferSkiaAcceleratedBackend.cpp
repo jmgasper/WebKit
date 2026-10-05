@@ -47,6 +47,13 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 #include <wtf/TZoneMallocInlines.h>
 
+#if PLATFORM(HAIKU)
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#endif
+
 #if USE(COORDINATED_GRAPHICS)
 #include "BitmapTexture.h"
 #include "CoordinatedPlatformLayerBufferNativeImage.h"
@@ -131,6 +138,12 @@ std::unique_ptr<ImageBufferSkiaAcceleratedBackend> ImageBufferSkiaAcceleratedBac
     auto surface = SkSurfaces::RenderTarget(grContext, skgpu::Budgeted::kYes, imageInfo, msaaSampleCount, kTopLeft_GrSurfaceOrigin, &properties);
     if (!surface || !surface->getCanvas())
         return nullptr;
+#if PLATFORM(HAIKU)
+    // New GPU memory is not zeroed on NVK: a canvas that has not been drawn
+    // yet showed what the memory held before (xbitlabs.com's FPS test showed
+    // rows of an advertisement in its empty canvas). Start transparent.
+    surface->getCanvas()->clear(SkColors::kTransparent);
+#endif
 
     return create(parameters, creationContext, WTF::move(surface));
 }
@@ -193,17 +206,57 @@ void ImageBufferSkiaAcceleratedBackend::ensureCanvasRecordingContext()
     m_hasActiveRecording = true;
 }
 
+#if PLATFORM(HAIKU)
+// SUMMIT_CANVAS_TRACE=1: canvas flushes and waits for the GPU that take over 20 ms.
+static bool canvasTraceHaiku()
+{
+    static const bool enabled = [] {
+        const char* value = getenv("SUMMIT_CANVAS_TRACE");
+        return value && !strcmp(value, "1");
+    }();
+    return enabled;
+}
+
+// Once a second with SUMMIT_CANVAS_TRACE=1: what the canvases' flushes did.
+enum class CanvasEventHaiku { Flush, Replay, NoRecording, NoGrContext, NotCurrent, Prepare, PrepareNoDelegate, PrepareNoImage, Count };
+static void countCanvasEventHaiku(CanvasEventHaiku event)
+{
+    if (!canvasTraceHaiku())
+        return;
+    static unsigned counts[static_cast<unsigned>(CanvasEventHaiku::Count)];
+    static MonotonicTime since = MonotonicTime::now();
+    ++counts[static_cast<unsigned>(event)];
+    auto now = MonotonicTime::now();
+    if (now - since < 1_s)
+        return;
+    fprintf(stderr, "Summit canvas: per second: flush %u, replay %u (none recorded %u, no GrContext %u, not current %u), prepare %u (no delegate %u, no image %u)\n",
+        counts[0], counts[1], counts[2], counts[3], counts[4], counts[5], counts[6], counts[7]);
+    std::fill(std::begin(counts), std::end(counts), 0);
+    since = now;
+}
+#define COUNT_CANVAS_EVENT_HAIKU(event) countCanvasEventHaiku(CanvasEventHaiku::event)
+#else
+#define COUNT_CANVAS_EVENT_HAIKU(event)
+#endif
+
 void ImageBufferSkiaAcceleratedBackend::replayCanvasRecordingContextIfNeeded()
 {
-    if (!m_canvasRecordingContext || !m_hasActiveRecording)
+    if (!m_canvasRecordingContext || !m_hasActiveRecording) {
+        COUNT_CANVAS_EVENT_HAIKU(NoRecording);
         return;
+    }
 
     auto* grContext = this->grContext();
-    if (!grContext)
+    if (!grContext) {
+        COUNT_CANVAS_EVENT_HAIKU(NoGrContext);
         return;
+    }
 
-    if (!PlatformDisplay::sharedDisplay().skiaGLContext()->makeContextCurrent())
+    if (!PlatformDisplay::sharedDisplay().skiaGLContext()->makeContextCurrent()) {
+        COUNT_CANVAS_EVENT_HAIKU(NotCurrent);
         return;
+    }
+    COUNT_CANVAS_EVENT_HAIKU(Replay);
 
     ASSERT(grContext == PlatformDisplay::sharedDisplay().skiaGrContext());
 
@@ -221,7 +274,19 @@ void ImageBufferSkiaAcceleratedBackend::replayCanvasRecordingContextIfNeeded()
 #if USE(TEXTURE_MAPPER)
     ASSERT(!recording->hasFences());
 #endif
+#if PLATFORM(HAIKU)
+    const auto playbackStartedAt = canvasTraceHaiku() ? MonotonicTime::now() : MonotonicTime();
+#endif
     recording->picture()->playback(surfaceCanvas);
+#if PLATFORM(HAIKU)
+    if (playbackStartedAt) {
+        static unsigned replays;
+        auto took = MonotonicTime::now() - playbackStartedAt;
+        if (took > 20_ms || !(++replays % 120))
+            fprintf(stderr, "Summit canvas: replay %.1f ms, %d operations, %dx%d\n", took.milliseconds(),
+                recording->picture()->approximateOpCount(true), size().width(), size().height());
+    }
+#endif
 
     // Undo unbalanced saves from the picture playback on the surface canvas.
     surfaceCanvas->restoreToCount(surfaceSaveCount);
@@ -236,7 +301,14 @@ void ImageBufferSkiaAcceleratedBackend::replayCanvasRecordingContextIfNeeded()
 
 void ImageBufferSkiaAcceleratedBackend::flushContext()
 {
+    COUNT_CANVAS_EVENT_HAIKU(Flush);
+#if PLATFORM(HAIKU)
+    const auto startedAt = canvasTraceHaiku() ? MonotonicTime::now() : MonotonicTime();
+#endif
     replayCanvasRecordingContextIfNeeded();
+#if PLATFORM(HAIKU)
+    const auto replayedAt = startedAt ? MonotonicTime::now() : MonotonicTime();
+#endif
 
     auto* grContext = this->grContext();
     if (!grContext)
@@ -247,17 +319,31 @@ void ImageBufferSkiaAcceleratedBackend::flushContext()
 
     ASSERT(grContext == PlatformDisplay::sharedDisplay().skiaGrContext());
     grContext->flushAndSubmit(m_surface.get(), GrSyncCpu::kNo);
+#if PLATFORM(HAIKU)
+    if (startedAt) {
+        auto now = MonotonicTime::now();
+        if ((now - startedAt) > 20_ms)
+            fprintf(stderr, "Summit canvas: flush %.1f ms (replay %.1f, submit %.1f)\n", (now - startedAt).milliseconds(),
+                (replayedAt - startedAt).milliseconds(), (now - replayedAt).milliseconds());
+    }
+#endif
 }
+
 
 void ImageBufferSkiaAcceleratedBackend::prepareForDisplay()
 {
+    COUNT_CANVAS_EVENT_HAIKU(Prepare);
 #if USE(COORDINATED_GRAPHICS)
-    if (!m_layerContentsDisplayDelegate)
+    if (!m_layerContentsDisplayDelegate) {
+        COUNT_CANVAS_EVENT_HAIKU(PrepareNoDelegate);
         return;
+    }
 
     auto image = createNativeImageReference();
-    if (!image)
+    if (!image) {
+        COUNT_CANVAS_EVENT_HAIKU(PrepareNoImage);
         return;
+    }
 
     auto* grContext = this->grContext();
     if (!grContext)

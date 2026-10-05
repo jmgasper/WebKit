@@ -311,6 +311,14 @@
 #define ENABLE_INSPECTOR_TELEMETRY 0
 #endif
 
+/* The coordinated scrolling tree asks wheel events which part of a gesture they
+   are. Those answers are inline in PlatformWheelEvent.h, so they cost the port
+   nothing; this has to come before the default below, which would otherwise
+   settle the question first. */
+#if !defined(ENABLE_KINETIC_SCROLLING) && PLATFORM(HAIKU) && USE(COORDINATED_GRAPHICS)
+#define ENABLE_KINETIC_SCROLLING 1
+#endif
+
 #if !defined(ENABLE_KINETIC_SCROLLING)
 #define ENABLE_KINETIC_SCROLLING 0
 #endif
@@ -513,6 +521,23 @@
 #if !defined(ENABLE_RESOURCE_USAGE)
 #define ENABLE_RESOURCE_USAGE 0
 #endif
+
+/* The coordinated scrolling tree runs on its own thread; PlatformEnableGlib.h
+   says the same thing for the ports that reach coordinated graphics through
+   GLib, and the rule is the same one. The tree also asks wheel events which
+   part of a gesture they are, which is the kinetic scrolling API -- inline in
+   PlatformWheelEvent.h, so it costs the port nothing to answer. */
+#if !defined(ENABLE_SCROLLING_THREAD) && PLATFORM(HAIKU) && USE(COORDINATED_GRAPHICS)
+#define ENABLE_SCROLLING_THREAD 1
+#endif
+
+/* Coordinated graphics on Haiku reads every frame back from the GPU and hands
+   it to app_server. Knowing what changed lets both steps copy only that,
+   which matters at 200%, where a frame is 28 MB. */
+#if !defined(ENABLE_DAMAGE_TRACKING) && PLATFORM(HAIKU) && USE(COORDINATED_GRAPHICS)
+#define ENABLE_DAMAGE_TRACKING 1
+#endif
+
 
 #if !defined(ENABLE_SCROLLING_THREAD)
 #define ENABLE_SCROLLING_THREAD 0

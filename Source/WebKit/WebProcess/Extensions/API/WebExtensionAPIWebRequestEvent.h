@@ -31,12 +31,7 @@
 #include "JSWebExtensionWrappable.h"
 #include "WebExtensionAPIObject.h"
 #include "WebExtensionEventListenerType.h"
-
-OBJC_CLASS JSValue;
-OBJC_CLASS NSDictionary;
-OBJC_CLASS NSString;
-OBJC_CLASS NSURL;
-OBJC_CLASS _WKWebExtensionWebRequestFilter;
+#include "WebExtensionWebRequestFilter.h"
 
 namespace WebKit {
 
@@ -44,10 +39,9 @@ class WebExtensionAPIWebRequestEvent : public WebExtensionAPIObject, public JSWe
     WEB_EXTENSION_DECLARE_JS_WRAPPER_CLASS(WebExtensionAPIWebRequestEvent, webRequestEvent, event);
 
 public:
-#if PLATFORM(COCOA)
     struct Listener {
         RefPtr<WebExtensionCallbackHandler> callback;
-        RetainPtr<_WKWebExtensionWebRequestFilter> filter;
+        std::optional<WebExtensionWebRequestFilter> filter;
         Vector<String> extraInfo;
     };
 
@@ -55,15 +49,19 @@ public:
 
     const ListenerVector& listeners() const LIFETIME_BOUND { return m_listeners; }
 
-    void addListener(WebCore::FrameIdentifier, RefPtr<WebExtensionCallbackHandler>, NSDictionary *filter, NSArray *extraInfo, NSString **outExceptionString);
+    void addListener(WebCore::FrameIdentifier, RefPtr<WebExtensionCallbackHandler>, RefPtr<JSON::Value> filter, RefPtr<JSON::Value> extraInfo, String& outExceptionString);
     void removeListener(WebCore::FrameIdentifier, RefPtr<WebExtensionCallbackHandler>);
     bool hasListener(RefPtr<WebExtensionCallbackHandler>);
-#endif
 
     void enumerateListeners(WebExtensionTabIdentifier, WebExtensionWindowIdentifier, const ResourceLoadInfo&, NOESCAPE const Function<void(WebExtensionCallbackHandler&, const Vector<String>&)>&);
-    void invokeListenersWithArgument(NSDictionary *argument, WebExtensionTabIdentifier, WebExtensionWindowIdentifier, const ResourceLoadInfo&);
+    void invokeListenersWithJSONArgument(const String& argument, WebExtensionTabIdentifier, WebExtensionWindowIdentifier, const ResourceLoadInfo&);
 
     void removeAllListeners();
+
+#if PLATFORM(HAIKU)
+    WebExtensionEventListenerType listenerType() const { return m_type; }
+    static bool isBlockingListenerHaiku(const Vector<String>& extraInfo);
+#endif
 
     virtual ~WebExtensionAPIWebRequestEvent()
     {
@@ -80,9 +78,7 @@ private:
 
     Markable<WebCore::FrameIdentifier> m_frameIdentifier;
     WebExtensionEventListenerType m_type;
-#if PLATFORM(COCOA)
     ListenerVector m_listeners;
-#endif
 };
 
 } // namespace WebKit

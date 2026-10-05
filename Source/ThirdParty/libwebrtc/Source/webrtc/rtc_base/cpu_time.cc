@@ -17,7 +17,7 @@
 #include "rtc_base/logging.h"
 #include "rtc_base/time_utils.h"
 
-#if defined(WEBRTC_LINUX)
+#if defined(WEBRTC_LINUX) || defined(__HAIKU__)
 #include <ctime>
 #elif defined(WEBRTC_MAC)
 #include <mach/mach_init.h>
@@ -57,7 +57,7 @@ int64_t GetProcessCpuTimeNanos() {
     RTC_LOG_ERR(LS_ERROR) << "get_info() failed: "
                           << zx_status_get_string(status);
   }
-#elif defined(WEBRTC_LINUX)
+#elif defined(WEBRTC_LINUX) || defined(__HAIKU__)
   struct timespec ts;
   if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts) == 0) {
     return ts.tv_sec * kNumNanosecsPerSec + ts.tv_nsec;
@@ -105,7 +105,7 @@ int64_t GetThreadCpuTimeNanos() {
     RTC_LOG_ERR(LS_ERROR) << "get_info() failed: "
                           << zx_status_get_string(status);
   }
-#elif defined(WEBRTC_LINUX)
+#elif defined(WEBRTC_LINUX) || defined(__HAIKU__)
   struct timespec ts;
   if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) == 0) {
     return ts.tv_sec * kNumNanosecsPerSec + ts.tv_nsec;

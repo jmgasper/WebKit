@@ -1078,14 +1078,12 @@ EXTENSION_INTERFACES = \
     WebExtensionAPIDevToolsNetwork \
     WebExtensionAPIDevToolsPanels \
     WebExtensionAPIDOM \
-    WebExtensionAPIEvent \
     WebExtensionAPIExtension \
     WebExtensionAPILocalization \
     WebExtensionAPIMenus \
     WebExtensionAPINotifications \
     WebExtensionAPIOffscreen \
     WebExtensionAPIPermissions \
-    WebExtensionAPIPort \
     WebExtensionAPIScripting \
     WebExtensionAPISidePanel \
     WebExtensionAPISidebarAction \
@@ -1101,8 +1099,10 @@ EXTENSION_INTERFACES = \
 #
 
 CPP_EXTENSION_INTERFACES = \
+    WebExtensionAPIEvent \
 	WebExtensionAPIAlarms \
 	WebExtensionAPINamespace \
+    WebExtensionAPIPort \
     WebExtensionAPIRuntime \
     WebExtensionAPITest \
 	WebExtensionAPIWebPageNamespace \

@@ -26,6 +26,10 @@
 #include <unistd.h>
 #endif
 
+#ifdef __HAIKU__
+#include <OS.h>
+#endif
+
 #ifdef __linux__
 #include <sys/syscall.h>
 #endif
@@ -471,6 +475,12 @@ pid_t GetTID() {
   // pid_t type without loss of precision, but a zx_koid_t (64-bits) cannot.
   return static_cast<pid_t>(zx_thread_self());
 }
+
+#elif defined(__HAIKU__)
+
+// WEBRTC_WEBKIT_BUILD change: Haiku's pthread_t is a pointer; thread_id is an
+// int32 kernel ID.
+pid_t GetTID() { return static_cast<pid_t>(find_thread(nullptr)); }
 
 #else
 

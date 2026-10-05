@@ -74,6 +74,12 @@ void FFTFrame::doInverseFFT(std::span<float> data)
     ASSERT_NOT_REACHED();
 }
 
+int FFTFrame::minFFTSize()
+{
+    ASSERT_NOT_REACHED();
+    return 0;
+}
+
 void FFTFrame::initialize()
 {
 }

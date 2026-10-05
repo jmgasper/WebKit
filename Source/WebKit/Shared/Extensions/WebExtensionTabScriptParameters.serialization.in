@@ -1,0 +1,40 @@
+# Copyright (C) 2026 KunanyiOS contributors. SPDX-License-Identifier: BSD-2-Clause
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+
+headers: "WebExtensionTabScriptParameters.h" "WebExtensionTabScriptTarget.h"
+
+[CustomHeader] struct WebKit::WebExtensionTabScriptDocument {
+    WebCore::FrameIdentifier frameIdentifier;
+    WebCore::ScriptExecutionContextIdentifier documentIdentifier;
+    URL url;
+}
+
+struct WebKit::WebExtensionTabScriptTarget {
+    WebKit::WebPageProxyIdentifier pageIdentifier;
+    Vector<WebKit::WebExtensionTabScriptDocument> documents;
+}
+
+struct WebKit::WebExtensionTabScriptParameters {
+    std::optional<String> code;
+    std::optional<String> file;
+    std::optional<WebKit::WebExtensionFrameIdentifier> frameIdentifier;
+    std::optional<WTF::UUID> documentIdentifier;
+    WebKit::WebExtensionTabScriptRunAt runAt;
+    bool allFrames;
+    bool matchAboutBlank;
+}
+
+struct WebKit::WebExtensionTabScriptFrameResult {
+    WebKit::WebExtensionFrameIdentifier frameIdentifier;
+    std::optional<WTF::UUID> documentIdentifier;
+    RefPtr<WebCore::SerializedScriptValue> value;
+    String error;
+}
+
+enum class WebKit::WebExtensionTabScriptRunAt : uint8_t {
+    DocumentStart,
+    DocumentEnd,
+    DocumentIdle,
+}
+
+#endif

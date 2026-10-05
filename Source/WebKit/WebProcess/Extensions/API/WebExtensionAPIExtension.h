@@ -46,13 +46,16 @@ public:
         Tab,
     };
 
-#if PLATFORM(COCOA)
     bool isPropertyAllowed(const ASCIILiteral& propertyName, WebPage*);
 
     bool isInIncognitoContext(WebPage&);
     void isAllowedFileSchemeAccess(Ref<WebExtensionCallbackHandler>&&);
     void isAllowedIncognitoAccess(Ref<WebExtensionCallbackHandler>&&);
 
+    URL getURL(const String& resourcePath, String& exception);
+    JSValueRef getBackgroundPageForJavaScript(JSContextRef);
+    JSValueRef getViews(JSContextRef, RefPtr<JSON::Value> filter, String& exception);
+#if PLATFORM(COCOA)
     NSURL *getURL(NSString *resourcePath, NSString **outExceptionString);
     JSValue *getBackgroundPage(JSContextRef);
     NSArray *getViews(JSContextRef, NSDictionary *filter, NSString **outExceptionString);

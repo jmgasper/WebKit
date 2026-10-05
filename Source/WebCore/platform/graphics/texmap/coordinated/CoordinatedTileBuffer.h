@@ -109,12 +109,32 @@ private:
 class CoordinatedUnacceleratedTileBuffer final : public CoordinatedTileBuffer {
 public:
     WEBCORE_EXPORT static Ref<CoordinatedTileBuffer> create(const IntSize&, Flags);
+#if PLATFORM(HAIKU)
+    // For a painter that clears the buffer before it paints, on another
+    // thread: the pixels are allocated by whoever asks for them first, and
+    // not zeroed for the canvas. Zeroing 200 tiles of a megabyte each took
+    // the main thread a quarter of a second in four while a page loaded.
+    static Ref<CoordinatedTileBuffer> createForThreadedPainting(const IntSize&, Flags);
+#endif
     WEBCORE_EXPORT virtual ~CoordinatedUnacceleratedTileBuffer();
 
     int stride() const { return m_size.width() * 4; }
 
+#if PLATFORM(HAIKU)
+    const unsigned char* data() const { ensureData(Zeroed::Yes); return m_data.span().data(); }
+    unsigned char* data() { ensureData(Zeroed::Yes); return m_data.mutableSpan().data(); }
+
+    // A layer over a page, a header that stays or a player's controls, is
+    // mostly nothing: tiles whose every pixel is transparent. They were
+    // uploaded, kept as textures and blended into every frame. The painter
+    // says when a buffer is one, and the compositor keeps no texture for it.
+    // SUMMIT_SKIP_EMPTY_TILES=0 treats them like any other.
+    void noteIfTransparent();
+    bool isTransparent() const { return m_isTransparent; }
+#else
     const unsigned char* data() const { return m_data.span().data(); }
     unsigned char* data() { return m_data.mutableSpan().data(); }
+#endif
 
 private:
     CoordinatedUnacceleratedTileBuffer(const IntSize&, Flags);
@@ -127,7 +147,19 @@ private:
     SkCanvas* canvas() final;
 #endif
 
+#if PLATFORM(HAIKU)
+    enum class Zeroed : bool { No, Yes };
+    enum class Allocation : bool { Now, WhenAskedFor };
+    CoordinatedUnacceleratedTileBuffer(const IntSize&, Flags, Allocation);
+    void ensureData(Zeroed) const;
+
+    mutable Lock m_dataLock;
+    mutable MallocSpan<unsigned char> m_data;
+    mutable std::atomic<bool> m_hasData { false };
+    bool m_isTransparent { false };
+#else
     MallocSpan<unsigned char> m_data;
+#endif
     IntSize m_size;
 
     enum class PaintingState {

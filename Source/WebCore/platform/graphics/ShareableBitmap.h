@@ -137,6 +137,9 @@ public:
     ShareableBitmapHandle& operator=(ShareableBitmapHandle&&) = default;
 
     SharedMemory::Handle& handle() LIFETIME_BOUND { return m_handle; }
+#if PLATFORM(HAIKU)
+    const ShareableBitmapConfiguration& configuration() const LIFETIME_BOUND { return m_configuration; }
+#endif
 
     // Take ownership of the memory for process memory accounting purposes.
     WEBCORE_EXPORT void takeOwnershipOfMemory(MemoryLedger) const;

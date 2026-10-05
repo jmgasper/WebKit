@@ -516,6 +516,13 @@ public:
     void isEnhancedSecurityLink(const URL&, CompletionHandler<void(bool)>&&);
 #endif
 
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    // Fast path for blocking webRequest: loads consult the UI process only for
+    // phases that currently have a live blocking listener somewhere.
+    void setWebRequestBlockingPhasesHaiku(uint8_t phases) { m_webRequestBlockingPhasesHaiku = phases; }
+    uint8_t webRequestBlockingPhasesHaiku() const { return m_webRequestBlockingPhasesHaiku; }
+#endif
+
 private:
     NetworkProcess();
 
@@ -716,6 +723,9 @@ private:
     bool m_enableModernDownloadProgress { false };
 #if HAVE(ENHANCED_SECURITY_LINKS)
     bool m_isEnhancedSecurityLinksEnabled { false };
+#endif
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    uint8_t m_webRequestBlockingPhasesHaiku { 0 };
 #endif
 
     struct DeleteWebsiteDataTask {

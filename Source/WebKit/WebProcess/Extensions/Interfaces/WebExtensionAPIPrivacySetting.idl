@@ -1,0 +1,12 @@
+/* Copyright (C) 2026 KunanyiOS contributors. SPDX-License-Identifier: BSD-2-Clause */
+[
+    Conditional=WK_WEB_EXTENSIONS,
+    MainWorldOnly,
+    ReturnsPromiseWhenCallbackIsOmitted,
+    UseCPPAPI
+] interface WebExtensionAPIPrivacySetting {
+    [RaisesStringException] void get([JSONValue] any details, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void set([JSONValue] any details, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void clear([JSONValue] any details, [Optional, CallbackHandler] function callback);
+    readonly attribute WebExtensionAPIEvent onChange;
+};

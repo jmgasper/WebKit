@@ -298,6 +298,22 @@ WorkerDedicatedRunLoop::RunInModeResult WorkerDedicatedRunLoop::runInMode(Worker
         JSC::VM& vm = script->vm();
         timeoutDelay = vm.deferredWorkTimer->timeUntilFire().value_or(Seconds::infinity());
     }
+#elif OS(HAIKU)
+    // A worker thread's RunLoop is a looper nobody else runs: its timers are
+    // messages that wait at the looper's port until the thread cycles it, and
+    // the thread otherwise only waits on the message queue below. Without this
+    // JSC's timers never fired in workers: DeferredWorkTimer, which delivers
+    // asynchronous WebAssembly compilation (WebAssembly.instantiate() never
+    // settled, so Proton's crypto worker hung deriving an Argon2 key), and the
+    // garbage collection timers. One cycle handles one message.
+    for (unsigned i = 0; i < 64 && RunLoop::cycle() == RunLoop::CycleResult::Continue; ++i) { }
+
+    if (script) {
+        JSC::VM& vm = script->vm();
+        timeoutDelay = vm.deferredWorkTimer->timeUntilFire().value_or(Seconds::infinity());
+    }
+    // The other JSC timers (collection, sweeping) are only seen here once due.
+    timeoutDelay = std::min(timeoutDelay, 1_s);
 #endif
 
     if (predicate.isDefaultMode() && m_sharedTimer->isActive())

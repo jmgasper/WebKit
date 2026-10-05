@@ -51,6 +51,7 @@
 #include "WebCoreOpaqueRoot.h"
 #include <JavaScriptCore/HeapCellInlines.h>
 #include <JavaScriptCore/JSCJSValueStructure.h>
+#include <cstdlib>
 #include <wtf/MainThread.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/Ref.h>
@@ -356,6 +357,14 @@ void EventTarget::innerInvokeEventListeners(Event& event, EventListenerVector li
     Ref context = *scriptExecutionContext();
     InspectorInstrumentation::willDispatchEvent(context, event);
 
+#if PLATFORM(HAIKU)
+    static bool summitPageUpdateTraceEnabled = [] {
+        const char* value = std::getenv("SUMMIT_PAGE_UPDATE_TRACE");
+        return value && (value[0] == '1' || value[0] == '2') && !value[1];
+    }();
+    bool traceScrollListeners = summitPageUpdateTraceEnabled && event.type() == eventNames().scrollEvent;
+#endif
+
     for (auto& registeredListener : listeners) {
         if (registeredListener->wasRemoved()) [[unlikely]]
             continue;
@@ -400,7 +409,19 @@ void EventTarget::innerInvokeEventListeners(Event& event, EventListenerVector li
 #endif
 
         InspectorInstrumentation::willHandleEvent(context, event, registeredListener);
+#if PLATFORM(HAIKU)
+        auto listenerStart = traceScrollListeners ? MonotonicTime::now() : MonotonicTime { };
+#endif
         callback->handleEvent(context, event);
+#if PLATFORM(HAIKU)
+        if (traceScrollListeners) {
+            auto duration = MonotonicTime::now() - listenerStart;
+            if (duration >= 10_ms)
+                WTFLogAlways("Summit scroll listener: target=%p listener=%p phase=%s duration=%.1f passive=%u javascript=%u\n",
+                    this, callback.ptr(), phase == EventInvokePhase::Capturing ? "capture" : "bubble", duration.milliseconds(),
+                    registeredListener->isPassive(), !!callback->jsFunction());
+        }
+#endif
         InspectorInstrumentation::didHandleEvent(context, event, registeredListener);
 
         if (registeredListener->isPassive())

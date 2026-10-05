@@ -35,7 +35,7 @@ namespace Style {
 class RuleSetBuilder {
 public:
     enum class ShrinkToFit : bool { Enable, Disable };
-    RuleSetBuilder(RuleSet&, const MQ::MediaQueryEvaluator&, Resolver* = nullptr, ShrinkToFit = ShrinkToFit::Enable);
+    RuleSetBuilder(RuleSet&, const MQ::MediaQueryEvaluator&, Resolver* = nullptr, ShrinkToFit = ShrinkToFit::Enable, bool preserveResolverMutatingRules = false);
     ~RuleSetBuilder();
 
     void addRulesFromSheet(const StyleSheetContents&, const MQ::MediaQueryList& sheetQuery = { });
@@ -86,6 +86,7 @@ private:
     MediaQueryCollector m_mediaQueryCollector;
     Resolver* m_resolver { nullptr };
     const ShrinkToFit m_shrinkToFit { ShrinkToFit::Enable };
+    const bool m_preserveResolverMutatingRules { false }; // Used when only ordinary style rules changed.
 
     CascadeLayerName m_resolvedCascadeLayerName;
     HashMap<CascadeLayerName, RuleSet::CascadeLayerIdentifier> m_cascadeLayerIdentifierMap;

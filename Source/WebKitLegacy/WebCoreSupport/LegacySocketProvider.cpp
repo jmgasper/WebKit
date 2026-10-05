@@ -27,11 +27,14 @@
 
 #import <WebCore/EmptyClients.h>
 
+#if defined(BUILDING_WITH_CMAKE) && !OS(HAIKU)
 #ifdef BUILDING_WITH_CMAKE
 // WebSocketChannel.cpp (in Sources.txt, not loaded by CMake) depends on SocketStreamHandle.
 // Stub out -- WK2 NetworkProcess handles WebSockets.
+#import <WebCore/ThreadableWebSocketChannel.h>
 #import <WebCore/WebTransportSession.h>
 #import <wtf/CompletionHandler.h>
+#endif
 
 RefPtr<WebCore::ThreadableWebSocketChannel> LegacySocketProvider::createWebSocketChannel(WebCore::Document&, WebCore::WebSocketChannelClient&, WebCore::IsInitiatedByDedicatedWorker)
 {

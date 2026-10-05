@@ -27,6 +27,9 @@
 
 #if USE(COORDINATED_GRAPHICS)
 #include <wtf/CompletionHandler.h>
+#if PLATFORM(HAIKU)
+#include <wtf/MonotonicTime.h>
+#endif
 
 namespace WebCore {
 class FloatPoint;
@@ -97,6 +100,11 @@ protected:
     bool m_layerTreeStateIsFrozen { false };
     bool m_isSuspended { false };
     bool m_isUpdatingRendering { false };
+#if PLATFORM(HAIKU)
+    MonotonicTime m_renderingUpdateScheduledAtHaiku;
+    // Asked for while an update ran (see scheduleRenderingUpdateRunLoopObserver).
+    bool m_renderingUpdateRequestedWhileUpdatingHaiku { false };
+#endif
     CompletionHandler<void()> m_forcedRepaintAsyncCallback;
 };
 

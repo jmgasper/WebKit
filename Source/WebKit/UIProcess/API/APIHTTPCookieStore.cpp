@@ -173,6 +173,26 @@ void HTTPCookieStore::deleteAllCookies(CompletionHandler<void()>&& completionHan
         networkProcess->sendWithAsyncReply(Messages::WebCookieManager::DeleteAllCookies(m_sessionID), [callbackAggregator] { });
 }
 
+#if PLATFORM(HAIKU) && USE(CURL)
+void HTTPCookieStore::setCookieWithResult(const WebCore::Cookie& cookie, CompletionHandler<void(bool, std::optional<WebCore::Cookie>&&)>&& completionHandler)
+{
+    if (RefPtr dataStore = m_owningDataStore.get())
+        dataStore->setCookieWithResult(cookie, WTF::move(completionHandler));
+    else
+        completionHandler(false, std::nullopt);
+}
+
+void HTTPCookieStore::deleteCookieWithResult(const WebCore::Cookie& cookie, CompletionHandler<void(bool)>&& completionHandler)
+{
+    RefPtr networkProcess = networkProcessLaunchingIfNecessary();
+    if (!networkProcess) {
+        completionHandler(false);
+        return;
+    }
+    networkProcess->sendWithAsyncReply(Messages::WebCookieManager::DeleteCookieWithResult(m_sessionID, cookie), WTF::move(completionHandler));
+}
+#endif
+
 void HTTPCookieStore::deleteCookiesForHostnames(const Vector<WTF::String>& hostnames, CompletionHandler<void()>&& completionHandler)
 {
     if (RefPtr networkProcess = networkProcessIfExists())
@@ -212,8 +232,13 @@ void HTTPCookieStore::registerObserver(HTTPCookieStoreObserver& observer)
     if (wasObserving)
         return;
 
-    if (RefPtr networkProcess = networkProcessLaunchingIfNecessary())
+    if (RefPtr networkProcess = networkProcessLaunchingIfNecessary()) {
+#if PLATFORM(HAIKU) && USE(CURL)
+        networkProcess->send(Messages::WebCookieManager::StartObservingCookieChanges(m_sessionID), 0, IPC::SendOption::DispatchMessageEvenWhenWaitingForSyncReply);
+#else
         networkProcess->send(Messages::WebCookieManager::StartObservingCookieChanges(m_sessionID), 0);
+#endif
+    }
 }
 
 void HTTPCookieStore::unregisterObserver(HTTPCookieStoreObserver& observer)
@@ -222,8 +247,13 @@ void HTTPCookieStore::unregisterObserver(HTTPCookieStoreObserver& observer)
     if (!m_observers.isEmptyIgnoringNullReferences())
         return;
 
-    if (RefPtr networkProcess = networkProcessIfExists())
+    if (RefPtr networkProcess = networkProcessIfExists()) {
+#if PLATFORM(HAIKU) && USE(CURL)
+        networkProcess->send(Messages::WebCookieManager::StopObservingCookieChanges(m_sessionID), 0, IPC::SendOption::DispatchMessageEvenWhenWaitingForSyncReply);
+#else
         networkProcess->send(Messages::WebCookieManager::StopObservingCookieChanges(m_sessionID), 0);
+#endif
+    }
 }
 
 bool HTTPCookieStore::isOptInCookiePartitioningEnabled() const
@@ -240,6 +270,22 @@ void HTTPCookieStore::cookiesDidChange()
     for (Ref observer : m_observers)
         observer->cookiesDidChange(*this);
 }
+
+#if PLATFORM(HAIKU) && USE(CURL)
+void HTTPCookieStore::cookiesDidChange(const Vector<WebCore::CookieChange>& changes)
+{
+    Ref protectedThis { *this };
+    // Each observer gets one notification per batch. The default typed method
+    // preserves generic invalidation for clients that do not inspect cookies.
+    Vector<Ref<HTTPCookieStoreObserver>> observers;
+    for (Ref observer : m_observers)
+        observers.append(WTF::move(observer));
+    for (auto& observer : observers) {
+        if (m_observers.contains(observer.get()))
+            observer->cookiesDidChange(*this, changes);
+    }
+}
+#endif
 
 WebKit::NetworkProcessProxy* HTTPCookieStore::networkProcessIfExists()
 {

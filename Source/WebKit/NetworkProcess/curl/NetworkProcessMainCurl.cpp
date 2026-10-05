@@ -29,6 +29,9 @@
 #include "AuxiliaryProcessMain.h"
 #include "NetworkProcess.h"
 #include "NetworkSession.h"
+#if PLATFORM(HAIKU)
+#include <wtf/WTFProcess.h>
+#endif
 
 namespace WebKit {
 
@@ -47,7 +50,14 @@ public:
 
 int NetworkProcessMain(int argc, char** argv)
 {
+#if PLATFORM(HAIKU)
+    // Finish the normal event loop and session teardown before exiting. Haiku's
+    // exit() destroys libbe's global BMessage cache while process-lifetime WTF
+    // work queues can still be dispatching messages on other threads.
+    exitProcess(AuxiliaryProcessMain<NetworkProcessMainCurl>(argc, argv));
+#else
     return AuxiliaryProcessMain<NetworkProcessMainCurl>(argc, argv);
+#endif
 }
 
 } // namespace WebKit

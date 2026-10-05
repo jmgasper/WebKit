@@ -116,6 +116,7 @@ public:
     void didChangeActiveStyleSheetCandidates();
     // This is called when contents of a stylesheet is mutated.
     void didChangeStyleSheetContents();
+    bool tryUpdateForSimpleStyleRuleInsertion(CSSStyleSheet&);
 
     void didChangeViewportSize();
 
@@ -170,7 +171,7 @@ private:
 
     void didRemovePendingStylesheet();
 
-    enum class UpdateType : uint8_t { ActiveSet, FullForExtensionStyleSheets, ContentsOrInterpretation };
+    enum class UpdateType : uint8_t { ActiveSet, SimpleRuleInsertion, FullForExtensionStyleSheets, ContentsOrInterpretation };
     void updateActiveStyleSheets(UpdateType);
     void scheduleUpdate(UpdateType);
 
@@ -187,7 +188,8 @@ private:
     enum class ResolverUpdateType {
         Reconstruct,
         Reset,
-        Additive
+        Additive,
+        PreserveMutatingRules
     };
     struct StyleSheetChange {
         ResolverUpdateType resolverUpdateType;

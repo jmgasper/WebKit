@@ -78,6 +78,7 @@ class SessionID;
 }
 
 namespace WebCore {
+struct CookieChange;
 class AuthenticationChallenge;
 class CertificateInfo;
 class SharedBuffer;
@@ -108,6 +109,9 @@ class DownloadProxyMap;
 class ListDataObserver;
 class WebPageProxy;
 class WebUserContentControllerProxy;
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+struct WebExtensionWebRequestGateResultHaiku;
+#endif
 
 enum class BackgroundFetchChange : uint8_t;
 enum class LoadedWebArchive : bool;
@@ -296,6 +300,13 @@ public:
     void resourceLoadDidReceiveChallenge(WebPageProxyIdentifier, ResourceLoadInfo&&, WebCore::AuthenticationChallenge&&);
     void resourceLoadDidReceiveResponse(WebPageProxyIdentifier, ResourceLoadInfo&&, WebCore::ResourceResponse&&);
     void resourceLoadDidCompleteWithError(WebPageProxyIdentifier, ResourceLoadInfo&&, WebCore::ResourceResponse&&, WebCore::ResourceError&&);
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    void resourceLoadWebRequestDecisionHaiku(WebPageProxyIdentifier, uint8_t phase, ResourceLoadInfo&&, WebCore::ResourceRequest&&, std::optional<IPC::FormDataReference>&&, std::optional<WebCore::ResourceResponse>&&, std::optional<WebCore::AuthenticationChallenge>&&, CompletionHandler<void(WebExtensionWebRequestGateResultHaiku&&)>&&);
+    // Process-wide union of phases with live blocking webRequest listeners,
+    // pushed to every network process (including ones launched later).
+    static void setWebRequestBlockingPhasesHaiku(uint8_t);
+    static uint8_t webRequestBlockingPhasesHaiku();
+#endif
 
     void didAllowPrivateTokenUsageByThirdPartyForTesting(PAL::SessionID, bool wasAllowed, URL&&);
 
@@ -361,6 +372,9 @@ public:
     void navigateServiceWorkerClient(WebCore::FrameIdentifier, WebCore::ScriptExecutionContextIdentifier, const URL&, CompletionHandler<void(std::optional<WebCore::PageIdentifier>, std::optional<WebCore::FrameIdentifier>)>&&);
 
     void cookiesDidChange(PAL::SessionID);
+#if PLATFORM(HAIKU) && USE(CURL)
+    void cookiesDidChangeWithDetails(PAL::SessionID, const Vector<WebCore::CookieChange>&);
+#endif
 
 #if ENABLE(INSPECTOR_NETWORK_THROTTLING)
     void setEmulatedConditions(PAL::SessionID, std::optional<uint64_t> bandwidthBytesPerSecond, Seconds latency);

@@ -31,6 +31,10 @@ typedef HRESULT(WINAPI* RTC_SetThreadDescription)(HANDLE hThread,
                                                   PCWSTR lpThreadDescription);
 #endif
 
+#if defined(__HAIKU__)
+#include <OS.h>
+#endif
+
 #if defined(WEBRTC_FUCHSIA)
 #include <zircon/syscalls.h>
 
@@ -54,6 +58,9 @@ PlatformThreadId CurrentThreadId() {
   return syscall(__NR_gettid);
 #elif defined(__EMSCRIPTEN__)
   return static_cast<PlatformThreadId>(pthread_self());
+#elif defined(__HAIKU__)
+  // WEBRTC_WEBKIT_BUILD change: pthread_t is a pointer on Haiku.
+  return find_thread(nullptr);
 #else
   // Default implementation for nacl and solaris.
   return reinterpret_cast<PlatformThreadId>(pthread_self());
@@ -122,6 +129,8 @@ void SetCurrentThreadName(const char* name) {
   prctl(PR_SET_NAME, reinterpret_cast<unsigned long>(name));  // NOLINT
 #elif defined(WEBRTC_MAC) || defined(WEBRTC_IOS)
   pthread_setname_np(name);
+#elif defined(__HAIKU__)
+  rename_thread(find_thread(nullptr), name);
 #elif defined(WEBRTC_FUCHSIA)
   zx_status_t status = zx_object_set_property(zx_thread_self(), ZX_PROP_NAME,
                                               name, strlen(name));

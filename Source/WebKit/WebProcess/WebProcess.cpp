@@ -290,6 +290,32 @@ static const Seconds nonVisibleProcessEarlyMemoryCleanupDelay { 10_s };
 static const Seconds nonVisibleProcessMemoryCleanupDelay { 120_s };
 #endif
 
+
+#if OS(HAIKU)
+#include <wtf/haiku/ProcessPriorityHaiku.h>
+#if ENABLE(MEDIA_STREAM)
+#include <WebCore/HaikuCaptureNode.h>
+#endif
+
+// The process yields the CPUs while the user can neither see nor hear any of
+// its pages. Extension pages (background, popup) are never shown as tabs but
+// answer content scripts and toolbar popups, so a process hosting one stays
+// at normal priority; so does a hidden page playing audio or capturing media,
+// and a process without pages yet.
+template<typename PageMap> static void updateProcessPriorityHaiku(const PageMap& pages)
+{
+    bool background = !pages.isEmpty();
+    for (auto& page : pages.values()) {
+        if (page->isVisible() || page->activityState().containsAny({ WebCore::ActivityState::IsAudible, WebCore::ActivityState::IsCapturingMedia })
+            || page->mainWebFrame().url().protocolIs("webkit-extension"_s)) {
+            background = false;
+            break;
+        }
+    }
+    setProcessBackgroundedHaiku(background);
+}
+#endif
+
 namespace WebKit {
 using namespace WebCore;
 
@@ -298,6 +324,11 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(WebProcess);
 #if !PLATFORM(GTK) && !PLATFORM(WPE)
 [[noreturn]] static void callExit(IPC::Connection*)
 {
+#if PLATFORM(HAIKU) && ENABLE(MEDIA_STREAM)
+    // Free the cameras and microphones in use: _exit() leaves them
+    // connected to nodes that no longer exist.
+    HaikuCaptureConnection::disconnectAllBeforeExit();
+#endif
     terminateProcess(EXIT_SUCCESS);
 }
 #endif
@@ -387,7 +418,7 @@ WebProcess::WebProcess()
     addSupplement<WebMediaKeyStorageManager>();
 #endif
 
-#if PLATFORM(COCOA) && ENABLE(MEDIA_STREAM)
+#if (PLATFORM(COCOA) || PLATFORM(HAIKU)) && ENABLE(MEDIA_STREAM)
     addSupplementWithoutRefCountedCheck<UserMediaCaptureManager>();
 #endif
 
@@ -1087,6 +1118,8 @@ void WebProcess::createWebPage(PageIdentifier pageID, WebPageCreationParameters&
 
 #if OS(LINUX)
         HighPriorityThreads::singleton().setEnabled(hasVisibleWebPage());
+#elif OS(HAIKU)
+        updateProcessPriorityHaiku(m_pageMap);
 #endif
     } else
         page->reinitializeWebPage(WTF::move(parameters));
@@ -1120,6 +1153,8 @@ void WebProcess::removeWebPage(PageIdentifier pageID)
 
 #if OS(LINUX)
     HighPriorityThreads::singleton().setEnabled(hasVisibleWebPage());
+#elif OS(HAIKU)
+    updateProcessPriorityHaiku(m_pageMap);
 #endif
 }
 
@@ -1808,6 +1843,11 @@ void WebProcess::pageActivityStateDidChange(PageIdentifier, OptionSet<WebCore::A
         HighPriorityThreads::singleton().setEnabled(hasVisibleWebPage());
 #endif
     }
+#if OS(HAIKU)
+    // A hidden tab that starts playing sound gets its priority back too.
+    if (changed.containsAny({ WebCore::ActivityState::IsVisible, WebCore::ActivityState::IsAudible, WebCore::ActivityState::IsCapturingMedia }))
+        updateProcessPriorityHaiku(m_pageMap);
+#endif
 }
 
 void WebProcess::releaseMemory(CompletionHandler<void()>&& completionHandler)

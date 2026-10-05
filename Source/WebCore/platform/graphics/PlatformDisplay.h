@@ -71,6 +71,9 @@ public:
 #if PLATFORM(WIN)
         Windows,
 #endif
+#if PLATFORM(HAIKU)
+        Haiku,
+#endif
 #if USE(WPE_RENDERER)
         WPE,
 #endif

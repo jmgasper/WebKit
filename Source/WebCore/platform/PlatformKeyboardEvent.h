@@ -43,6 +43,10 @@ OBJC_CLASS NSEvent;
 OBJC_CLASS WebEvent;
 #endif
 
+#if PLATFORM(HAIKU)
+class BMessage;
+#endif
+
 namespace WebCore {
 
     class PlatformKeyboardEvent : public PlatformEvent {
@@ -127,6 +131,16 @@ namespace WebCore {
 #else
         ::WebEvent *event() const { return m_Event.get(); }
 #endif
+#endif
+
+#if PLATFORM(HAIKU)
+        PlatformKeyboardEvent(const BMessage*);
+
+        static String KeyValueForKeyEvent(BString bytes, int keyCode);
+        static String KeyCodeForKeyEvent(BString bytes, int keyCode);
+        static String keyIdentifierForHaikuKeyCode(char singleByte, int keyCode);
+        static String KeyCodeForKeyEvent(int keyCode);
+        static int windowsKeyCodeForKeyEvent(char singleByte, int keyCode);
 #endif
 
 #if USE(LIBWPE)

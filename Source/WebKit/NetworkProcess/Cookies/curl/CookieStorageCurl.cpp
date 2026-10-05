@@ -28,18 +28,26 @@
 
 #if USE(CURL)
 
-#include <WebCore/NotImplemented.h>
+#include "NetworkStorageSession.h"
+#include <wtf/SharedTask.h>
 
 namespace WebKit {
 
-void startObservingCookieChanges(NetworkStorageSession&, Function<void()>&&)
+void startObservingCookieChanges(NetworkStorageSession& session, Function<void()>&& callback)
 {
-    notImplemented();
+    startObservingCookieChangesWithDetails(session, [callback = WTF::move(callback)](Vector<WebCore::CookieChange>&&) mutable {
+        callback();
+    });
 }
 
-void stopObservingCookieChanges(NetworkStorageSession&)
+void startObservingCookieChangesWithDetails(NetworkStorageSession& session, Function<void(Vector<WebCore::CookieChange>&&)>&& callback)
 {
-    notImplemented();
+    session.setCookieChangeHandler(createSharedTask<void(Vector<WebCore::CookieChange>&&)>(WTF::move(callback)));
+}
+
+void stopObservingCookieChanges(NetworkStorageSession& session)
+{
+    session.setCookieChangeHandler(nullptr);
 }
 
 }

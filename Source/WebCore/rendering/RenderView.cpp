@@ -487,8 +487,24 @@ bool RenderView::shouldRepaint(const LayoutRect& rect) const
     return !printing() && !rect.isEmpty();
 }
 
+#if PLATFORM(HAIKU)
+// SUMMIT_FULL_REPAINT_TRACE=1 names what asks for a whole layer or view to be painted again.
+static void traceFullRepaintHaiku(const char* what)
+{
+    static const bool enabled = [] {
+        const char* value = getenv("SUMMIT_FULL_REPAINT_TRACE");
+        return value && value[0] == '1' && !value[1];
+    }();
+    if (enabled)
+        fprintf(stderr, "Summit full repaint: %s\n", what);
+}
+#endif
+
 void RenderView::repaintRootContents()
 {
+#if PLATFORM(HAIKU)
+    traceFullRepaintHaiku("RenderView::repaintRootContents");
+#endif
     // The contents background could come from the root (document element) renderer.
     // If the root is not composited, repainting this RenderView should repaint it and
     // its background. But if it's composited, then the background doesn't get repainted

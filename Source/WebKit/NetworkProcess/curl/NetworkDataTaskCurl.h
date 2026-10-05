@@ -77,7 +77,6 @@ private:
 
     void invokeDidReceiveResponse();
 
-    bool shouldStartHTTPRedirection();
     bool shouldRedirectAsGET(const WebCore::ResourceRequest&, bool crossOrigin);
     void willPerformHTTPRedirection();
 
@@ -115,6 +114,10 @@ private:
     FileSystem::FileHandle m_downloadDestinationFile;
 
     bool m_blockingCookies { false };
+#if PLATFORM(HAIKU)
+    // A preconnect (PreconnectTask): connect and stop before the request.
+    bool m_preconnectOnlyHaiku { false };
+#endif
 
     MonotonicTime m_startTime;
     bool m_failsTAOCheck { false };

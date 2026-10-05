@@ -130,6 +130,15 @@ static std::expected<Trigger, std::error_code> loadTrigger(const JSON::Object& r
 
     Trigger trigger;
     trigger.urlFilter = urlFilter;
+    if (auto alternativesValue = triggerObject->getValue("url-filter-alternatives"_s)) {
+        auto alternatives = alternativesValue->asArray();
+        if (!alternatives || !alternatives->length())
+            return makeUnexpected(ContentExtensionError::JSONInvalidConditionList);
+        auto patterns = getStringList(*alternatives);
+        if (!patterns)
+            return makeUnexpected(patterns.error());
+        trigger.urlFilterAlternatives = WTF::move(*patterns);
+    }
 
     if (std::optional<bool> urlFilterCaseSensitiveValue = triggerObject->getBoolean("url-filter-is-case-sensitive"_s))
         trigger.urlFilterIsCaseSensitive = *urlFilterCaseSensitiveValue;
@@ -208,6 +217,16 @@ static std::expected<Trigger, std::error_code> loadTrigger(const JSON::Object& r
 
     if (auto error = checkCondition("unless-frame-url"_s, getStringList, ActionCondition::UnlessFrameURL))
         return makeUnexpected(error);
+
+    if (auto groupsValue = triggerObject->getValue("url-conditions"_s)) {
+        if ((trigger.flags & ActionConditionMask) || trigger.topURLFilterIsCaseSensitive || trigger.frameURLFilterIsCaseSensitive)
+            return makeUnexpected(ContentExtensionError::JSONMultipleConditions);
+        auto groups = parseURLConditionGroups(*groupsValue);
+        if (!groups)
+            return makeUnexpected(ContentExtensionError::JSONInvalidConditionList);
+        trigger.flags |= static_cast<ResourceFlags>(ActionCondition::Conjunction) | urlConditionRequirements(*groups);
+        trigger.urlConditionGroups = WTF::move(*groups);
+    }
 
     trigger.checkValidity();
     return trigger;

@@ -41,11 +41,36 @@
 #include "StyleScopeRuleSets.h"
 #include "StyleSheetContents.h"
 #include "TypedElementDescendantIteratorInlines.h"
+#if PLATFORM(HAIKU)
+#include "CSSKeyframesRule.h"
+#endif
 #include <ranges>
 #include <wtf/SetForScope.h>
 
 namespace WebCore {
 namespace Style {
+
+#if PLATFORM(HAIKU)
+// A style sheet added to a page restyled every element unless it held only
+// style rules (and @media). Rules inside @supports now go into the rule set
+// the invalidator matches against, as at the top level (RuleSetBuilder
+// evaluates the condition), and a new @keyframes rule reaches the animations
+// that already name it through Resolver::addKeyframeStyle() ->
+// Document::keyframesRuleDidChange(), so neither needs every element
+// restyled. Wikipedia's ResourceLoader adds such sheets while the page runs:
+// each one restyled the whole article, 300 to 380 ms on a Raspberry Pi 4.
+// SUMMIT_STYLE_SHEET_INVALIDATION=all restyles everything as before; =verify
+// also restyles everything afterwards and reports differences.
+static bool summitTargetsSheetRulesHaiku()
+{
+    static bool targets = [] {
+        const char* value = getenv("SUMMIT_STYLE_SHEET_INVALIDATION");
+        return !value || strcmp(value, "all");
+    }();
+    return targets;
+}
+static bool s_summitOldSheetRulesHaiku;
+#endif
 
 static bool NODELETE shouldDirtyAllStyle(const Vector<Ref<StyleRuleBase>>& rules)
 {
@@ -55,6 +80,17 @@ static bool NODELETE shouldDirtyAllStyle(const Vector<Ref<StyleRuleBase>>& rules
                 return true;
             continue;
         }
+#if PLATFORM(HAIKU)
+        if (summitTargetsSheetRulesHaiku() && !s_summitOldSheetRulesHaiku) {
+            if (auto* styleRuleSupports = dynamicDowncast<StyleRuleSupports>(rule.get())) {
+                if (shouldDirtyAllStyle(styleRuleSupports->childRules()))
+                    return true;
+                continue;
+            }
+            if (is<StyleRuleKeyframes>(rule.get()))
+                continue;
+        }
+#endif
         if (auto* styleRuleWithNesting = dynamicDowncast<StyleRuleWithNesting>(rule.get())) {
             if (shouldDirtyAllStyle(styleRuleWithNesting->nestedRules()))
                 return true;
@@ -88,6 +124,18 @@ static bool NODELETE shouldDirtyAllStyle(const Vector<Ref<StyleSheetContents>>& 
     }
     return false;
 }
+
+#if PLATFORM(HAIKU)
+// Whether these added sheets are invalidated by what they match only because
+// of the @supports and @keyframes handling above (for =verify).
+bool summitSheetsAvoidFullInvalidationHaiku(const Vector<Ref<StyleSheetContents>>& sheets)
+{
+    if (shouldDirtyAllStyle(sheets))
+        return false;
+    SetForScope oldRules { s_summitOldSheetRulesHaiku, true };
+    return shouldDirtyAllStyle(sheets);
+}
+#endif
 
 Invalidator::Invalidator(const Vector<Ref<StyleSheetContents>>& sheets, const MQ::MediaQueryEvaluator& mediaQueryEvaluator)
     : m_ownedRuleSet(RuleSet::create())

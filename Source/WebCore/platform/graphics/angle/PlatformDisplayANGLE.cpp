@@ -52,12 +52,21 @@ EGLDisplay PlatformDisplay::angleEGLDisplay() const
     };
 
     auto angleDisplay = EGL_GetPlatformDisplayEXT(EGL_PLATFORM_ANGLE_ANGLE, m_angleNativeDisplay ? m_angleNativeDisplay : EGL_DEFAULT_DISPLAY, displayAttributes.span().data());
-    if (angleDisplay == EGL_NO_DISPLAY)
+    if (angleDisplay == EGL_NO_DISPLAY) {
+#if PLATFORM(HAIKU)
+        // Release builds have no WebGL log channel; without a display there
+        // is no WebGL, so say why once.
+        WTFLogAlways("WebGL: ANGLE made no EGL display (EGL error 0x%x)", EGL_GetError());
+#endif
         return EGL_NO_DISPLAY;
+    }
 
     EGLint majorVersion, minorVersion;
     if (EGL_Initialize(angleDisplay, &majorVersion, &minorVersion) == EGL_FALSE) {
         LOG(WebGL, "EGLDisplay Initialization failed.");
+#if PLATFORM(HAIKU)
+        WTFLogAlways("WebGL: ANGLE could not initialize its EGL display (EGL error 0x%x)", EGL_GetError());
+#endif
         return EGL_NO_DISPLAY;
     }
     LOG(WebGL, "ANGLE initialised Major: %d Minor: %d", majorVersion, minorVersion);

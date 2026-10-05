@@ -32,6 +32,7 @@
 #include <wtf/ThreadSpecific.h>
 #include <wtf/text/StringBuilder.h>
 #include <wtf/threads/BinarySemaphore.h>
+#include <cstdlib>
 
 namespace WTF {
 
@@ -64,6 +65,14 @@ void RunLoop::initializeMain()
 {
     RELEASE_ASSERT(!s_mainRunLoop);
     s_mainRunLoop = &RunLoop::currentSingleton();
+#if OS(HAIKU)
+    // Haiku runs pthread TLS destructors after the C++ static destructors.
+    // Release BHandlers while libbe's global token space is still alive.
+    std::atexit([] {
+        if (s_mainRunLoop)
+            s_mainRunLoop->stop();
+    });
+#endif
 }
 
 auto RunLoop::runLoopHolder() -> ThreadSpecific<Holder>&
@@ -200,6 +209,12 @@ void RunLoop::threadWillExit()
         Locker locker { m_nextIterationLock };
         m_nextIteration.clear();
     }
+#if OS(HAIKU)
+    if (this == s_mainRunLoop) {
+        stop();
+        s_mainRunLoop = nullptr;
+    }
+#endif
 }
 
 void RunLoop::registerTimer(TimerBase& timer)

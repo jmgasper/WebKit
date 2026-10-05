@@ -32,6 +32,9 @@
 typedef struct CGImage* CGImageRef;
 #elif USE(CAIRO)
 #include "RefPtrCairo.h"
+#elif USE(HAIKU_GRAPHICS)
+#include <Bitmap.h>
+#include <wtf/RefCounted.h>
 #elif USE(SKIA)
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 #include <skia/core/SkImage.h>
@@ -44,6 +47,35 @@ namespace WebCore {
 using PlatformImagePtr = RetainPtr<CGImageRef>;
 #elif USE(CAIRO)
 using PlatformImagePtr = RefPtr<cairo_surface_t>;
+#elif USE(HAIKU_GRAPHICS)
+class BitmapRef: public BBitmap, public RefCounted<BitmapRef>
+{
+    public:
+        BitmapRef(BRect r, uint32 f, color_space c, int32 b)
+            : BBitmap(r, f, c, b)
+        {
+        }
+
+        BitmapRef(BRect r, color_space c, bool v)
+            : BBitmap(r, c, v)
+        {
+        }
+
+        using BBitmap::BBitmap;
+
+        BitmapRef(const BBitmap& other)
+            : BBitmap(other)
+        {
+        }
+
+        BitmapRef(const BitmapRef& other) = delete;
+
+        ~BitmapRef()
+        {
+        }
+};
+
+using PlatformImagePtr = RefPtr<BitmapRef>;
 #elif USE(SKIA)
 using PlatformImagePtr = sk_sp<SkImage>;
 #endif

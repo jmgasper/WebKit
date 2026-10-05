@@ -574,6 +574,19 @@ void Interpreter::getStackTrace(JSCell* owner, Vector<StackFrame>& results, size
         return;
 
     size_t skippedFrames = 0;
+#if PLATFORM(HAIKU)
+    // Grown by a quarter at a time, the vector was reallocated six times for
+    // a stack 60 calls deep, each time copying every frame (a Variant): a
+    // third of the cost of a thrown error. Doubling copies twice; a shallow
+    // stack keeps the usual first 16 (more room up front kept more memory
+    // per error alive and brought collections sooner).
+    auto makeRoom = [&] {
+        if (results.size() == results.capacity())
+            results.reserveCapacity(std::max<size_t>(16, results.capacity() * 2));
+    };
+#else
+    auto makeRoom = [] { };
+#endif
 
     auto isImplementationVisibilityPrivate = [&](CodeBlock* codeBlock) {
         if (auto* executable = codeBlock->ownerExecutable())
@@ -593,6 +606,7 @@ void Interpreter::getStackTrace(JSCell* owner, Vector<StackFrame>& results, size
         if (isImplementationVisibilityPrivate(codeBlock))
             return IterationStatus::Continue;
 
+        makeRoom();
         results.append(StackFrame(vm, owner, codeBlock, bytecodeIndex));
         return IterationStatus::Continue;
     };
@@ -656,6 +670,7 @@ void Interpreter::getStackTrace(JSCell* owner, Vector<StackFrame>& results, size
                 auto* nativeCallee = visitor->callee().asNativeCallee();
                 switch (nativeCallee->category()) {
                 case NativeCallee::Category::Wasm: {
+                    makeRoom();
                     results.append(StackFrame(visitor->wasmFunctionIndexOrName(), visitor->wasmFunctionIndex()));
                     break;
                 }
@@ -663,10 +678,13 @@ void Interpreter::getStackTrace(JSCell* owner, Vector<StackFrame>& results, size
                     break;
                 }
                 }
-            } else if (!!visitor->codeBlock() && !visitor->codeBlock()->unlinkedCodeBlock()->isBuiltinFunction())
+            } else if (!!visitor->codeBlock() && !visitor->codeBlock()->unlinkedCodeBlock()->isBuiltinFunction()) {
+                makeRoom();
                 results.append(StackFrame(vm, owner, visitor->callee().asCell(), visitor->codeBlock(), visitor->bytecodeIndex()));
-            else
+            } else {
+                makeRoom();
                 results.append(StackFrame(vm, owner, visitor->callee().asCell()));
+            }
 
             previousEntryFrame = currentEntryFrame;
             previousEntryFrameStackTraceInsertPos = results.size();

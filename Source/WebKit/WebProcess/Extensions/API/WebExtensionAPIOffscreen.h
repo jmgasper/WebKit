@@ -36,13 +36,23 @@ class WebExtensionAPIOffscreen : public WebExtensionAPIObject, public JSWebExten
     WEB_EXTENSION_DECLARE_JS_WRAPPER_CLASS(WebExtensionAPIOffscreen, offscreen, offscreen);
 
 public:
-#if PLATFORM(COCOA)
-
-    void createDocument(NSDictionary *details, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
+    // The bindings pass the options as JSON on every platform.
+    void createDocument(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
     void closeDocument(Ref<WebExtensionCallbackHandler>&&);
     void hasDocument(Ref<WebExtensionCallbackHandler>&&);
 
-#endif // PLATFORM(COCOA)
+    RefPtr<JSON::Object> reasons()
+    {
+        Ref object = JSON::Object::create();
+        for (auto name : { "TESTING"_s, "AUDIO_PLAYBACK"_s, "IFRAME_SCRIPTING"_s, "DOM_SCRAPING"_s, "BLOBS"_s, "DOM_PARSER"_s, "USER_MEDIA"_s,
+            "DISPLAY_MEDIA"_s, "WEB_RTC"_s, "CLIPBOARD"_s, "LOCAL_STORAGE"_s, "WORKERS"_s, "BATTERY_STATUS"_s, "MATCH_MEDIA"_s, "GEOLOCATION"_s })
+            object->setString(name, name);
+        return object;
+    }
+
+#if PLATFORM(COCOA)
+    void createDocument(NSDictionary *details, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
+#endif
 };
 
 } // namespace WebKit

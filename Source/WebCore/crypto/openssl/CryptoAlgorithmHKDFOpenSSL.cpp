@@ -39,7 +39,7 @@
 
 // This function is available in hkdf.h but that only exists for LibreSSL and BoringSSL, not
 // plain OpenSSL. Therefore we provide our own implementation here.
-int HKDF(unsigned char* output, size_t outSize, const evp_md_st* algorithm,
+static int HKDF(unsigned char* output, size_t outSize, const evp_md_st* algorithm,
     const unsigned char* inKey, size_t inKeySize,
     const unsigned char* inSalt, size_t inSaltSize,
     const unsigned char* inInfo, size_t inInfoSize)

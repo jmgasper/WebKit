@@ -30,7 +30,21 @@
 
 #if ENABLE(WK_WEB_EXTENSIONS)
 
+#include "WebFrame.h"
+#include <WebCore/Document.h>
+#include <WebCore/LocalFrameInlines.h>
+
 namespace WebKit {
+
+Markable<WTF::UUID> toDocumentIdentifier(WebFrame& frame)
+{
+    auto* coreFrame = frame.coreLocalFrame();
+    auto* document = coreFrame ? coreFrame->document() : nullptr;
+    if (!document)
+        return { };
+    return document->identifier().object();
+}
+
 
 Ref<JSON::Array> filterObjects(const JSON::Array& array, WTF::Function<bool(const JSON::Value&)>&& lambda)
 {
@@ -178,6 +192,25 @@ String toErrorString(const String& callingAPIName, const String& sourceKey, cons
 JSObjectRef toJSError(JSContextRef context, const String& callingAPIName, const String& sourceKey, const String& underlyingErrorString)
 {
     return toJSError(context, toErrorString(callingAPIName, sourceKey, underlyingErrorString));
+}
+
+JSObjectRef toJSRejectedPromise(JSContextRef context, const String& callingAPIName, const String& sourceKey, const String& underlyingErrorString)
+{
+    ASSERT(context);
+    JSObjectRef reject = nullptr;
+    JSObjectRef promise = JSObjectMakeDeferredPromise(context, nullptr, &reject, nullptr);
+    if (!promise)
+        return nullptr;
+
+    // Creating the error can allocate and collect. Keep both the promise and
+    // its rejection function rooted until the reason belongs to the promise.
+    JSValueProtect(context, promise);
+    JSValueProtect(context, reject);
+    JSValueRef reason = toJSError(context, callingAPIName, sourceKey, underlyingErrorString);
+    JSObjectCallAsFunction(context, reject, nullptr, 1, &reason, nullptr);
+    JSValueUnprotect(context, reject);
+    JSValueUnprotect(context, promise);
+    return promise;
 }
 
 static String classToClassString(JSON::Value::Type classType)

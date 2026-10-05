@@ -31,11 +31,14 @@ dictionary WebExtensionCommand {
 
 [
     Conditional=WK_WEB_EXTENSIONS,
+    UseCPPAPI,
     MainWorldOnly,
     ReturnsPromiseWhenCallbackIsOmitted,
 ] interface WebExtensionAPICommands {
 
     void getAll([Optional, CallbackHandler] function callback);
+    [Platform=HAIKU, RaisesStringException] void update([JSONValue] any details, [Optional, CallbackHandler] function callback);
+    [Platform=HAIKU] void reset(DOMString name, [Optional, CallbackHandler] function callback);
 
     readonly attribute WebExtensionAPIEvent onCommand;
     readonly attribute WebExtensionAPIEvent onChanged;

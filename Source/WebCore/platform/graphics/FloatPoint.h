@@ -41,6 +41,10 @@ typedef struct CGPoint CGPoint;
 typedef struct CGPoint NSPoint;
 #endif // PLATFORM(MAC)
 
+#if PLATFORM(HAIKU)
+class BPoint;
+#endif
+
 namespace WTF {
 class TextStream;
 }
@@ -185,6 +189,11 @@ public:
 #if USE(CG)
     WEBCORE_EXPORT FloatPoint(const CGPoint&);
     WEBCORE_EXPORT operator CGPoint() const;
+#endif
+
+#if PLATFORM(HAIKU)
+    FloatPoint(const BPoint&);
+    operator BPoint() const;
 #endif
 
 #if PLATFORM(WIN)

@@ -31,12 +31,7 @@
 #include "JSWebExtensionWrappable.h"
 #include "WebExtensionAPIObject.h"
 #include "WebExtensionEventListenerType.h"
-
-OBJC_CLASS JSValue;
-OBJC_CLASS NSDictionary;
-OBJC_CLASS NSString;
-OBJC_CLASS NSURL;
-OBJC_CLASS _WKWebExtensionWebNavigationURLFilter;
+#include "WebExtensionNavigationURLFilter.h"
 
 namespace WebKit {
 
@@ -44,16 +39,13 @@ class WebExtensionAPIWebNavigationEvent : public WebExtensionAPIObject, public J
     WEB_EXTENSION_DECLARE_JS_WRAPPER_CLASS(WebExtensionAPIWebNavigationEvent, webNavigationEvent, event);
 
 public:
-#if PLATFORM(COCOA)
-    using FilterAndCallbackPair = std::pair<RefPtr<WebExtensionCallbackHandler>, RetainPtr<_WKWebExtensionWebNavigationURLFilter>>;
+    using FilterAndCallbackPair = std::pair<RefPtr<WebExtensionCallbackHandler>, std::optional<WebExtensionNavigationURLFilter>>;
     using ListenerVector = Vector<FilterAndCallbackPair>;
 
-    void invokeListenersWithArgument(id argument, NSURL *targetURL);
-
+    void invokeListenersWithJSONArgument(const String&, const URL&);
     const ListenerVector& listeners() const LIFETIME_BOUND { return m_listeners; }
-#endif
 
-    void addListener(WebCore::FrameIdentifier, RefPtr<WebExtensionCallbackHandler>, NSDictionary *filter, NSString **outExceptionString);
+    void addListener(WebCore::FrameIdentifier, RefPtr<WebExtensionCallbackHandler>, RefPtr<JSON::Value> filter, String& outExceptionString);
     void removeListener(WebCore::FrameIdentifier, RefPtr<WebExtensionCallbackHandler>);
     bool hasListener(RefPtr<WebExtensionCallbackHandler>);
 
@@ -74,9 +66,7 @@ private:
 
     Markable<WebCore::FrameIdentifier> m_frameIdentifier;
     WebExtensionEventListenerType m_type;
-#if PLATFORM(COCOA)
     ListenerVector m_listeners;
-#endif
 };
 
 } // namespace WebKit

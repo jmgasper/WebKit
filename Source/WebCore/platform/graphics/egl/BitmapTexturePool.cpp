@@ -80,6 +80,9 @@ Ref<BitmapTexture> BitmapTexturePool::acquireTexture(const IntSize& size, Option
             && entry.texture->flags().contains(BitmapTexture::Flags::ForceVivanteSuperTiledBuffer) == flags.contains(BitmapTexture::Flags::ForceVivanteSuperTiledBuffer)
 #endif
             && entry.texture->flags().contains(BitmapTexture::Flags::UseBGRALayout) == flags.contains(BitmapTexture::Flags::UseBGRALayout)
+#if PLATFORM(HAIKU)
+            && entry.texture->flags().contains(BitmapTexture::Flags::SingleChannel) == flags.contains(BitmapTexture::Flags::SingleChannel)
+#endif
             && entry.texture->flags().contains(BitmapTexture::Flags::NearestFiltering) == flags.contains(BitmapTexture::Flags::NearestFiltering);
     });
 
@@ -115,15 +118,35 @@ Ref<BitmapTexture> BitmapTexturePool::createTextureForImage(EGLImage image, cons
 void BitmapTexturePool::scheduleReleaseUnusedTextures()
 {
     assertIsHeld(m_lock);
-    if (m_releaseUnusedTexturesTimer.isActive())
+    if (m_releaseTimerActive && !m_releaseTimerImmediate)
         return;
 
-    m_releaseUnusedTexturesTimer.startOneShot(m_releaseUnusedTexturesTimerInterval);
+    // A worker may hold m_lock while the timer fires on the main thread. The
+    // timer's Haiku RunLoop operations take the main BLooper lock, so doing
+    // them here from that worker deadlocks against the timer callback waiting
+    // for m_lock. Only touch the timer on its owning run loop.
+    if (!RunLoop::isMain()) {
+        if (m_releaseTimerSchedulePending)
+            return;
+        m_releaseTimerSchedulePending = true;
+        RunLoop::mainSingleton().dispatch([this] {
+            Locker locker { m_lock };
+            m_releaseTimerSchedulePending = false;
+            scheduleReleaseUnusedTextures();
+        });
+        return;
+    }
+
+    bool immediate = m_releaseTimerImmediate;
+    m_releaseTimerImmediate = false;
+    m_releaseTimerActive = true;
+    m_releaseUnusedTexturesTimer.startOneShot(immediate ? 0_s : m_releaseUnusedTexturesTimerInterval);
 }
 
 void BitmapTexturePool::releaseUnusedTexturesTimerFired()
 {
     Locker locker { m_lock };
+    m_releaseTimerActive = false;
 
     auto hasTextures = [this] -> bool {
         assertIsHeld(m_lock);
@@ -194,7 +217,7 @@ void BitmapTexturePool::enterLimitExceededModeIfNeeded()
         m_onLimitExceededMode = true;
         m_releaseUnusedSecondsTolerance = s_releaseUnusedSecondsToleranceOnLimitExceeded;
         m_releaseUnusedTexturesTimerInterval = s_releaseUnusedTexturesTimerIntervalOnLimitExceeded;
-        m_releaseUnusedTexturesTimer.startOneShot(0_s);
+        m_releaseTimerImmediate = true;
     }
 }
 

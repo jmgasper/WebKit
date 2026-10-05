@@ -264,7 +264,13 @@ public:
     WEBCORE_EXPORT virtual void setDragImage(DragImage, const IntPoint& hotSpot);
 #endif
 
-#if PLATFORM(WIN)
+#if PLATFORM(HAIKU)
+    // A drag-and-drop pasteboard holds what an external drag carries (the
+    // files dropped on the page); only copy and paste uses the clipboard.
+    Pasteboard(std::unique_ptr<PasteboardContext>&&, Vector<String>&& dragFileNames);
+#endif
+
+#if PLATFORM(WIN) || PLATFORM(HAIKU)
     RefPtr<DocumentFragment> documentFragment(LocalFrame&, const SimpleRange&, bool allowPlainText, bool& chosePlainText); // FIXME: Layering violation.
     void writeImage(Element&, const URL&, const String& title); // FIXME: Layering violation.
     void writeSelection(const std::optional<SimpleRange>&, bool canSmartCopyOrDelete, LocalFrame&, ShouldSerializeSelectedTextForDataTransfer = DefaultSelectedTextType); // FIXME: Layering violation.
@@ -388,6 +394,11 @@ private:
     Vector<String> m_promisedFilePaths;
 #endif
     Vector<String> m_promisedFileMIMETypes;
+
+#if PLATFORM(HAIKU)
+    bool m_forDragAndDrop { false };
+    Vector<String> m_dragFileNames;
+#endif
 
 #if PLATFORM(WIN)
     HWND m_owner;

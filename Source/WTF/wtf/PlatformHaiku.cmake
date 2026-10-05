@@ -6,6 +6,7 @@ list(APPEND WTF_SOURCES
     haiku/FileSystemHaiku.cpp
     haiku/LanguageHaiku.cpp
     haiku/MemoryFootprintHaiku.cpp
+    haiku/RunLoopHaiku.cpp
 
     posix/CPUTimePOSIX.cpp
     posix/FileHandlePOSIX.cpp
@@ -24,6 +25,9 @@ list(APPEND WTF_SOURCES
 )
 
 list(APPEND WTF_PUBLIC_HEADERS
+    haiku/ProcessPriorityHaiku.h
+    haiku/RunLoopHaiku.h
+
     unix/UnixFileDescriptor.h
 )
 
@@ -38,4 +42,3 @@ list(APPEND WTF_INCLUDE_DIRECTORIES
 )
 
 add_definitions(-D_DEFAULT_SOURCE)
-

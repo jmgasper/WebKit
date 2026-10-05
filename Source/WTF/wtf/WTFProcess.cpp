@@ -27,6 +27,7 @@
 #include <wtf/WTFProcess.h>
 
 #include <stdlib.h>
+#include <stdio.h>
 
 #if OS(UNIX)
 #include <unistd.h>
@@ -34,6 +35,45 @@
 
 #if OS(WINDOWS)
 #include <windows.h>
+#endif
+
+#if OS(HAIKU)
+#include <errno.h>
+#include <fcntl.h>
+
+// Haiku exits with _exit(), so instrumented training runs need an explicit
+// flush. Keep ordinary builds independent of libgcov.
+extern "C" void __gcov_dump() __attribute__((weak));
+
+static void dumpProfileBeforeExit()
+{
+    const char* enabled = getenv("SUMMIT_GCOV_DUMP");
+    if (!enabled || enabled[0] != '1' || enabled[1] || !__gcov_dump)
+        return;
+    // Haiku's libgcov merges into the .gcda files without locking them, so
+    // processes that exit together overwrite each other's counters (and
+    // sometimes leave a file half-written). Take turns.
+    const char* lockPath = getenv("SUMMIT_GCOV_LOCK");
+    int lockFile = open(lockPath && *lockPath ? lockPath : "/tmp/summit-gcov.lock", O_RDWR | O_CREAT, 0644);
+    struct flock lock { };
+    lock.l_type = F_WRLCK;
+    lock.l_whence = SEEK_SET;
+    if (lockFile >= 0) {
+        while (fcntl(lockFile, F_SETLKW, &lock) == -1 && errno == EINTR) { }
+    }
+    __gcov_dump();
+    if (lockFile >= 0)
+        close(lockFile);
+}
+
+// Processes that leave through exit() (the UI process) would otherwise dump
+// from libgcov's own unlocked destructor; once dumped, libgcov skips that one.
+__attribute__((constructor)) static void dumpProfileAtExit()
+{
+    const char* enabled = getenv("SUMMIT_GCOV_DUMP");
+    if (enabled && enabled[0] == '1' && !enabled[1] && __gcov_dump)
+        atexit(dumpProfileBeforeExit);
+}
 #endif
 
 namespace WTF {
@@ -57,6 +97,15 @@ void exitProcess(int status)
     // The code can reach here only when very buggy anti-virus software hooks are integrated into the system. To make it safe, in that case,
     // let the process crash explicitly.
     CRASH();
+#elif OS(HAIKU)
+    // libbe destroys its global handler-token table before other threads have
+    // finished their pthread TLS destructors. Explicit process exit may leave
+    // JavaScript agents alive; running those destructors against the destroyed
+    // table can double-free BHandlers. Flush output, then terminate all threads
+    // together without invoking C++ static teardown.
+    fflush(nullptr);
+    dumpProfileBeforeExit();
+    _exit(status);
 #else
     exit(status);
 #endif
@@ -68,6 +117,9 @@ void terminateProcess(int status)
     // On Windows, exitProcess and terminateProcess do the same thing due to its more complicated main thread handling.
     // See comment in exitProcess.
     exitProcess(status);
+#elif OS(HAIKU)
+    dumpProfileBeforeExit();
+    _exit(status);
 #else
     _exit(status);
 #endif

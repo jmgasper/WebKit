@@ -109,7 +109,7 @@ public:
     void initializeUserStyle();
 
     void resetAuthorStyle();
-    void appendAuthorStyleSheets(std::span<const Ref<CSSStyleSheet>>, MQ::MediaQueryEvaluator*, Style::InspectorCSSOMWrappers&);
+    void appendAuthorStyleSheets(std::span<const Ref<CSSStyleSheet>>, MQ::MediaQueryEvaluator*, Style::InspectorCSSOMWrappers&, bool preserveResolverMutatingRules = false);
 
     void resetUserAgentMediaQueryStyle();
 

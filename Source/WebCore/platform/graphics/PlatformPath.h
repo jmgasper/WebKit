@@ -36,6 +36,9 @@ typedef struct CGPath PlatformPath;
 typedef PlatformPath* PlatformPathPtr;
 #elif USE(CAIRO)
 typedef cairo_t* PlatformPathPtr;
+#elif USE(HAIKU_GRAPHICS)
+class BShape;
+typedef BShape* PlatformPathPtr;
 #elif USE(SKIA)
 class SkPath;
 typedef SkPath* PlatformPathPtr;
@@ -49,6 +52,9 @@ using PlatformPathImpl = PathCG;
 #elif USE(CAIRO)
 class PathCairo;
 using PlatformPathImpl = PathCairo;
+#elif USE(HAIKU_GRAPHICS)
+class PathHaiku;
+using PlatformPathImpl = PathHaiku;
 #elif USE(SKIA)
 class PathSkia;
 using PlatformPathImpl = PathSkia;

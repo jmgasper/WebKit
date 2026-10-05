@@ -34,7 +34,6 @@
 #include <JavaScriptCore/RegularExpression.h>
 #include <wtf/Language.h>
 #include <wtf/text/StringBuilder.h>
-#include <wtf/text/StringToIntegerConversion.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebKit {
@@ -155,7 +154,7 @@ RefPtr<JSON::Object> WebExtensionLocalization::localizedJSONforJSON(RefPtr<JSON:
     return newObject;
 }
 
-String WebExtensionLocalization::localizedStringForKey(String key, Vector<String> placeholders)
+String WebExtensionLocalization::localizedStringForKey(String key, Vector<String> placeholders, bool escapeLessThan)
 {
     if (placeholders.size() > 9)
         return emptyString();
@@ -163,10 +162,8 @@ String WebExtensionLocalization::localizedStringForKey(String key, Vector<String
     if (!m_localizationJSON || !m_localizationJSON->size())
         return emptyString();
 
-    if (key.contains("__MSG_"_s)) {
-        key = key.substring(6, key.length());
-        key = key.substring(0, key.length() - 2);
-    }
+    if (key.startsWith("__MSG_"_s) && key.endsWith("__"_s) && key.length() >= 8)
+        key = key.substring(6, key.length() - 8);
 
     RefPtr localizationJSON = m_localizationJSON;
     if (!localizationJSON)
@@ -183,9 +180,11 @@ String WebExtensionLocalization::localizedStringForKey(String key, Vector<String
     RefPtr namedPlaceholders = jsonWithLowercaseKeys(stringJSON->getObject(placeholdersKey));
 
     localizedString = stringByReplacingNamedPlaceholdersInString(localizedString, namedPlaceholders);
+    // Escape translation text after named placeholder expansion, before
+    // inserting the caller-provided positional substitutions.
+    if (escapeLessThan)
+        localizedString = makeStringByReplacingAll(localizedString, "<"_s, "&lt;"_s);
     localizedString = stringByReplacingPositionalPlaceholdersInString(localizedString, placeholders);
-
-    localizedString = localizedString.impl()->replace("$$"_s, "$"_s);
 
     return localizedString;
 }
@@ -215,26 +214,20 @@ RefPtr<JSON::Array> WebExtensionLocalization::localizedArrayForArray(RefPtr<JSON
 
 String WebExtensionLocalization::localizedStringForString(String sourceString)
 {
-    String localizedString = sourceString;
-
+    StringBuilder result;
     auto localizableStringRegularExpression = JSC::Yarr::RegularExpression("__MSG_([A-Za-z0-9_@]+)__"_s, { });
-
-    int index = 0;
-    while (index < static_cast<int>(localizedString.length())) {
+    unsigned offset = 0;
+    while (offset < sourceString.length()) {
         int matchLength;
-        index = localizableStringRegularExpression.match(localizedString, index, &matchLength);
+        int index = localizableStringRegularExpression.match(sourceString, offset, &matchLength);
         if (index < 0)
             break;
-
-        auto key = localizedString.substring(index, matchLength);
-        auto localizedReplacement = localizedStringForKey(key);
-
-        localizedString = makeStringByReplacingAll(localizedString, key, localizedReplacement);
-
-        index += localizedReplacement.length();
+        result.append(StringView { sourceString }.substring(offset, index - offset));
+        result.append(localizedStringForKey(sourceString.substring(index, matchLength)));
+        offset = index + matchLength;
     }
-
-    return localizedString;
+    result.append(StringView { sourceString }.substring(offset));
+    return result.toString();
 }
 
 RefPtr<JSON::Object> WebExtensionLocalization::localizationJSONForWebExtension(WebExtension& webExtension, const String& locale)
@@ -267,7 +260,7 @@ Ref<JSON::Object> WebExtensionLocalization::predefinedMessages()
     };
 
     if (CheckedPtr locale = m_locale.get(); locale && !m_localeString.isEmpty()) {
-        if (locale->defaultWritingDirection() == WebCore::Locale::WritingDirection::LeftToRight) {
+        if (locale->defaultWritingDirection() != WebCore::Locale::WritingDirection::RightToLeft) {
             predefinedMessages->setObject(predefinedMessageLanguageDirection, createMessageKey(predefinedMessageValueLeftToRight));
             predefinedMessages->setObject(predefinedMessageLanguageDirectionReversed, createMessageKey(predefinedMessageValueRightToLeft));
             predefinedMessages->setObject(predefinedMessageTextLeadingEdge, createMessageKey(predefinedMessageValueTextEdgeLeft));
@@ -291,69 +284,61 @@ Ref<JSON::Object> WebExtensionLocalization::predefinedMessages()
 
 String WebExtensionLocalization::stringByReplacingNamedPlaceholdersInString(String sourceString, RefPtr<JSON::Object> placeholders)
 {
-    String localizedString = sourceString;
-
-    auto localizableStringRegularExpression = JSC::Yarr::RegularExpression("(?:[^$]|^)(\\$([A-Za-z0-9_@]+)\\$)"_s, { });
-
-    int index = 0;
-    while (index < static_cast<int>(localizedString.length())) {
-        int matchLength;
-        index = localizableStringRegularExpression.match(localizedString, index, &matchLength);
-        if (index < 0)
-            break;
-
-        auto originalKey = localizedString.substring(index, matchLength);
-
-        if (!originalKey.startsWith('$'))
-            originalKey = localizedString.substring(index + 1, matchLength - 1);
-
-        auto key = originalKey.substring(1, originalKey.length() - 2).convertToASCIILowercase();
-
-        auto localizedReplacement = (placeholders && placeholders->getObject(key)) ? placeholders->getObject(key)->getString(placeholderDictionaryContentKey) : emptyString();
-
-        localizedString = makeStringByReplacingAll(localizedString, originalKey, localizedReplacement);
-
-        index += std::max(0, static_cast<int>(localizedReplacement.length()) - 1);
+    StringBuilder result;
+    for (unsigned index = 0; index < sourceString.length();) {
+        if (sourceString[index] != '$') {
+            result.append(sourceString[index++]);
+            continue;
+        }
+        if (index + 1 < sourceString.length() && sourceString[index + 1] == '$') {
+            // Preserve escaped runs for the positional pass. They must not
+            // become named placeholders while scanning this catalog text.
+            do {
+                result.append('$');
+                ++index;
+            } while (index < sourceString.length() && sourceString[index] == '$');
+            continue;
+        }
+        unsigned end = index + 1;
+        while (end < sourceString.length() && (isASCIIAlphanumeric(sourceString[end]) || sourceString[end] == '_' || sourceString[end] == '@'))
+            ++end;
+        if (end > index + 1 && end < sourceString.length() && sourceString[end] == '$') {
+            auto key = sourceString.substring(index + 1, end - index - 1).convertToASCIILowercase();
+            if (RefPtr placeholder = placeholders ? placeholders->getObject(key) : nullptr)
+                result.append(placeholder->getString(placeholderDictionaryContentKey));
+            index = end + 1;
+        } else
+            result.append(sourceString[index++]);
     }
-
-    return localizedString;
+    return result.toString();
 }
 
 String WebExtensionLocalization::stringByReplacingPositionalPlaceholdersInString(String sourceString, Vector<String> placeholders)
 {
-    auto localizedString = sourceString;
-
-    auto localizableStringRegularExpression = JSC::Yarr::RegularExpression("(?:[^$]|^)(\\$([0-9]))"_s, { });
-
-    int index = 0;
-    while (index < static_cast<int>(localizedString.length())) {
-        int matchLength;
-        index = localizableStringRegularExpression.match(localizedString, index, &matchLength);
-        if (index < 0)
-            break;
-
-        auto originalKey = localizedString.substring(index, matchLength);
-
-        if (!originalKey.startsWith('$'))
-            originalKey = localizedString.substring(index + 1, matchLength - 1);
-
-        auto keyInteger = parseInteger<size_t>(originalKey.substring(1, originalKey.length() - 1));
-
-        String replacement;
-        if (keyInteger && placeholders.size() && *keyInteger <= placeholders.size() && keyInteger > 0)
-            replacement = placeholders[*keyInteger - 1];
-        else
-            replacement = emptyString();
-
-        localizedString = makeStringByReplacingAll(localizedString, originalKey, replacement);
-
-        if (!matchLength)
-            break;
-
-        index += std::max(0, static_cast<int>(replacement.length()) - 1);
+    StringBuilder result;
+    for (unsigned index = 0; index < sourceString.length();) {
+        if (sourceString[index] != '$' || index + 1 == sourceString.length()) {
+            result.append(sourceString[index++]);
+            continue;
+        }
+        auto next = sourceString[index + 1];
+        if (next == '$') {
+            // Consume one escape character per run, before inserting any
+            // caller text. Inserted dollar patterns are never scanned again.
+            ++index;
+            do {
+                result.append('$');
+                ++index;
+            } while (index < sourceString.length() && sourceString[index] == '$');
+        } else if (isASCIIDigit(next)) {
+            unsigned position = next - '0';
+            if (position && position <= placeholders.size())
+                result.append(placeholders[position - 1]);
+            index += 2;
+        } else
+            result.append(sourceString[index++]);
     }
-
-    return localizedString;
+    return result.toString();
 }
 
 } // namespace WebKit

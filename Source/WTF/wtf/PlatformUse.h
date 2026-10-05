@@ -83,6 +83,19 @@
 #define USE_SOUP 1
 #endif
 
+#if PLATFORM(HAIKU)
+#define USE_HAIKU 1
+#endif
+
+/* The Haiku port draws through app_server, with BView as the drawing target and
+   BFont, BBitmap, BGradient and BShape as its platform types. USE(SKIA) selects
+   Skia instead, which rasterises in process and can paint on a worker pool. Use
+   USE(HAIKU_GRAPHICS) for the app_server backend and USE(HAIKU) for everything
+   about the platform that the choice of renderer does not change. */
+#if PLATFORM(HAIKU) && !USE(SKIA)
+#define USE_HAIKU_GRAPHICS 1
+#endif
+
 #if USE(COORDINATED_GRAPHICS) && USE(THEME_ADWAITA) && USE(SKIA)
 #define USE_COORDINATED_GRAPHICS_ASYNC_SCROLLBAR 1
 #endif
@@ -119,7 +132,7 @@
 #define USE_WEB_THREAD 1
 #endif
 
-#if OS(UNIX)
+#if OS(UNIX) || OS(HAIKU)
 #define USE_PTHREADS 1
 #endif
 
@@ -224,6 +237,8 @@
 #elif PLATFORM(COCOA)
 /* OS X and IOS. Use CoreFoundation & GCD abstraction. */
 #define USE_COCOA_EVENT_LOOP 1
+#elif PLATFORM(HAIKU)
+#define USE_HAIKU_EVENT_LOOP 1
 #else
 #define USE_GENERIC_EVENT_LOOP 1
 #endif
@@ -348,7 +363,7 @@
 #define USE_GRAPHICS_CONTEXT_FILTERS 1
 #endif
 
-#if PLATFORM(COCOA) || USE(GSTREAMER)
+#if PLATFORM(COCOA) || USE(GSTREAMER) || PLATFORM(HAIKU)
 #define USE_CONCATENATED_IMPULSE_RESPONSES 1
 #endif
 

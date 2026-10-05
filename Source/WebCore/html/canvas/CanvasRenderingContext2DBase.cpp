@@ -2465,10 +2465,30 @@ void CanvasRenderingContext2DBase::willUpdateContents(std::optional<FloatRect> r
         if (context->shouldAntialias())
             dirtyRect.inflate(1);
 #if USE(COORDINATED_GRAPHICS)
+#if PLATFORM(HAIKU)
+        static bool coalesceCanvasDamage = [] {
+            const char* value = std::getenv("SUMMIT_CANVAS_DAMAGE_COALESCING");
+            return !value || std::strcmp(value, "0");
+        }();
+        if (coalesceCanvasDamage && is<HTMLCanvasElement>(canvasBase())) {
+            // A frame ends when the canvas is prepared for display, which also
+            // clears this flag; only HTMLCanvasElement::paint() cleared the
+            // rectangle, and a composited canvas is not painted that way. After
+            // one full-canvas clearRect() every later draw was "contained", so
+            // the canvas was not queued for display again for seconds while its
+            // recording grew (xbitlabs.com's FPS test: frozen, then a 700 ms
+            // replay of 120 frames).
+            if (!isInPreparationForDisplayOrFlush())
+                m_dirtyRect = { };
+            else if (m_dirtyRect.contains(dirtyRect))
+                return;
+            m_dirtyRect.unite(dirtyRect);
+        } else
+#endif
         // In COORDINATED_GRAPHICS graphics layer is tiled and tiling logic handles dirty rects
         // internally and thus no unification of rects is needed here because that causes
         // unnecessary invalidation of tiles which are actually not dirty
-        m_dirtyRect = dirtyRect;
+            m_dirtyRect = dirtyRect;
 #else
         m_dirtyRect.unite(dirtyRect);
 #endif

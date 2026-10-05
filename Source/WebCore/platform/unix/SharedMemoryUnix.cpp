@@ -28,7 +28,7 @@
 #include "config.h"
 #include "SharedMemory.h"
 
-#if USE(UNIX_DOMAIN_SOCKETS) && !OS(ANDROID)
+#if USE(UNIX_DOMAIN_SOCKETS) && !OS(ANDROID) && !OS(HAIKU)
 
 #include <errno.h>
 #include <fcntl.h>

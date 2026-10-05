@@ -26,7 +26,7 @@
 #include "config.h"
 #include "PreconnectTask.h"
 
-#if ENABLE(SERVER_PRECONNECT)
+#if ENABLE(SERVER_PRECONNECT) || PLATFORM(HAIKU)
 
 #include "Logging.h"
 #include "NetworkLoad.h"
@@ -130,4 +130,4 @@ void PreconnectTask::didSendData(uint64_t bytesSent, uint64_t totalBytesToBeSent
 
 } // namespace WebKit
 
-#endif // ENABLE(SERVER_PRECONNECT)
+#endif // ENABLE(SERVER_PRECONNECT) || PLATFORM(HAIKU)

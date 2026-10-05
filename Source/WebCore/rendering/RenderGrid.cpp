@@ -48,11 +48,22 @@
 #include "StyleFitTolerance.h"
 #include "StyleGridPositionsResolver.h"
 #include "StylePrimitiveNumericTypes+Evaluation.h"
+#if PLATFORM(HAIKU)
+#include <cstdlib>
+#include <wtf/MonotonicTime.h>
+#endif
 #include <ranges>
 #include <wtf/Range.h>
 #include <wtf/Scope.h>
 #include <wtf/SetForScope.h>
 #include <wtf/TZoneMallocInlines.h>
+
+#if PLATFORM(HAIKU)
+namespace WebCore {
+// Layout reuse for flex and grid items lives in RenderBlock.cpp.
+void summitSetNeedsLayoutByContainer(RenderBox&);
+}
+#endif
 
 namespace WebCore {
 
@@ -1648,7 +1659,11 @@ void RenderGrid::updateGridAreaLogicalSize(RenderBox& gridItem, std::optional<La
     bool gridAreaWidthChanged = overrideSizeChanged(gridItem, Style::GridTrackSizingDirection::Columns, width, height);
     bool gridAreaHeightChanged = overrideSizeChanged(gridItem, Style::GridTrackSizingDirection::Rows, width, height);
     if (gridAreaWidthChanged || (gridAreaHeightChanged && hasRelativeBlockAxisSize(*this, gridItem)))
+#if PLATFORM(HAIKU)
+        summitSetNeedsLayoutByContainer(gridItem);
+#else
         gridItem.setNeedsLayout(MarkingBehavior::MarkOnlyThis);
+#endif
 
     gridItem.setGridAreaContentLogicalWidth(width);
     gridItem.setGridAreaContentLogicalHeight(height);
@@ -1681,7 +1696,11 @@ void RenderGrid::layoutGridItems(RenderGridLayoutState& gridLayoutState, GridLan
 
         auto* renderGrid = dynamicDowncast<RenderGrid>(gridItem);
         if (renderGrid && (renderGrid->isSubgridColumns() || renderGrid->isSubgridRows()))
+#if PLATFORM(HAIKU)
+            summitSetNeedsLayoutByContainer(gridItem);
+#else
             gridItem.setNeedsLayout(MarkingBehavior::MarkOnlyThis);
+#endif
 
         // Setting the definite grid area's sizes. It may imply that the
         // item must perform a layout if its area differs from the one
@@ -1696,7 +1715,22 @@ void RenderGrid::layoutGridItems(RenderGridLayoutState& gridLayoutState, GridLan
         applyStretchAlignmentToGridItemIfNeeded(gridItem, gridLayoutState);
         applySubgridStretchAlignmentToGridItemIfNeeded(gridItem);
 
+#if PLATFORM(HAIKU)
+        static bool summitPageUpdateTraceEnabled = [] {
+            const char* value = std::getenv("SUMMIT_PAGE_UPDATE_TRACE");
+            return value && value[0] == '1' && !value[1];
+        }();
+        bool traceLayout = summitPageUpdateTraceEnabled && gridItem.needsLayout();
+        auto traceStart = traceLayout ? MonotonicTime::now() : MonotonicTime { };
+#endif
         gridItem.layoutIfNeeded();
+#if PLATFORM(HAIKU)
+        if (traceLayout) {
+            auto duration = MonotonicTime::now() - traceStart;
+            if (duration >= 10_ms)
+                WTFLogAlways("Summit grid item layout: grid=%p item=%p phase=final total=%.1f\n", this, &gridItem, duration.milliseconds());
+        }
+#endif
 
         // We need pending layouts to be done in order to compute auto-margins properly.
         GridLayoutFunctions::updateAutoMarginsIfNeeded(gridItem, writingMode());
@@ -1892,7 +1926,11 @@ void RenderGrid::stretchBlockSizeForGridItem(RenderBox& gridItem, LayoutUnit ali
     // FIXME: Can avoid laying out here in some cases. See https://webkit.org/b/87905.
     if (itemNeedsRelayoutForStretchAlignment) {
         gridItem.setLogicalHeight(0_lu);
+#if PLATFORM(HAIKU)
+        summitSetNeedsLayoutByContainer(gridItem);
+#else
         gridItem.setNeedsLayout(MarkingBehavior::MarkOnlyThis);
+#endif
     }
 }
 
@@ -1902,7 +1940,11 @@ void RenderGrid::stretchInlineSizeForGridItem(RenderBox& gridItem, LayoutUnit al
     auto desiredLogicalWidth = gridItem.constrainLogicalWidthByMinMax(stretchedLogicalWidth, contentBoxWidth(), *this);
     gridItem.setOverridingBorderBoxLogicalWidth(desiredLogicalWidth);
     if (desiredLogicalWidth != gridItem.logicalWidth())
+#if PLATFORM(HAIKU)
+        summitSetNeedsLayoutByContainer(gridItem);
+#else
         gridItem.setNeedsLayout(MarkingBehavior::MarkOnlyThis);
+#endif
 }
 
 // FIXME: This logic is shared by RenderFlexibleBox, so it should be moved to RenderBox.
@@ -2704,8 +2746,19 @@ void RenderGrid::updateIntrinsicLogicalHeightsForRowSizingFirstPassCacheAvailabi
 
     if (canCreateIntrinsicLogicalHeightsCacheForRowSizingFirstPass && m_intrinsicLogicalHeightsForRowSizingFirstPass) {
         for (auto& gridItem : childrenOfType<RenderBox>(*this)) {
-            if (gridItem.needsLayout())
+            if (gridItem.needsLayout()) {
+#if PLATFORM(HAIKU)
+                static bool summitPageUpdateTraceEnabled = [] {
+                    const char* value = std::getenv("SUMMIT_PAGE_UPDATE_TRACE");
+                    return value && value[0] == '1' && !value[1];
+                }();
+                if (summitPageUpdateTraceEnabled && m_intrinsicLogicalHeightsForRowSizingFirstPass->sizeForItem(gridItem))
+                    WTFLogAlways("Summit grid cache invalidation: grid=%p item=%p self=%u normalChild=%u outOfFlowChild=%u simplified=%u movement=%u\n",
+                        this, &gridItem, gridItem.selfNeedsLayout(), gridItem.normalChildNeedsLayout(), gridItem.outOfFlowChildNeedsLayout(),
+                        gridItem.needsSimplifiedNormalFlowLayout(), gridItem.needsOutOfFlowMovementLayout());
+#endif
                 m_intrinsicLogicalHeightsForRowSizingFirstPass->invalidateSizeForItem(gridItem);
+            }
         }
     } else if (canCreateIntrinsicLogicalHeightsCacheForRowSizingFirstPass)
         m_intrinsicLogicalHeightsForRowSizingFirstPass.emplace();

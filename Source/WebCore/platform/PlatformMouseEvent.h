@@ -35,6 +35,10 @@
 #include <wtf/UUID.h>
 #include <wtf/WindowsExtras.h>
 
+#if PLATFORM(HAIKU)
+class BMessage;
+#endif
+
 namespace WebCore {
 
 class PlatformMouseEvent : public PlatformEvent {
@@ -89,6 +93,10 @@ public:
     WEBCORE_EXPORT PlatformMouseEvent(HWND, UINT, WPARAM, LPARAM, bool didActivateWebView = false);
     void setClickCount(int count) { m_clickCount = count; }
     bool didActivateWebView() const { return m_didActivateWebView; }
+#endif
+
+#if PLATFORM(HAIKU)
+        PlatformMouseEvent(const BMessage*);
 #endif
 
 #if PLATFORM(GTK)

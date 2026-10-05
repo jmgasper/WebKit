@@ -210,5 +210,9 @@ inline float FontCascade::widthOfSpaceString() const
 
 #include <WebCore/FontCascadeWinInlines.h>
 
+#elif USE(HAIKU_GRAPHICS)
+
+#include <WebCore/FontCascadeHaikuInlines.h>
+
 #endif
 

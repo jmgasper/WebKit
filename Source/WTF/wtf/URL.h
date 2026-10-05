@@ -39,6 +39,10 @@ typedef const struct __CFURL* CFURLRef;
 OBJC_CLASS NSURL;
 #endif
 
+#if PLATFORM(HAIKU)
+class BUrl;
+#endif
+
 namespace WTF {
 
 class PrintStream;
@@ -238,6 +242,11 @@ public:
     WTF_EXPORT_PRIVATE URL(NSURL *);
     WTF_EXPORT_PRIVATE RetainPtr<NSURL> createNSURL() const;
     WTF_EXPORT_PRIVATE static NSURL *emptyNSURL();
+#endif
+
+#if PLATFORM(HAIKU)
+    explicit URL(const BUrl&);
+    operator BUrl() const;
 #endif
 
 #if USE(GLIB)

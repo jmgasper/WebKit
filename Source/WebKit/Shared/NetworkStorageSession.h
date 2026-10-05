@@ -135,6 +135,7 @@ public:
 
     WebCore::CookieJarDB& cookieDatabase() const;
     void setCookieDatabase(UniqueRef<WebCore::CookieJarDB>&&);
+    void setCookieChangeHandler(RefPtr<WebCore::CookieJarDB::ChangeHandler>&&);
     void setCookiesFromHTTPResponse(const URL& firstParty, const URL&, const String&) const;
     void setCookieAcceptPolicy(WebCore::CookieAcceptPolicy) const;
     void setProxySettings(const WebCore::CurlProxySettings&);
@@ -268,6 +269,7 @@ private:
     Function<void ()> m_cookieObserverHandler;
 #elif USE(CURL)
     mutable UniqueRef<WebCore::CookieJarDB> m_cookieDatabase;
+    RefPtr<WebCore::CookieJarDB::ChangeHandler> m_cookieChangeHandler;
 #endif
 
 #if HAVE(COOKIE_CHANGE_LISTENER_API)

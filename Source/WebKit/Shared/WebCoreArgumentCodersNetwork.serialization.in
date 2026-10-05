@@ -76,6 +76,23 @@ struct WebCore::Cookie {
     WebCore::Cookie::SameSitePolicy sameSite;
 };
 
+#if PLATFORM(HAIKU) && USE(CURL)
+headers: <WebCore/CookieChange.h>
+
+[CustomHeader] enum class WebCore::CookieChangeCause : uint8_t {
+    Explicit
+    Overwrite
+    Expired
+    ExpiredOverwrite
+};
+
+struct WebCore::CookieChange {
+    WebCore::Cookie cookie;
+    bool removed;
+    WebCore::CookieChangeCause cause;
+};
+#endif
+
 [Nested, CustomHeader] struct WebCore::HTTPHeaderMap::CommonHeader {
     WebCore::HTTPHeaderName key;
     String value;

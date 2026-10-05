@@ -1,0 +1,10 @@
+/* Copyright (C) 2026 KunanyiOS contributors. SPDX-License-Identifier: BSD-2-Clause */
+[
+    Conditional=WK_WEB_EXTENSIONS,
+    MainWorldOnly,
+    UseCPPAPI
+] interface WebExtensionAPIPrivacy {
+    readonly attribute WebExtensionAPIPrivacyCategory network;
+    readonly attribute WebExtensionAPIPrivacyCategory services;
+    readonly attribute WebExtensionAPIPrivacyCategory websites;
+};

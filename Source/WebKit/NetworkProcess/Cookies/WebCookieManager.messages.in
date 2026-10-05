@@ -38,13 +38,24 @@ messages -> WebCookieManager {
     void GetAllCookies(PAL::SessionID sessionID) -> (Vector<WebCore::Cookie> cookies)
     void GetCookies(PAL::SessionID sessionID, URL url) -> (Vector<WebCore::Cookie> cookies)
     void DeleteCookie(PAL::SessionID sessionID, struct WebCore::Cookie cookie) -> ()
+#if PLATFORM(HAIKU) && USE(CURL)
+    void SetCookieWithResult(PAL::SessionID sessionID, struct WebCore::Cookie cookie, uint64_t cookiesVersion) -> (bool success, std::optional<WebCore::Cookie> storedCookie)
+    void DeleteCookieWithResult(PAL::SessionID sessionID, struct WebCore::Cookie cookie) -> (bool success)
+#endif
     void DeleteAllCookiesModifiedSince(PAL::SessionID sessionID, WallTime time) -> ()
 
     void SetHTTPCookieAcceptPolicy(PAL::SessionID sessionID, enum:uint8_t WebCore::HTTPCookieAcceptPolicy policy) -> ()
     void GetHTTPCookieAcceptPolicy(PAL::SessionID sessionID) -> (enum:uint8_t WebCore::HTTPCookieAcceptPolicy policy)
     
+#if PLATFORM(HAIKU) && USE(CURL)
+    // Preserve observer lifecycle order alongside native session recreation.
+    void StartObservingCookieChanges(PAL::SessionID sessionID) AllowedWhenWaitingForSyncReply
+    void StopObservingCookieChanges(PAL::SessionID sessionID) AllowedWhenWaitingForSyncReply
+#endif
+#if !PLATFORM(HAIKU) || !USE(CURL)
     void StartObservingCookieChanges(PAL::SessionID sessionID)
     void StopObservingCookieChanges(PAL::SessionID sessionID)
+#endif
 
 #if USE(SOUP)
     void ReplaceCookies(PAL::SessionID sessionID, Vector<WebCore::Cookie> cookies) -> ()

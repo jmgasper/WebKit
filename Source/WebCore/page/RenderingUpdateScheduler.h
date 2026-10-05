@@ -27,6 +27,7 @@
 
 #include "AnimationFrameRate.h"
 #include "DisplayRefreshMonitorClient.h"
+#include <wtf/MonotonicTime.h>
 #include <wtf/Seconds.h>
 #include <wtf/TZoneMalloc.h>
 #include <wtf/WeakRef.h>
@@ -53,6 +54,15 @@ public:
 
     void windowScreenDidChange(PlatformDisplayID);
 
+#if PLATFORM(HAIKU)
+    // For WebKit's stall reports (LayerTreeHost::checkLivenessHaiku()): whether
+    // a refresh is pending and when its timer is due, and a way to drop it
+    // and ask for the update at once.
+    bool isScheduledHaiku() const { return isScheduled(); }
+    WEBCORE_EXPORT String describeHaiku() const;
+    WEBCORE_EXPORT void restartHaiku();
+#endif
+
 private:
     bool scheduleAnimation();
 
@@ -69,6 +79,9 @@ private:
     std::unique_ptr<Timer> m_refreshTimer;
     unsigned m_rescheduledRenderingUpdateCount { 0 };
     bool m_useTimer { false };
+#if PLATFORM(HAIKU)
+    MonotonicTime m_lastRefreshHaiku;
+#endif
 };
 
 } // namespace WebCore

@@ -39,6 +39,10 @@
 #include <Accelerate/Accelerate.h>
 #endif
 
+#if PLATFORM(HAIKU)
+struct PFFFT_Setup;
+#endif
+
 #include <memory>
 #include <wtf/Forward.h>
 #include <wtf/TZoneMalloc.h>
@@ -110,6 +114,14 @@ private:
     GUniquePtr<GstFFTF32> m_inverseFft;
     Vector<GstFFTF32Complex> m_complexData;
 #endif // USE(GSTREAMER)
+
+#if PLATFORM(HAIKU)
+    // FFTFrameHaiku.cpp: PFFFT, with aligned buffers of fftSize floats.
+    void allocateTransform();
+    PFFFT_Setup* m_setup { nullptr };
+    float* m_buffer { nullptr };
+    float* m_work { nullptr };
+#endif
 
     AudioFloatArray m_realData;
     AudioFloatArray m_imagData;

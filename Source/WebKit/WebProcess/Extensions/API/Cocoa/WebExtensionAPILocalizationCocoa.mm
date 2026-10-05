@@ -51,13 +51,19 @@ namespace WebKit {
 
 class JSWebExtensionWrappable;
 
-NSString *WebExtensionAPILocalization::getMessage(NSString* messageName, JSValue *substitutions)
+JSValueRef WebExtensionAPILocalization::getMessage(JSContextRef context, const String& messageName, JSValueRef substitutionsValue, JSValueRef optionsValue, String&)
 {
     // Documentation: https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/i18n/getMessage
 
+    JSContext *scriptContext = [JSContext contextWithJSGlobalContextRef:JSContextGetGlobalContext(context)];
+    JSValue *substitutions = substitutionsValue ? [JSValue valueWithJSValueRef:substitutionsValue inContext:scriptContext] : nil;
+    JSValue *options = optionsValue ? [JSValue valueWithJSValueRef:optionsValue inContext:scriptContext] : nil;
+    JSValue *escape = options.isObject ? [options valueForProperty:@"escapeLt"] : nil;
+    bool escapeLessThan = escape.isBoolean && escape.toBool;
+
     RefPtr localization = extensionContext().localization();
     if (!localization)
-        return @"";
+        return toJSValueRef(context, emptyString());
 
     Vector<String> substitutionsVector;
 
@@ -71,14 +77,14 @@ NSString *WebExtensionAPILocalization::getMessage(NSString* messageName, JSValue
             substitutionsVector.append(String { [substitutions toString] });
     }
 
-    return localization->localizedStringForKey(messageName, WTF::move(substitutionsVector)).createNSString().autorelease();
+    return toJSValueRef(context, localization->localizedStringForKey(messageName, WTF::move(substitutionsVector), escapeLessThan));
 }
 
-NSString *WebExtensionAPILocalization::getUILanguage()
+String WebExtensionAPILocalization::getUILanguage()
 {
     // Documentation: https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/i18n/getUILanguage
 
-    return toWebAPI(NSLocale.currentLocale);
+    return String { toWebAPI(NSLocale.currentLocale) };
 }
 
 void WebExtensionAPILocalization::getAcceptLanguages(Ref<WebExtensionCallbackHandler>&& callback)

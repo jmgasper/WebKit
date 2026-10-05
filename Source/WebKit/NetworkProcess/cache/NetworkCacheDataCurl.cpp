@@ -108,9 +108,14 @@ Data concatenate(const Data& a, const Data& b)
 Data Data::adoptMap(FileSystem::MappedFileData&& mappedFile, FileSystem::FileHandle&& fileHandle)
 {
     ASSERT(mappedFile);
+#if PLATFORM(HAIKU)
+    Data data { WTF::move(mappedFile) };
+    data.m_fileHandle = Box<FileSystem::FileHandle>::create(WTF::move(fileHandle));
+    return data;
+#else
     fileHandle = { };
-
     return { WTF::move(mappedFile) };
+#endif
 }
 
 #if ENABLE(SHAREABLE_RESOURCE) && OS(WINDOWS)
@@ -124,6 +129,14 @@ RefPtr<WebCore::SharedMemory> Data::tryCreateSharedMemory() const
         return nullptr;
 
     return WebCore::SharedMemory::map({ WTF::move(newHandle), size() }, WebCore::SharedMemory::Protection::ReadOnly);
+}
+#elif PLATFORM(HAIKU)
+RefPtr<WebCore::SharedMemory> Data::tryCreateSharedMemory() const
+{
+    if (isNull() || !isMap() || !m_fileHandle || !*m_fileHandle)
+        return nullptr;
+    auto bytes = span();
+    return WebCore::SharedMemory::wrapMap(const_cast<uint8_t*>(bytes.data()), bytes.size(), m_fileHandle->platformHandle());
 }
 #endif
 

@@ -231,13 +231,18 @@ void CSSStyleSheet::didMutateRuleFromCSSStyleDeclaration()
 }
 
 // FIXME: counter-style: we might need something similar for counter-style (rdar://103018993).
-void CSSStyleSheet::didMutateRules(RuleMutationType mutationType, ContentsClonedForMutation contentsClonedForMutation, StyleRuleKeyframes* insertedKeyframesRule, const String& modifiedKeyframesRuleName)
+void CSSStyleSheet::didMutateRules(RuleMutationType mutationType, ContentsClonedForMutation contentsClonedForMutation, StyleRuleKeyframes* insertedKeyframesRule, StyleRule* insertedStyleRule, const String& modifiedKeyframesRuleName)
 {
     ASSERT(m_contents->isMutable());
     ASSERT(m_contents->hasOneClient());
     m_contents->setHasResolvedNesting(false);
 
     forEachStyleScope([&](Style::Scope& scope) {
+        if (mutationType == RuleInsertion && insertedStyleRule && contentsClonedForMutation == ContentsClonedForMutation::No
+            && scope.tryUpdateForSimpleStyleRuleInsertion(*this)) {
+            m_wasMutated = true;
+            return;
+        }
         if ((mutationType == RuleInsertion || mutationType == RuleReplace) && contentsClonedForMutation == ContentsClonedForMutation::No && !scope.activeStyleSheetsContains(*this)) {
             if (insertedKeyframesRule) {
                 if (RefPtr resolver = scope.resolverIfExists())
@@ -388,6 +393,9 @@ ExceptionOr<unsigned> CSSStyleSheet::insertRule(const String& ruleString, unsign
     if (m_wasConstructedByJS && rule->isImportRule())
         return Exception { ExceptionCode::SyntaxError, "Cannot inserted an @import rule in a constructed CSSStyleSheet object"_s };
 
+    auto* insertedStyleRule = dynamicDowncast<StyleRule>(*rule);
+    if (insertedStyleRule && is<StyleRuleWithNesting>(*insertedStyleRule))
+        insertedStyleRule = nullptr;
     RuleMutationScope mutationScope(this, RuleInsertion, dynamicDowncast<StyleRuleKeyframes>(*rule));
 
     bool isNamespace = rule->isNamespaceRule();
@@ -397,6 +405,8 @@ ExceptionOr<unsigned> CSSStyleSheet::insertRule(const String& ruleString, unsign
             return Exception { ExceptionCode::InvalidStateError };
         return Exception { ExceptionCode::HierarchyRequestError };
     }
+
+    mutationScope.setInsertedStyleRule(insertedStyleRule);
 
     if (!m_childRuleCSSOMWrappers.isEmpty())
         m_childRuleCSSOMWrappers.insert(index, RefPtr<CSSRule>());
@@ -652,10 +662,15 @@ CSSStyleSheet::RuleMutationScope::RuleMutationScope(CSSRule* rule)
         m_contentsClonedForMutation = styleSheet->willMutateRules();
 }
 
+void CSSStyleSheet::RuleMutationScope::setInsertedStyleRule(StyleRule* rule)
+{
+    m_insertedStyleRule = rule;
+}
+
 CSSStyleSheet::RuleMutationScope::~RuleMutationScope()
 {
     if (RefPtr styleSheet = m_styleSheet.get()) {
-        styleSheet->didMutateRules(m_mutationType, m_contentsClonedForMutation, m_insertedKeyframesRule.get(), m_modifiedKeyframesRuleName);
+        styleSheet->didMutateRules(m_mutationType, m_contentsClonedForMutation, m_insertedKeyframesRule.get(), m_insertedStyleRule.get(), m_modifiedKeyframesRuleName);
         styleSheet->contents().clearHasNestingRulesCache();
     }
 }

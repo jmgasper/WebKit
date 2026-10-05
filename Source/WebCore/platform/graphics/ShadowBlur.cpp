@@ -37,6 +37,8 @@
 #include "PixelBuffer.h"
 #include "Timer.h"
 #include <numbers>
+#include <array>
+#include <utility>
 #include <wtf/CheckedPtr.h>
 #include <wtf/Lock.h>
 #include <wtf/MathExtras.h>
@@ -54,11 +56,42 @@ enum {
     RightLobe = 1
 };
 
-#if USE(CG)
+// The scratch buffer keeps one blurred shadow template between draws. It is
+// written in port-independent terms, but upstream only enables it for Core
+// Graphics. Without it every box-shadow allocates an ImageBuffer and blurs it
+// again for every frame, and on Haiku an ImageBuffer is an app_server offscreen
+// window with a thread of its own: a page of cards with the same shadow spent
+// most of its painting time there (docs/performance.md).
+#if USE(CG) || PLATFORM(HAIKU)
+#define USE_SHADOW_SCRATCH_BUFFER 1
+#else
+#define USE_SHADOW_SCRATCH_BUFFER 0
+#endif
+
+#if USE_SHADOW_SCRATCH_BUFFER
 static inline int NODELETE roundUpToMultipleOf32(int d)
 {
     return (1 + (d >> 5)) << 5;
 }
+
+// What a blurred template in a scratch slot was drawn from. Two templates are
+// interchangeable only when all of this matches.
+struct ScratchShadowKey {
+    FloatSize radius;
+    Color color;
+    FloatRect shadowRect;
+    FloatRect insetBounds;
+    CornerRadii radii;
+    FloatSize layerSize;
+    bool inset { false };
+
+    bool operator==(const ScratchShadowKey& other) const
+    {
+        return inset == other.inset && radius == other.radius && color == other.color
+            && shadowRect == other.shadowRect && insetBounds == other.insetBounds
+            && radii == other.radii && layerSize == other.layerSize;
+    }
+};
 
 // ShadowBlur needs a scratch image as the buffer for the blur filter.
 // Instead of creating and destroying the buffer for every operation,
@@ -72,64 +105,67 @@ public:
     {
     }
 
-    RefPtr<ImageBuffer> getScratchBuffer(const IntSize& size) WTF_REQUIRES_LOCK(lock())
+    // Returns the buffer to draw the template into, and whether it still holds
+    // what the caller wants. An element commonly carries more than one shadow
+    // (a tight one and a wide one), and with a single slot the two evict each
+    // other, so every draw redraws and reblurs its template.
+    std::pair<RefPtr<ImageBuffer>, bool> getShadowBuffer(const IntSize& size, const ScratchShadowKey& key) WTF_REQUIRES_LOCK(lock())
     {
         ASSERT(lock().isHeld());
-        auto releaseLayerImage = makeScopeExit([this] {
-            if (m_imageBuffer)
-                scheduleScratchBufferPurge();
-        });
+        auto schedulePurge = makeScopeExit([this] { scheduleScratchBufferPurge(); });
 
-        // We do not need to recreate the buffer if the current buffer is large enough.
-        if (RefPtr imageBuffer = m_imageBuffer; imageBuffer && imageBuffer->truncatedLogicalSize().width() >= size.width() && imageBuffer->truncatedLogicalSize().height() >= size.height())
-            return imageBuffer;
+        for (auto& slot : m_slots) {
+            if (slot.imageBuffer && slot.hasKey && slot.key == key && holds(*slot.imageBuffer, size)) {
+                slot.lastUse = ++m_useCounter;
+                return { slot.imageBuffer, false };
+            }
+        }
 
-        // Round to the nearest 32 pixels so we do not grow the buffer for similar sized requests.
-        IntSize roundedSize(roundUpToMultipleOf32(size.width()), roundUpToMultipleOf32(size.height()));
+        Slot* chosen = nullptr;
+        for (auto& slot : m_slots) {
+            if (!slot.imageBuffer) {
+                chosen = &slot;
+                break;
+            }
+            if (!chosen || slot.lastUse < chosen->lastUse)
+                chosen = &slot;
+        }
+        if (!chosen)
+            return { nullptr, true };
 
-        clearScratchBuffer();
-
-        // ShadowBlur is not used with accelerated drawing, so it's OK to make an unconditionally unaccelerated buffer.
-        m_imageBuffer = ImageBuffer::create(roundedSize, RenderingMode::Unaccelerated, RenderingPurpose::Unspecified, 1, ColorSpace::SRGB(), PixelFormat::BGRA8);
-        return m_imageBuffer;
-    }
-
-    bool NODELETE setCachedShadowValues(const FloatSize& radius, const Color& color, const FloatRect& shadowRect, const CornerRadii& radii, const FloatSize& layerSize) WTF_REQUIRES_LOCK(lock())
-    {
-        ASSERT(lock().isHeld());
-        if (!m_lastWasInset && m_lastRadius == radius && m_lastColor == color && m_lastShadowRect == shadowRect &&  m_lastRadii == radii && m_lastLayerSize == layerSize)
-            return false;
-
-        m_lastWasInset = false;
-        m_lastRadius = radius;
-        m_lastColor = color;
-        m_lastShadowRect = shadowRect;
-        m_lastRadii = radii;
-        m_lastLayerSize = layerSize;
-
-        return true;
-    }
-
-    bool NODELETE setCachedInsetShadowValues(const FloatSize& radius, const Color& color, const FloatRect& bounds, const FloatRect& shadowRect, const CornerRadii& radii) WTF_REQUIRES_LOCK(lock())
-    {
-        ASSERT(lock().isHeld());
-        if (m_lastWasInset && m_lastRadius == radius && m_lastColor == color && m_lastInsetBounds == bounds && shadowRect == m_lastShadowRect && radii == m_lastRadii)
-            return false;
-
-        m_lastWasInset = true;
-        m_lastInsetBounds = bounds;
-        m_lastRadius = radius;
-        m_lastColor = color;
-        m_lastShadowRect = shadowRect;
-        m_lastRadii = radii;
-
-        return true;
+        if (!chosen->imageBuffer || !holds(*chosen->imageBuffer, size)) {
+            // Round to the nearest 32 pixels so we do not grow the buffer for similar sized requests.
+            IntSize roundedSize(roundUpToMultipleOf32(size.width()), roundUpToMultipleOf32(size.height()));
+            // ShadowBlur is not used with accelerated drawing, so it's OK to make an unconditionally unaccelerated buffer.
+            chosen->imageBuffer = ImageBuffer::create(roundedSize, RenderingMode::Unaccelerated, RenderingPurpose::Unspecified, 1, ColorSpace::SRGB(), PixelFormat::BGRA8);
+            if (!chosen->imageBuffer) {
+                chosen->hasKey = false;
+                return { nullptr, true };
+            }
+        }
+        chosen->key = key;
+        chosen->hasKey = true;
+        chosen->lastUse = ++m_useCounter;
+        return { chosen->imageBuffer, true };
     }
 
     static ScratchBuffer& singleton() WTF_REQUIRES_LOCK(lock());
     static Lock& NODELETE lock() WTF_RETURNS_LOCK(s_lock) { return s_lock; }
 
 private:
+    struct Slot {
+        RefPtr<ImageBuffer> imageBuffer;
+        ScratchShadowKey key;
+        bool hasKey { false };
+        uint64_t lastUse { 0 };
+    };
+
+    static bool holds(const ImageBuffer& buffer, const IntSize& size)
+    {
+        return buffer.truncatedLogicalSize().width() >= size.width()
+            && buffer.truncatedLogicalSize().height() >= size.height();
+    }
+
     void scheduleScratchBufferPurge()
     {
         ASSERT(lock().isHeld());
@@ -157,23 +193,23 @@ private:
     void clearScratchBuffer() WTF_REQUIRES_LOCK(lock())
     {
         ASSERT(lock().isHeld());
-        m_imageBuffer = nullptr;
-        m_lastRadius = FloatSize();
-        m_lastLayerSize = FloatSize();
+        for (auto& slot : m_slots) {
+            slot.imageBuffer = nullptr;
+            slot.hasKey = false;
+            slot.lastUse = 0;
+        }
     }
 
     static Lock s_lock;
 
-    RefPtr<ImageBuffer> m_imageBuffer;
+#if PLATFORM(HAIKU)
+    static constexpr size_t slotCount = 4;
+#else
+    static constexpr size_t slotCount = 1;
+#endif
+    std::array<Slot, slotCount> m_slots;
+    uint64_t m_useCounter { 0 };
     RunLoop::Timer m_purgeTimer;
-
-    FloatRect m_lastInsetBounds;
-    FloatRect m_lastShadowRect;
-    CornerRadii m_lastRadii;
-    Color m_lastColor;
-    FloatSize m_lastRadius;
-    bool m_lastWasInset { false };
-    FloatSize m_lastLayerSize;
 };
 
 Lock ScratchBuffer::s_lock;
@@ -185,6 +221,19 @@ ScratchBuffer& ScratchBuffer::singleton()
     return scratchBuffer;
 }
 
+// SUMMIT_SHADOW_CACHE=0 goes back to a fresh ImageBuffer for every shadow.
+static bool shadowScratchBufferEnabled()
+{
+    static const bool enabled = [] {
+        const char* value = getenv("SUMMIT_SHADOW_CACHE");
+        return !value || strcmp(value, "0");
+    }();
+    return enabled;
+}
+
+#endif // USE_SHADOW_SCRATCH_BUFFER
+
+#if USE(CG)
 static float NODELETE radiusToLegacyRadius(float radius)
 {
     return radius > 8 ? 8 + 4 * sqrt((radius - 8) / 2) : radius;
@@ -713,13 +762,23 @@ void ShadowBlur::drawRectShadowWithTiling(const AffineTransform& transform, cons
 {
     FloatRect templateShadow = FloatRect(edgeSize.width(), edgeSize.height(), templateSize.width() - 2 * edgeSize.width(), templateSize.height() - 2 * edgeSize.height());
 
-#if USE(CG)
-    if (ScratchBuffer::lock().tryLock()) {
+#if USE_SHADOW_SCRATCH_BUFFER
+    if (shadowScratchBufferEnabled() && ScratchBuffer::lock().tryLock()) {
         Locker locker { AdoptLock, ScratchBuffer::lock() };
-        auto layerImageBuffer = ScratchBuffer::singleton().getScratchBuffer(templateSize);
+#if PLATFORM(HAIKU)
+        // Only the template goes into the scratch buffer, and what it contains
+        // does not depend on the size of the element being shadowed. Comparing
+        // that size redrew and blurred the template again for every card of a
+        // different height, which is most of what tiling was meant to avoid.
+        // Core Graphics keeps upstream's stricter comparison.
+        auto cachedLayerSize = FloatSize();
+#else
+        auto cachedLayerSize = layerImageProperties.layerSize;
+#endif
+        ScratchShadowKey key { m_blurRadius, m_color, templateShadow, { }, shadowedRect.radii(), cachedLayerSize, false };
+        auto [layerImageBuffer, redrawNeeded] = ScratchBuffer::singleton().getShadowBuffer(templateSize, key);
         if (!layerImageBuffer)
             return;
-        bool redrawNeeded = ScratchBuffer::singleton().setCachedShadowValues(m_blurRadius, m_color, templateShadow, shadowedRect.radii(), layerImageProperties.layerSize);
         drawRectShadowWithTilingWithLayerImageBuffer(*layerImageBuffer, transform, shadowedRect, templateSize, edgeSize, drawImage, fillRect, templateShadow, redrawNeeded);
         return;
     }
@@ -769,13 +828,13 @@ void ShadowBlur::drawInsetShadowWithTiling(const AffineTransform& transform, con
     FloatRect templateBounds(0, 0, templateSize.width(), templateSize.height());
     FloatRect templateHole = FloatRect(edgeSize.width(), edgeSize.height(), templateSize.width() - 2 * edgeSize.width(), templateSize.height() - 2 * edgeSize.height());
 
-#if USE(CG)
-    if (ScratchBuffer::lock().tryLock()) {
+#if USE_SHADOW_SCRATCH_BUFFER
+    if (shadowScratchBufferEnabled() && ScratchBuffer::lock().tryLock()) {
         Locker locker { AdoptLock, ScratchBuffer::lock() };
-        auto layerImageBuffer = ScratchBuffer::singleton().getScratchBuffer(templateSize);
+        ScratchShadowKey key { m_blurRadius, m_color, templateHole, templateBounds, holeRect.radii(), { }, true };
+        auto [layerImageBuffer, redrawNeeded] = ScratchBuffer::singleton().getShadowBuffer(templateSize, key);
         if (!layerImageBuffer)
             return;
-        bool redrawNeeded = ScratchBuffer::singleton().setCachedInsetShadowValues(m_blurRadius, m_color, templateBounds, templateHole, holeRect.radii());
         drawInsetShadowWithTilingWithLayerImageBuffer(*layerImageBuffer, transform, fullRect, holeRect, templateSize, edgeSize, drawImage, fillRectWithHole, templateBounds, templateHole, redrawNeeded);
         return;
     }

@@ -29,6 +29,7 @@
 
 #include "JSWebExtensionAPIScripting.h"
 #include "WebExtensionAPIObject.h"
+#include <wtf/JSONValues.h>
 
 OBJC_CLASS NSDictionary;
 OBJC_CLASS NSObject;
@@ -36,7 +37,9 @@ OBJC_CLASS NSString;
 
 namespace WebKit {
 
+#if PLATFORM(COCOA)
 using FirstTimeRegistration = WebExtensionDynamicScripts::WebExtensionRegisteredScript::FirstTimeRegistration;
+#endif
 
 class WebExtension;
 
@@ -44,6 +47,18 @@ class WebExtensionAPIScripting : public WebExtensionAPIObject, public JSWebExten
     WEB_EXTENSION_DECLARE_JS_WRAPPER_CLASS(WebExtensionAPIScripting, scripting, scripting);
 
 public:
+    // The C++ bindings call these; on Cocoa they delegate to the Objective-C implementations below.
+    RefPtr<JSON::Object> executionWorlds();
+
+    void executeScript(JSContextRef, JSValueRef details, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void insertCSS(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void removeCSS(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&&, String& exception);
+
+    void registerContentScripts(RefPtr<JSON::Value> scripts, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void getRegisteredContentScripts(RefPtr<JSON::Value> filter, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void updateContentScripts(RefPtr<JSON::Value> scripts, Ref<WebExtensionCallbackHandler>&&, String& exception);
+    void unregisterContentScripts(RefPtr<JSON::Value> filter, Ref<WebExtensionCallbackHandler>&&, String& exception);
+
 #if PLATFORM(COCOA)
     NSDictionary *NODELETE executionWorld();
 
@@ -70,9 +85,11 @@ private:
 #endif
 };
 
+#if PLATFORM(COCOA)
 NSArray *toWebAPI(const Vector<WebExtensionScriptInjectionResultParameters>&, bool returnExecutionResultOnly);
 NSDictionary *toWebAPI(const WebExtensionRegisteredScriptParameters&);
 String toWebAPI(WebExtension::InjectionTime);
+#endif
 
 } // namespace WebKit
 

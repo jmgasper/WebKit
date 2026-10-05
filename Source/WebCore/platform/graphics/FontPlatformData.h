@@ -59,6 +59,15 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 #include <memory>
 #endif
 
+#if USE(HAIKU_GRAPHICS)
+#include <memory>
+
+#include <interface/Font.h>
+
+#include <wtf/text/AtomString.h>
+#include <wtf/text/CString.h>
+#endif
+
 #if USE(APPKIT)
 OBJC_CLASS NSFont;
 #endif
@@ -104,10 +113,31 @@ struct FontMetadata {
     friend bool operator==(const FontMetadata&, const FontMetadata&) = default;
 };
 
+#if USE(HAIKU_GRAPHICS)
+struct FontPlatformSerializedData {
+    String family;
+    String style;
+    float shear { 90 };
+    float rotation { 0 };
+    float falseBoldWidth { 0 };
+    uint32_t flags { 0 };
+    uint16_t face { B_REGULAR_FACE };
+    uint8_t spacing { B_BITMAP_SPACING };
+    uint8_t encoding { B_UNICODE_UTF8 };
+};
+#endif
+
 struct FontPlatformDataAttributes {
     FontPlatformDataAttributes(const FontMetadata& metadata)
         : m_metadata(metadata)
         { }
+
+#if USE(HAIKU_GRAPHICS)
+    FontPlatformDataAttributes(const FontMetadata& metadata, FontPlatformSerializedData font)
+        : m_metadata(metadata)
+        , m_font(WTF::move(font))
+        { }
+#endif
 
 #if USE(CORE_TEXT)
     FontPlatformDataAttributes(const FontMetadata& metadata, RetainPtr<CFDictionaryRef> attributes, CTFontDescriptorOptions options, RetainPtr<CFStringRef> url, RetainPtr<CFStringRef> psName)
@@ -152,6 +182,8 @@ struct FontPlatformDataAttributes {
     SkString m_familyName;
     SkFontStyle m_style;
     Vector<hb_feature_t> m_features;
+#elif USE(HAIKU_GRAPHICS)
+    FontPlatformSerializedData m_font;
 #endif
 };
 
@@ -274,6 +306,12 @@ struct FontPlatformSerializedData {
     LOGFONT logFont;
 #endif
 };
+#elif USE(HAIKU_GRAPHICS)
+struct CustomFontCreationData {
+    Vector<uint8_t> fontFaceData;
+    String itemInCollection;
+    FontPlatformSerializedData font;
+};
 #endif
 
 // This class is conceptually immutable. Once created, no instances should ever change (in an observable way).
@@ -316,6 +354,16 @@ public:
     WEBCORE_EXPORT FontPlatformData(RetainPtr<CTFontRef>&&, const FontMetadata&, const FontCustomPlatformData* = nullptr);
 #endif
 
+#if USE(HAIKU_GRAPHICS)
+    FontPlatformData(const FontDescription& fontDescription, const AtomString& familyName);
+    FontPlatformData(const BFont&, const FontDescription& fontDescription);
+    FontPlatformData(const BFont&, const FontDescription&, const FontCustomPlatformData*, const FontMetricsOverrides& = { });
+    static void SetFallBackSerifFont(const BString& font);
+    static void SetFallBackSansSerifFont(const BString& font);
+    static void SetFallBackFixedFont(const BString& font);
+    static void SetFallBackStandardFont(const BString& font);
+#endif
+
 #if PLATFORM(WIN) && USE(CAIRO)
     WEBCORE_EXPORT FontPlatformData(GDIObject<HFONT>, float size, bool syntheticBold, bool syntheticOblique, const FontMetricsOverrides& = { }, const FontCustomPlatformData* = nullptr);
     FontPlatformData(GDIObject<HFONT>, cairo_font_face_t*, float size, bool bold, bool italic, const FontMetricsOverrides& = { }, const FontCustomPlatformData* = nullptr);
@@ -326,6 +374,10 @@ public:
 #elif USE(SKIA)
     WEBCORE_EXPORT FontPlatformData(sk_sp<SkTypeface>&&, float size, bool syntheticBold, bool syntheticOblique, FontOrientation, FontWidthVariant, TextRenderingMode, Vector<hb_feature_t>&&, const FontMetricsOverrides& = { }, const FontCustomPlatformData* = nullptr);
     WEBCORE_EXPORT FontPlatformData(sk_sp<SkTypeface>&&, const FontMetadata&, Vector<hb_feature_t>&&, const FontCustomPlatformData* = nullptr);
+#endif
+
+#if USE(HAIKU_GRAPHICS)
+    const BFont* font() const { return m_font.get(); }
 #endif
 
     using Attributes = FontPlatformDataAttributes;
@@ -462,6 +514,10 @@ private:
 #if USE(FREETYPE) && USE(CAIRO)
     void buildScaledFont(cairo_font_face_t*);
 #endif
+#if USE(HAIKU_GRAPHICS)
+    static void findMatchingFontFamily(const AtomString& familyName, font_family& fontFamily);
+    std::shared_ptr<BFont> m_font;
+#endif
 
 #if PLATFORM(WIN)
     RefPtr<SharedGDIObject<HFONT>> m_hfont; // FIXME: Delete this in favor of m_hbFont
@@ -478,7 +534,9 @@ private:
 #endif
 
 #if USE(FREETYPE)
+#if USE(CAIRO)
     RefPtr<FcPattern> m_pattern;
+#endif
 #endif
 
     FontMetadata m_metadata;
@@ -494,6 +552,12 @@ private:
 #endif
     // The values above are common to all ports
 
+#if USE(HAIKU_GRAPHICS)
+    static font_family m_FallbackSerifFontFamily;
+    static font_family m_FallbackSansSerifFontFamily;
+    static font_family m_FallbackFixedFontFamily;
+    static font_family m_FallbackStandardFontFamily;
+#endif
 
 #if USE(FREETYPE)
     bool m_fixedWidth { false };

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 Apple Inc. All rights reserved.
+ * Copyright (C) 2024 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,105 +23,6 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#if !__has_feature(objc_arc)
-#error This file requires ARC. Add the "-fobjc-arc" compiler flag for this file.
-#endif
-
 #import "config.h"
-#import "WebExtensionAPIWebRequestEvent.h"
 
-#import "MessageSenderInlines.h"
-#import "ResourceLoadInfo.h"
-#import "WebExtensionContextMessages.h"
-#import "WebExtensionTabIdentifier.h"
-#import "WebExtensionWindowIdentifier.h"
-#import "WebFrame.h"
-#import "WebProcess.h"
-#import "_WKWebExtensionWebRequestFilter.h"
-
-#if ENABLE(WK_WEB_EXTENSIONS)
-
-namespace WebKit {
-
-void WebExtensionAPIWebRequestEvent::enumerateListeners(WebExtensionTabIdentifier tabIdentifier, WebExtensionWindowIdentifier windowIdentifier, const ResourceLoadInfo& resourceLoadInfo, NOESCAPE const Function<void(WebExtensionCallbackHandler&, const Vector<String>&)>& function)
-{
-    if (m_listeners.isEmpty())
-        return;
-
-    auto resourceType = toWebExtensionWebRequestResourceType(resourceLoadInfo);
-    auto resourceURL = resourceLoadInfo.originalURL;
-
-    // Copy the listeners since call() can trigger a mutation of the listeners.
-    auto listenersCopy = m_listeners;
-
-    for (auto& listener : listenersCopy) {
-        auto* filter = listener.filter.get();
-        if (filter && ![filter matchesRequestForResourceOfType:resourceType URL:resourceURL.createNSURL().get() tabID:toWebAPI(tabIdentifier) windowID:toWebAPI(windowIdentifier)])
-            continue;
-
-        function(Ref { *listener.callback }, listener.extraInfo);
-    }
-}
-
-void WebExtensionAPIWebRequestEvent::invokeListenersWithArgument(NSDictionary *argument, WebExtensionTabIdentifier tabIdentifier, WebExtensionWindowIdentifier windowIdentifier, const ResourceLoadInfo& resourceLoadInfo)
-{
-    enumerateListeners(tabIdentifier, windowIdentifier, resourceLoadInfo, [argument = RetainPtr { argument }](auto& listener, auto&) {
-        listener.call(toJSValueRef(listener.globalContext(), argument.get()));
-    });
-}
-
-void WebExtensionAPIWebRequestEvent::addListener(WebCore::FrameIdentifier frameIdentifier, RefPtr<WebExtensionCallbackHandler> listener, NSDictionary *filter, NSArray *extraInfoArray, NSString **outExceptionString)
-{
-    _WKWebExtensionWebRequestFilter *parsedFilter;
-    if (filter) {
-        parsedFilter = [[_WKWebExtensionWebRequestFilter alloc] initWithDictionary:filter outErrorMessage:outExceptionString];
-        if (!parsedFilter)
-            return;
-    }
-
-    auto extraInfo = makeVector<String>(extraInfoArray);
-    extraInfo.removeAllMatching([&](auto& item) {
-        return item != "requestBody"_s && item != "requestHeaders"_s && item != "responseHeaders"_s;
-    });
-    extraInfo.shrinkToFit();
-
-    m_frameIdentifier = frameIdentifier;
-    m_listeners.append({ listener, parsedFilter, WTF::move(extraInfo) });
-
-    WebProcess::singleton().send(Messages::WebExtensionContext::AddListener(*m_frameIdentifier, m_type, contentWorldType()), extensionContext().identifier());
-}
-
-void WebExtensionAPIWebRequestEvent::removeListener(WebCore::FrameIdentifier frameIdentifier, RefPtr<WebExtensionCallbackHandler> listener)
-{
-    auto removedCount = m_listeners.removeAllMatching([&](auto& entry) {
-        return entry.callback->callbackFunction() == listener->callbackFunction();
-    });
-
-    if (!removedCount)
-        return;
-
-    ASSERT(frameIdentifier == m_frameIdentifier);
-
-    WebProcess::singleton().send(Messages::WebExtensionContext::RemoveListener(*m_frameIdentifier, m_type, contentWorldType(), removedCount), extensionContext().identifier());
-}
-
-bool WebExtensionAPIWebRequestEvent::hasListener(RefPtr<WebExtensionCallbackHandler> listener)
-{
-    return m_listeners.containsIf([&](auto& entry) {
-        return entry.callback->callbackFunction() == listener->callbackFunction();
-    });
-}
-
-void WebExtensionAPIWebRequestEvent::removeAllListeners()
-{
-    if (m_listeners.isEmpty())
-        return;
-
-    WebProcess::singleton().send(Messages::WebExtensionContext::RemoveListener(*m_frameIdentifier, m_type, contentWorldType(), m_listeners.size()), extensionContext().identifier());
-
-    m_listeners.clear();
-}
-
-} // namespace WebKit
-
-#endif // ENABLE(WK_WEB_EXTENSIONS)
+// Implemented in common C++ for native extension bindings.

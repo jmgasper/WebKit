@@ -25,6 +25,10 @@
     DispatchedTo=WebContent
 ]
 messages -> DrawingArea {
+#if PLATFORM(HAIKU)
+    UpdateGeometryHaiku(uint64_t geometryIdentifier, WebCore::IntSize viewSize, float deviceScaleFactor) -> ()
+    DidPresentBitmapHaiku(uint64_t frameIdentifier)
+#endif
 #if USE(COORDINATED_GRAPHICS) || USE(TEXTURE_MAPPER)
     UpdateGeometry(WebCore::IntSize size) -> ()
 #endif

@@ -146,7 +146,14 @@ private:
 
     enum class ShadowStyle : uint8_t { Outset, Inset };
     sk_sp<SkImageFilter> createDropShadowFilterIfNeeded(ShadowStyle) const;
-    bool drawOutsetShadow(SkPaint&, Function<void(const SkPaint&)>&&);
+    // What a shadow is cast by. A shape filled or stroked with one colour
+    // (rectangles, paths, rounded rectangles, text) casts its coverage, which a
+    // blur mask filter draws directly: Skia has analytic blurs for rectangles
+    // and rounded rectangles and needs no offscreen layer for any shape. Other
+    // content (images, gradients, patterns) goes through a drop shadow filter.
+    enum class ShadowSource : uint8_t { Content, SolidShape };
+    bool drawOutsetShadow(SkPaint&, Function<void(const SkPaint&)>&&, ShadowSource = ShadowSource::Content);
+    std::optional<bool> drawOutsetShadowWithMaskFilter(const SkPaint&, const Function<void(const SkPaint&)>&);
 
     void pushSkiaState();
     void popSkiaState();

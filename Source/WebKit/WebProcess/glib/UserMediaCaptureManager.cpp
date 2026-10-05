@@ -26,7 +26,7 @@
 #include "config.h"
 #include "UserMediaCaptureManager.h"
 
-#if USE(GLIB) && ENABLE(MEDIA_STREAM)
+#if (USE(GLIB) || PLATFORM(HAIKU)) && ENABLE(MEDIA_STREAM)
 
 #include "UserMediaCaptureManagerMessages.h"
 #include "WebProcess.h"

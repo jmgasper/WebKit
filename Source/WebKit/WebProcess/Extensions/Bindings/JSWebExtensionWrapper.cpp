@@ -42,6 +42,8 @@
 #include <WebCore/JSDOMExceptionHandling.h>
 #include <WebCore/JSDOMGlobalObject.h>
 
+#include <wtf/text/StringBuilder.h>
+
 namespace WebKit {
 
 Ref<WebExtensionCallbackHandler> WebExtensionCallbackHandler::create(JSContextRef context, JSObjectRef resolveFunction, JSObjectRef rejectFunction)
@@ -102,7 +104,7 @@ WebExtensionCallbackHandler::~WebExtensionCallbackHandler()
 JSValueRef WebExtensionCallbackHandler::callbackFunction() const
 {
     if (!m_globalContext || !m_callbackFunction)
-        return nil;
+        return nullptr;
 
     return m_callbackFunction;
 }
@@ -223,16 +225,7 @@ String toString(JSContextRef context, JSValueRef value, NullStringPolicy nullStr
         JSRetainPtr string(Adopt, JSValueToStringCopy(context, value, 0));
         return toString(string.get());
     }
-}
-
-String toString(JSStringRef string)
-{
-    if (!string)
-        return nullString();
-
-    Vector<char> buffer(JSStringGetMaximumUTF8CStringSize(string));
-    JSStringGetUTF8CString(string, buffer.mutableSpan().data(), buffer.size());
-    return String::fromUTF8(buffer.span().data());
+    RELEASE_ASSERT_NOT_REACHED();
 }
 
 JSValueRef toWindowObject(JSContextRef context, WebFrame& frame)
@@ -553,6 +546,54 @@ String toJSONString(JSContextRef context, JSValueRef value)
     return serializeJSObject(context, value, nullptr);
 }
 
+#if !PLATFORM(COCOA)
+static void writeSortedJSON(JSON::Value& value, StringBuilder& output)
+{
+    if (RefPtr object = value.asObject()) {
+        auto keys = object->keys();
+        std::ranges::sort(keys, codePointCompareLessThan);
+        output.append('{');
+        bool first = true;
+        for (auto& key : keys) {
+            if (!std::exchange(first, false))
+                output.append(',');
+            output.appendQuotedJSONString(key);
+            output.append(':');
+            writeSortedJSON(*object->getValue(key), output);
+        }
+        output.append('}');
+        return;
+    }
+
+    if (RefPtr array = value.asArray()) {
+        output.append('[');
+        bool first = true;
+        for (Ref item : *array) {
+            if (!std::exchange(first, false))
+                output.append(',');
+            writeSortedJSON(item, output);
+        }
+        output.append(']');
+        return;
+    }
+
+    value.writeJSON(output);
+}
+
+String toSortedJSONString(JSContextRef context, JSValueRef value)
+{
+    // Let JavaScriptCore apply JSON serialization semantics once, including
+    // getters and toJSON, before ordering the resulting object keys.
+    RefPtr json = JSON::Value::parseJSON(toJSONString(context, value));
+    if (!json)
+        return nullString();
+
+    StringBuilder output;
+    writeSortedJSON(*json, output);
+    return output.toString();
+}
+#endif // !PLATFORM(COCOA)
+
 bool isFunction(JSContextRef context, JSValueRef value)
 {
     if (!context || !value || !JSValueIsObject(context, value))
@@ -660,6 +701,21 @@ static RefPtr<JSON::Value> toJSONArray(JSContextRef context, JSValueRef value)
     }
 
     return result;
+}
+
+JSObjectRef unboundExtensionNamespaceMember(JSContextRef context, ASCIILiteral name)
+{
+    JSObjectRef global = JSContextGetGlobalObject(context);
+    for (auto root : { "browser"_s, "chrome"_s }) {
+        JSValueRef namespaceValue = JSObjectGetProperty(context, global, toJSString(root).get(), nullptr);
+        if (!namespaceValue || !JSValueIsObject(context, namespaceValue))
+            continue;
+        JSObjectRef namespaceObject = JSValueToObject(context, namespaceValue, nullptr);
+        JSValueRef member = namespaceObject ? JSObjectGetProperty(context, namespaceObject, toJSString(name).get(), nullptr) : nullptr;
+        if (member && JSValueIsObject(context, member))
+            return JSValueToObject(context, member, nullptr);
+    }
+    return nullptr;
 }
 
 RefPtr<JSON::Value> fromJSValue(JSContextRef context, JSValueRef value)

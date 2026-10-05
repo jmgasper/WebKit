@@ -18,10 +18,28 @@
 
 #include <array>
 
+#if defined(__HAIKU__)
+#    include <OS.h>
+#    include <image.h>
+// Haiku has no CLOCK_MONOTONIC_RAW; its CLOCK_MONOTONIC is not slewed either.
+#    define CLOCK_MONOTONIC_RAW CLOCK_MONOTONIC
+#endif
+
 namespace angle
 {
 std::string GetExecutablePath()
 {
+#if defined(__HAIKU__)
+    // No /proc on Haiku: the team's application image carries the path.
+    image_info info;
+    int32 cookie = 0;
+    while (get_next_image_info(B_CURRENT_TEAM, &cookie, &info) == B_OK)
+    {
+        if (info.type == B_APP_IMAGE)
+            return info.name;
+    }
+    return "";
+#else
     // We cannot use lstat to get the size of /proc/self/exe as it always returns 0
     // so we just use a big buffer and hope the path fits in it.
     char path[4096];
@@ -34,6 +52,7 @@ std::string GetExecutablePath()
 
     ANGLE_UNSAFE_TODO(path[result]) = '\0';
     return path;
+#endif
 }
 
 std::string GetExecutableDirectory()

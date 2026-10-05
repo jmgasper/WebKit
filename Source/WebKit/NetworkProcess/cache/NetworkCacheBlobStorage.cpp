@@ -148,14 +148,30 @@ BlobStorage::Blob BlobStorage::add(const String& path, const Data& data, bool ad
     if (data.isEmpty())
         return { data, hash };
 
+#if !OS(HAIKU)
     String blobPath = blobPathForHash(hash);
-    
+#endif
+
     FileSystem::deleteFile(path);
 #if ENABLE(NETWORK_CACHE_BLOB_STORAGE_MEMORY_CACHE)
     if (m_memoryCache)
         m_memoryCache->remove(path);
 #endif
 
+#if OS(HAIKU)
+    // Without hard links a shared blob cannot be referenced from the record, which
+    // would silently drop every large response body. Store the body with its record.
+    auto unsharedData = data.mapToFile(path);
+    if (unsharedData.isNull())
+        return { };
+    m_approximateSize += unsharedData.size();
+    BlobStorage::Blob unsharedResult { unsharedData, hash };
+#if ENABLE(NETWORK_CACHE_BLOB_STORAGE_MEMORY_CACHE)
+    if (addToMemoryCache && m_memoryCache)
+        m_memoryCache->add(path, unsharedResult);
+#endif
+    return unsharedResult;
+#else
     bool blobExists = FileSystem::fileExists(blobPath);
     if (blobExists) {
         if (FileSystem::makeSafeToUseMemoryMapForPath(blobPath)) {
@@ -189,6 +205,7 @@ BlobStorage::Blob BlobStorage::add(const String& path, const Data& data, bool ad
         m_memoryCache->add(path, result);
 #endif
     return result;
+#endif // OS(HAIKU)
 }
 
 BlobStorage::Blob BlobStorage::get(const String& path)

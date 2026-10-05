@@ -29,6 +29,7 @@
 #if USE(SKIA)
 #include "FontRenderOptions.h"
 #include "GLContext.h"
+#include <cstdlib>
 
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 #include <skia/core/SkColorSpace.h>
@@ -360,7 +361,15 @@ private:
 
 GLContext* PlatformDisplay::skiaGLContext()
 {
-#if PLATFORM(GTK) || PLATFORM(WPE) || (PLATFORM(PLAYSTATION) && !USE(COORDINATED_GRAPHICS))
+#if PLATFORM(HAIKU)
+    static bool summitSkiaGLContextEnabled = [] {
+        const char* value = std::getenv("SUMMIT_SKIA_GL_CONTEXT");
+        return value && value[0] == '1' && !value[1];
+    }();
+    if (!summitSkiaGLContextEnabled)
+        return nullptr;
+#endif
+#if PLATFORM(GTK) || PLATFORM(WPE) || PLATFORM(HAIKU) || (PLATFORM(PLAYSTATION) && !USE(COORDINATED_GRAPHICS))
     if (!s_skiaGLContext) {
         s_skiaGLContext = SkiaGLContext::create(*this);
         m_skiaGLContexts.add(*s_skiaGLContext);

@@ -41,7 +41,13 @@
 #include <wtf/TZoneMallocInlines.h>
 
 // Subclasses
-#if PLATFORM(COCOA)
+#if PLATFORM(HAIKU)
+#if USE(COORDINATED_GRAPHICS)
+#include "DrawingAreaCoordinatedGraphicsGLib.h"
+#else
+#include "DrawingAreaHaiku.h"
+#endif
+#elif PLATFORM(COCOA)
 #include "RemoteLayerTreeDrawingAreaMac.h"
 #include "TiledCoreAnimationDrawingArea.h"
 #elif USE(COORDINATED_GRAPHICS) || USE(TEXTURE_MAPPER)
@@ -62,7 +68,15 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(DrawingArea);
 
 RefPtr<DrawingArea> DrawingArea::create(WebPage& webPage, const WebPageCreationParameters& parameters)
 {
-#if ENABLE(TILED_CA_DRAWING_AREA)
+#if PLATFORM(HAIKU)
+#if USE(COORDINATED_GRAPHICS)
+    // Tiles, painted on a worker pool and composited, rather than one bitmap
+    // painted by the web process thread.
+    return DrawingAreaCoordinatedGraphics::create(webPage, parameters);
+#else
+    return DrawingAreaHaiku::create(webPage, parameters);
+#endif
+#elif ENABLE(TILED_CA_DRAWING_AREA)
     SandboxExtension::consumePermanently(parameters.renderServerMachExtensionHandle);
     switch (parameters.drawingAreaType) {
     case DrawingAreaType::TiledCoreAnimation:
@@ -158,7 +172,7 @@ bool DrawingArea::supportsGPUProcessRendering()
     return true;
 #elif USE(GRAPHICS_LAYER_WC)
     return true;
-#elif USE(COORDINATED_GRAPHICS) || USE(TEXTURE_MAPPER)
+#elif USE(COORDINATED_GRAPHICS) || USE(TEXTURE_MAPPER) || PLATFORM(HAIKU)
     return false;
 #endif
 }

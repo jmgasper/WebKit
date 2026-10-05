@@ -187,7 +187,9 @@ enum TracePointCode {
     WakeUpAndApplyDisplayListStart,
     WakeUpAndApplyDisplayListEnd,
 
-#if PLATFORM(GTK) || PLATFORM(WPE)
+// Named for where they started; the coordinated LayerTreeHost that emits them
+// is shared with the Haiku port now.
+#if PLATFORM(GTK) || PLATFORM(WPE) || PLATFORM(HAIKU)
     GTKWPEPortRange = 20000,
 
     LayerTreeHostRenderingUpdateStart,

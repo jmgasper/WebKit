@@ -39,15 +39,21 @@ class WebExtensionAPIWebNavigation : public WebExtensionAPIObject, public JSWebE
     WEB_EXTENSION_DECLARE_JS_WRAPPER_CLASS(WebExtensionAPIWebNavigation, webNavigation, webNavigation);
 
 public:
-#if PLATFORM(COCOA)
     WebExtensionAPIWebNavigationEvent& onBeforeNavigate();
     WebExtensionAPIWebNavigationEvent& onCommitted();
     WebExtensionAPIWebNavigationEvent& onDOMContentLoaded();
     WebExtensionAPIWebNavigationEvent& onCompleted();
     WebExtensionAPIWebNavigationEvent& onErrorOccurred();
+#if PLATFORM(HAIKU)
+    // Registered so extensions can attach listeners; these are not dispatched yet.
+    WebExtensionAPIWebNavigationEvent& onCreatedNavigationTarget() { return additionalEvent(m_onCreatedNavigationTargetEvent, WebExtensionEventListenerType::WebNavigationOnCreatedNavigationTarget); }
+    WebExtensionAPIWebNavigationEvent& onHistoryStateUpdated() { return additionalEvent(m_onHistoryStateUpdatedEvent, WebExtensionEventListenerType::WebNavigationOnHistoryStateUpdated); }
+    WebExtensionAPIWebNavigationEvent& onReferenceFragmentUpdated() { return additionalEvent(m_onReferenceFragmentUpdatedEvent, WebExtensionEventListenerType::WebNavigationOnReferenceFragmentUpdated); }
+    WebExtensionAPIWebNavigationEvent& onTabReplaced() { return additionalEvent(m_onTabReplacedEvent, WebExtensionEventListenerType::WebNavigationOnTabReplaced); }
+#endif
 
-    void getAllFrames(NSDictionary *details, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
-    void getFrame(NSDictionary *details, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
+    void getAllFrames(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+    void getFrame(RefPtr<JSON::Value> details, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
 
 private:
     RefPtr<WebExtensionAPIWebNavigationEvent> m_onBeforeNavigateEvent;
@@ -55,6 +61,17 @@ private:
     RefPtr<WebExtensionAPIWebNavigationEvent> m_onDOMContentLoadedEvent;
     RefPtr<WebExtensionAPIWebNavigationEvent> m_onCompletedEvent;
     RefPtr<WebExtensionAPIWebNavigationEvent> m_onErrorOccurredEvent;
+#if PLATFORM(HAIKU)
+    WebExtensionAPIWebNavigationEvent& additionalEvent(RefPtr<WebExtensionAPIWebNavigationEvent>& event, WebExtensionEventListenerType type)
+    {
+        if (!event)
+            event = WebExtensionAPIWebNavigationEvent::create(*this, type);
+        return *event;
+    }
+    RefPtr<WebExtensionAPIWebNavigationEvent> m_onCreatedNavigationTargetEvent;
+    RefPtr<WebExtensionAPIWebNavigationEvent> m_onHistoryStateUpdatedEvent;
+    RefPtr<WebExtensionAPIWebNavigationEvent> m_onReferenceFragmentUpdatedEvent;
+    RefPtr<WebExtensionAPIWebNavigationEvent> m_onTabReplacedEvent;
 #endif
 };
 

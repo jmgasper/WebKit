@@ -1,0 +1,21 @@
+/* Copyright (C) 2026 KunanyiOS contributors. SPDX-License-Identifier: BSD-2-Clause */
+
+[
+    Conditional=WK_WEB_EXTENSIONS,
+    MainWorldOnly,
+    ReturnsPromiseWhenCallbackIsOmitted,
+    UseCPPAPI
+] interface WebExtensionAPIDownloads {
+    // The calling page starts the transfer, so its blob: URLs resolve in the network process.
+    [RaisesStringException, NeedsPageIdentifier] void download([JSONValue] any options, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void search([JSONValue] any query, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void cancel(double downloadId, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void erase([JSONValue] any query, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void open(double downloadId, [Optional, CallbackHandler] function callback);
+    [RaisesStringException] void show(double downloadId, [Optional, CallbackHandler] function callback);
+    void showDefaultFolder([Optional, CallbackHandler] function callback);
+
+    readonly attribute WebExtensionAPIEvent onCreated;
+    readonly attribute WebExtensionAPIEvent onChanged;
+    readonly attribute WebExtensionAPIEvent onErased;
+};

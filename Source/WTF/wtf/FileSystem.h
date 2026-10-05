@@ -192,8 +192,11 @@ WTF_EXPORT_PRIVATE UTF8CString webkitTopLevelDirectory();
 #endif
 #endif // USE(GLIB)
 
-#if OS(WINDOWS)
+#if OS(WINDOWS) || OS(HAIKU)
 WTF_EXPORT_PRIVATE String localUserSpecificStorageDirectory();
+#endif
+
+#if OS(WINDOWS)
 WTF_EXPORT_PRIVATE String roamingUserSpecificStorageDirectory();
 WTF_EXPORT_PRIVATE String createTemporaryDirectory();
 #endif

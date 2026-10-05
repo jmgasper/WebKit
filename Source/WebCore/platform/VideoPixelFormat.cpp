@@ -74,6 +74,24 @@ std::optional<VideoPixelFormat> convertVideoFramePixelFormat(uint32_t format, bo
     default:
         break;
     }
+#elif PLATFORM(HAIKU)
+    // VideoFrameHaiku answers FourCCs.
+    switch (format) {
+    case 'I420':
+        return VideoPixelFormat::I420;
+    case 'NV12':
+        return VideoPixelFormat::NV12;
+    case 'RGBA':
+        return shouldDiscardAlpha ? VideoPixelFormat::RGBX : VideoPixelFormat::RGBA;
+    case 'RGBX':
+        return VideoPixelFormat::RGBX;
+    case 'BGRA':
+        return shouldDiscardAlpha ? VideoPixelFormat::BGRX : VideoPixelFormat::BGRA;
+    case 'BGRX':
+        return VideoPixelFormat::BGRX;
+    default:
+        break;
+    }
 #else
     UNUSED_PARAM(format);
     UNUSED_PARAM(shouldDiscardAlpha);

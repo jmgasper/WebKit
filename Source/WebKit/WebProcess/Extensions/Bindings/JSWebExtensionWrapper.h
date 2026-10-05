@@ -27,6 +27,7 @@
 
 #if ENABLE(WK_WEB_EXTENSIONS)
 
+#include "JSWebExtensionString.h"
 #include "Protected.h"
 #include <JavaScriptCore/APICast.h>
 #include <JavaScriptCore/JSCJSValuePropertyInlines.h>
@@ -115,11 +116,6 @@ enum class ValuePolicy : bool {
 RefPtr<WebFrame> toWebFrame(JSContextRef);
 RefPtr<WebPage> toWebPage(JSContextRef);
 
-inline JSRetainPtr<JSStringRef> toJSString(const String& string)
-{
-    return JSRetainPtr(Adopt, JSStringCreateWithUTF8CString(!string.isEmpty() ? string.utf8().legacyCStringPointer() : ""));
-}
-
 inline JSValueRef toJSValueRefOrJSNull(JSContextRef context, JSValueRef value)
 {
     ASSERT(context);
@@ -181,8 +177,6 @@ RefPtr<WebExtensionCallbackHandler> toJSCallbackHandler(JSContextRef, JSValueRef
 
 String toString(JSContextRef, JSValueRef, NullStringPolicy = NullStringPolicy::NullAndUndefinedAsNullString);
 
-String toString(JSStringRef);
-
 JSObjectRef toJSError(JSContextRef, const String&);
 
 JSValueRef deserializeJSONString(JSContextRef, const String& jsonString);
@@ -209,6 +203,10 @@ JSValueRef toWindowObject(JSContextRef, WebFrame&);
 JSValueRef toWindowObject(JSContextRef, WebPage&);
 
 RefPtr<JSON::Value> fromJSValue(JSContextRef, JSValueRef);
+
+/// Returns `browser[name]` (or `chrome[name]`) of the context's global object, for API
+/// functions that were called without their namespace object as `this`.
+JSObjectRef unboundExtensionNamespaceMember(JSContextRef, ASCIILiteral name);
 RefPtr<JSON::Value> toJSONValue(JSContextRef, JSValueRef, NullValuePolicy = NullValuePolicy::NotAllowed, ValuePolicy = ValuePolicy::Recursive);
 inline JSValueRef toJSValueRefOrJSNull(JSContextRef context, RefPtr<JSON::Object> value)
 {

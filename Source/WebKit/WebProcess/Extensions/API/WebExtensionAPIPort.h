@@ -36,17 +36,12 @@
 #include "WebPageProxyIdentifier.h"
 #include <wtf/WeakPtr.h>
 
-OBJC_CLASS NSDictionary;
-OBJC_CLASS NSObject;
-OBJC_CLASS NSString;
-
 namespace WebKit {
 
 class WebExtensionAPIPort : public WebExtensionAPIObject, public JSWebExtensionWrappable, public CanMakeWeakPtr<WebExtensionAPIPort> {
     WEB_EXTENSION_DECLARE_JS_WRAPPER_CLASS(WebExtensionAPIPort, port, port);
 
 public:
-#if PLATFORM(COCOA)
     using PortSet = HashSet<Ref<WebExtensionAPIPort>>;
 
     static PortSet get(WebExtensionPortChannelIdentifier);
@@ -56,18 +51,16 @@ public:
     std::optional<WebPageProxyIdentifier> owningPageProxyIdentifier() const { return m_owningPageProxyIdentifier; }
     const std::optional<WebExtensionMessageSenderParameters>& senderParameters() const LIFETIME_BOUND { return m_senderParameters; }
 
-    void postMessage(WebFrame&, const String&, NSString **outExceptionString);
+    void postMessage(WebFrame&, const String&, String& outExceptionString);
     void disconnect();
 
     bool isDisconnected() const { return m_disconnected; }
-#endif
     bool isQuarantined() const { return !m_channelIdentifier; }
 
-#if PLATFORM(COCOA)
-    NSString *name();
+    String name();
     JSValueRef sender(JSContextRef);
 
-    JSValue *error();
+    JSValueRef error(JSContextRef);
     void setError(JSContextRef, JSValueRef);
 
     WebExtensionAPIEvent& onMessage();
@@ -81,7 +74,6 @@ public:
 
         remove();
     }
-#endif
 
 private:
     friend class WebExtensionContextProxy;
@@ -139,10 +131,8 @@ private:
     void add();
     void remove();
 
-#if PLATFORM(COCOA)
-    void fireMessageEventIfNeeded(id message, bool userGesture);
-    void fireDisconnectEventIfNeeded();
-#endif
+    void fireMessageEventIfNeeded(const String& messageJSON, bool userGesture);
+    void fireDisconnectEventIfNeeded(const std::optional<String>& errorMessage = std::nullopt);
 
     WebExtensionContentWorldType m_targetContentWorldType;
     Markable<WebPageProxyIdentifier> m_owningPageProxyIdentifier;
@@ -151,6 +141,7 @@ private:
 
     String m_name;
     Protected<JSValueRef> m_error;
+    std::optional<String> m_errorMessage;
     std::optional<WebExtensionMessageSenderParameters> m_senderParameters;
 
     const RefPtr<WebExtensionAPIEvent> m_onMessage;

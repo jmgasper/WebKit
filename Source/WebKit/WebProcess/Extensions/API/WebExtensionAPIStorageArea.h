@@ -33,6 +33,7 @@
 #include "WebExtensionAPIObject.h"
 #include "WebExtensionDataType.h"
 #include "WebPageProxyIdentifier.h"
+#include <wtf/JSONValues.h>
 
 namespace WebKit {
 
@@ -40,20 +41,21 @@ class WebExtensionAPIStorageArea : public WebExtensionAPIObject, public JSWebExt
     WEB_EXTENSION_DECLARE_JS_WRAPPER_CLASS(WebExtensionAPIStorageArea, storageArea, storageArea);
 
 public:
-#if PLATFORM(COCOA)
+    enum class Managed : bool { No, Yes };
+
     bool isPropertyAllowed(const ASCIILiteral& propertyName, WebPage*);
 
-    void get(WebPageProxyIdentifier, id items, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
-    void getKeys(WebPageProxyIdentifier, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
-    void getBytesInUse(WebPageProxyIdentifier, id keys, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
-    void set(WebPageProxyIdentifier, NSDictionary *items, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
-    void remove(WebPageProxyIdentifier, id keys, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
+    void get(WebPageProxyIdentifier, JSContextRef, JSValueRef items, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+    void getKeys(WebPageProxyIdentifier, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+    void getBytesInUse(WebPageProxyIdentifier, JSContextRef, JSValueRef keys, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+    void set(WebPageProxyIdentifier, JSContextRef, JSValueRef items, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
+    void remove(WebPageProxyIdentifier, JSContextRef, JSValueRef keys, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
     void clear(WebPageProxyIdentifier, Ref<WebExtensionCallbackHandler>&&);
 
     double NODELETE quotaBytes();
 
     // Only exposed to trusted contexts.
-    void setAccessLevel(WebPageProxyIdentifier, NSDictionary *, Ref<WebExtensionCallbackHandler>&&, NSString **outExceptionString);
+    void setAccessLevel(WebPageProxyIdentifier, RefPtr<JSON::Value>, Ref<WebExtensionCallbackHandler>&&, String& outExceptionString);
 
     // Exposed only by storage.sync.
     double NODELETE quotaBytesPerItem();
@@ -64,16 +66,18 @@ public:
     WebExtensionAPIEvent& onChanged();
 
 private:
-    explicit WebExtensionAPIStorageArea(const WebExtensionAPIObject& parentObject, WebExtensionDataType type)
+    explicit WebExtensionAPIStorageArea(const WebExtensionAPIObject& parentObject, WebExtensionDataType type, Managed managed = Managed::No)
         : WebExtensionAPIObject(parentObject)
         , m_type(type)
+        , m_managed(managed == Managed::Yes)
     {
-        setPropertyPath(toAPIString(type), &parentObject);
+        setPropertyPath(m_managed ? String { "managed"_s } : toAPIString(type), &parentObject);
     }
 
     WebExtensionDataType m_type { WebExtensionDataType::Local };
+    // storage.managed: never reaches the UI process; always empty and read-only.
+    bool m_managed { false };
     RefPtr<WebExtensionAPIEvent> m_onChanged;
-#endif
 };
 
 } // namespace WebKit

@@ -49,6 +49,7 @@ template<typename AuxiliaryProcessType>
 class AuxiliaryProcessMainBase : public AuxiliaryProcessMainCommon {
 public:
     virtual bool platformInitialize() { return true; }
+    virtual void platformRunEventLoop() { RunLoop::run(); }
     virtual void platformFinalize() { }
 
     virtual void initializeAuxiliaryProcess(AuxiliaryProcessInitializationParameters&& parameters)
@@ -73,7 +74,7 @@ public:
         InitializeWebKit2();
 
         initializeAuxiliaryProcess(WTF::move(m_parameters));
-        RunLoop::run();
+        platformRunEventLoop();
         platformFinalize();
 
         return EXIT_SUCCESS;

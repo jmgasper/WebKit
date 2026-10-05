@@ -35,7 +35,7 @@
 
 namespace WebCore {
 
-#if !PLATFORM(COCOA) && !USE(GCRYPT)
+#if !PLATFORM(COCOA) && !USE(GCRYPT) && !USE(OPENSSL)
 ExceptionOr<Vector<uint8_t>> CryptoAlgorithmEd25519::platformSign(const CryptoKeyOKP&, const Vector<uint8_t>&)
 {
     ASSERT_NOT_REACHED();

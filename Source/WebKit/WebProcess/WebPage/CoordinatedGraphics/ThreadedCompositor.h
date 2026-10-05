@@ -97,6 +97,9 @@ public:
     void invalidate();
     void suspend();
     void resume();
+#if PLATFORM(HAIKU)
+    void recoverFromStallHaiku(Seconds waited);
+#endif
 
     bool isActive() const;
 
@@ -137,6 +140,9 @@ private:
     TargetContents paintToSkiaCanvas(const WebCore::TransformationMatrix&, const WebCore::IntSize&, const OptionSet<WebCore::CompositionReason>&);
 #endif
     void frameComplete();
+#if PLATFORM(HAIKU)
+    void renderTargetReleased();
+#endif
 
     void didCompositeRunLoopObserverFired();
 
@@ -194,6 +200,26 @@ private:
     } m_attributes;
 
     RunLoop::Timer m_renderTimer;
+#if PLATFORM(HAIKU)
+    Seconds m_minimumFrameInterval;
+    MonotonicTime m_lastRenderTimestamp;
+    bool m_isWaitingForRenderTarget WTF_GUARDED_BY_LOCK(m_state.lock) { false };
+    MonotonicTime m_renderTargetWaitStartedAt WTF_GUARDED_BY_LOCK(m_state.lock);
+    // recoverFromStallHaiku(): when the frame now in progress started, and
+    // the main thread's record of its last check.
+    MonotonicTime m_inProgressSinceHaiku WTF_GUARDED_BY_LOCK(m_state.lock);
+    MonotonicTime m_lastStallCheckHaiku;
+    MonotonicTime m_stallCheckPostedAtHaiku;
+    std::atomic<bool> m_stallCheckPendingHaiku { false };
+    enum class TestStallHaiku : uint8_t { Timer, Late, Frame };
+    bool testStallHaiku(TestStallHaiku);
+    unsigned m_renderCountHaiku { 0 };
+#if USE(TEXTURE_MAPPER)
+    void warmShaderProgramsHaiku(unsigned remaining, bool waitsForQuiet);
+    bool m_shaderWarmupStartedHaiku { false };
+    MonotonicTime m_lastFrameSentHaiku;
+#endif
+#endif
 #if USE(TEXTURE_MAPPER)
     std::unique_ptr<WebCore::TextureMapper> m_textureMapper;
 #endif
@@ -234,4 +260,3 @@ private:
 } // namespace WebKit
 
 #endif // USE(COORDINATED_GRAPHICS)
-

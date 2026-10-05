@@ -222,9 +222,9 @@ void Resolver::addCurrentSVGFontFaceRules()
     }
 }
 
-void Resolver::appendAuthorStyleSheets(std::span<const Ref<CSSStyleSheet>> styleSheets)
+void Resolver::appendAuthorStyleSheets(std::span<const Ref<CSSStyleSheet>> styleSheets, bool preserveResolverMutatingRules)
 {
-    m_ruleSets.appendAuthorStyleSheets(styleSheets, &m_mediaQueryEvaluator, m_inspectorCSSOMWrappers);
+    m_ruleSets.appendAuthorStyleSheets(styleSheets, &m_mediaQueryEvaluator, m_inspectorCSSOMWrappers, preserveResolverMutatingRules);
 
     if (auto renderView = document().renderView())
         renderView->style().fontCascade().update(&protect(document())->fontSelector());

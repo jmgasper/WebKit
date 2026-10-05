@@ -93,6 +93,10 @@
 #include "TransformState.h"
 #include <wtf/HexNumber.h>
 #include <wtf/NeverDestroyed.h>
+#include <wtf/HashSet.h>
+#include <wtf/MonotonicTime.h>
+#include <wtf/text/MakeString.h>
+#include <wtf/text/StringBuilder.h>
 #include <wtf/SetForScope.h>
 #include <wtf/StackStats.h>
 #include <wtf/TZoneMallocInlines.h>
@@ -579,9 +583,507 @@ static bool canContainDescendantScrollbarChanges(const RenderBlock& renderBlock,
     return layoutContext.subtreeScrollbarChangesState().has_value() && renderBlock.style().logicalWidth().isFixed();
 }
 
+#if PLATFORM(HAIKU)
+// SUMMIT_LAYOUT_WHY_TRACE=<ms>: for each layout of the render tree that takes
+// at least that long, report the blocks that were laid out although nothing in
+// them needed it when the layout began (an ancestor's algorithm asked), or that
+// were laid out more than once: how many, and the time in the outermost ones.
+extern unsigned summitPercentHeightChainsDirtied;
+extern unsigned summitPercentHeightChainsLeft;
+
+struct SummitLayoutWhyTrace {
+    struct Entry {
+        unsigned layouts { 0 };
+        unsigned outermost { 0 };
+        double outermostMilliseconds { 0 };
+    };
+    bool active { false };
+    HashSet<const RenderObject*> dirtyAtStart;
+    HashSet<const RenderObject*> laidOut;
+    HashMap<String, Entry> forced;
+    unsigned forcedDepth { 0 };
+    unsigned renderers { 0 };
+    unsigned blockLayouts { 0 };
+    unsigned forcedBlockLayouts { 0 };
+    unsigned reusedItemLayouts { 0 };
+    unsigned percentChainsDirtiedAtStart { 0 };
+    unsigned percentChainsLeftAtStart { 0 };
+};
+
+static SummitLayoutWhyTrace& summitLayoutWhyTrace()
+{
+    static NeverDestroyed<SummitLayoutWhyTrace> trace;
+    return trace;
+}
+
+static double summitLayoutWhyTraceThreshold()
+{
+    static double threshold = [] {
+        const char* value = std::getenv("SUMMIT_LAYOUT_WHY_TRACE");
+        return value && *value ? std::atof(value) : -1.0;
+    }();
+    return threshold;
+}
+
+static String summitLayoutWhyDescription(const RenderObject& renderer)
+{
+    StringBuilder builder;
+    builder.append(renderer.renderName());
+    if (RefPtr element = dynamicDowncast<Element>(renderer.node())) {
+        builder.append('<', element->localName());
+        auto& classNames = element->getAttribute(HTMLNames::classAttr);
+        if (!classNames.isEmpty())
+            builder.append('.', StringView(classNames.string()).left(28));
+        builder.append('>');
+    }
+    return builder.toString();
+}
+
+// SUMMIT_LAYOUT_WHY_ITEMS=<text>: with the trace on, each layout request for a
+// flex or grid item whose description contains the text is logged with the
+// inputs of its last layout and the present ones.
+static bool summitLayoutWhyTraceFollows(const RenderObject& renderer)
+{
+    static const char* text = std::getenv("SUMMIT_LAYOUT_WHY_ITEMS");
+    return text && *text && summitLayoutWhyDescription(renderer).contains(StringView::fromLatin1(text));
+}
+
+bool summitLayoutWhyTraceBegin(RenderElement& root)
+{
+    if (summitLayoutWhyTraceThreshold() < 0)
+        return false;
+    auto& trace = summitLayoutWhyTrace();
+    if (trace.active)
+        return false;
+    trace = { };
+    trace.active = true;
+    trace.percentChainsDirtiedAtStart = summitPercentHeightChainsDirtied;
+    trace.percentChainsLeftAtStart = summitPercentHeightChainsLeft;
+    for (const RenderObject* renderer = &root; renderer; renderer = renderer->nextInPreOrder(&root)) {
+        ++trace.renderers;
+        if (renderer->needsLayout())
+            trace.dirtyAtStart.add(renderer);
+    }
+    return true;
+}
+
+void summitLayoutWhyTraceEnd(RenderElement& root, double milliseconds)
+{
+    auto& trace = summitLayoutWhyTrace();
+    trace.active = false;
+    if (milliseconds < summitLayoutWhyTraceThreshold())
+        return;
+    WTFLogAlways("Summit layout why: %.1f ms root=%s renderers=%u dirty=%u blockLayouts=%u forced=%u reused=%u percentChainsMarked=%u percentChainsLeft=%u\n", milliseconds,
+        summitLayoutWhyDescription(root).utf8().legacyCStringPointer(), trace.renderers, trace.dirtyAtStart.size() + trace.laidOut.size(), trace.blockLayouts, trace.forcedBlockLayouts, trace.reusedItemLayouts,
+        summitPercentHeightChainsDirtied - trace.percentChainsDirtiedAtStart, summitPercentHeightChainsLeft - trace.percentChainsLeftAtStart);
+    Vector<std::pair<String, SummitLayoutWhyTrace::Entry>> entries;
+    for (auto& entry : trace.forced)
+        entries.append({ entry.key, entry.value });
+    std::ranges::sort(entries, [](auto& a, auto& b) {
+        return a.second.outermostMilliseconds > b.second.outermostMilliseconds;
+    });
+    unsigned reported = 0;
+    for (auto& entry : entries) {
+        WTFLogAlways("Summit layout why:   %6.1f ms outermost=%u layouts=%u %s\n", entry.second.outermostMilliseconds,
+            entry.second.outermost, entry.second.layouts, entry.first.utf8().legacyCStringPointer());
+        if (++reported == 24)
+            break;
+    }
+}
+
+class SummitLayoutWhyTraceScope {
+public:
+    explicit SummitLayoutWhyTraceScope(const RenderBlock& block, ASCIILiteral reuseRefusal)
+        : m_reuseRefusal(reuseRefusal)
+    {
+        auto& trace = summitLayoutWhyTrace();
+        if (!trace.active)
+            return;
+        ++trace.blockLayouts;
+        // Only the first layout of a block that needed one is expected.
+        bool wasDirty = trace.dirtyAtStart.remove(&block);
+        bool again = !trace.laidOut.add(&block).isNewEntry;
+        if (wasDirty)
+            return;
+        m_block = &block;
+        m_again = again;
+        ++trace.forcedBlockLayouts;
+        m_outermost = !trace.forcedDepth++;
+        if (m_outermost)
+            m_start = MonotonicTime::now();
+    }
+
+    ~SummitLayoutWhyTraceScope()
+    {
+        if (!m_block)
+            return;
+        auto& trace = summitLayoutWhyTrace();
+        if (!trace.active)
+            return;
+        --trace.forcedDepth;
+        auto key = makeString(m_again ? "again "_s : "clean "_s, summitLayoutWhyDescription(*m_block), " in "_s,
+            m_block->parent() ? summitLayoutWhyDescription(*m_block->parent()) : String("none"_s),
+            m_reuseRefusal.isNull() ? ""_s : " kept-not: "_s, m_reuseRefusal.isNull() ? ""_s : m_reuseRefusal);
+        auto& entry = trace.forced.ensure(key, [] { return SummitLayoutWhyTrace::Entry { }; }).iterator->value;
+        ++entry.layouts;
+        if (m_outermost) {
+            ++entry.outermost;
+            entry.outermostMilliseconds += (MonotonicTime::now() - m_start).milliseconds();
+        }
+    }
+
+private:
+    const RenderBlock* m_block { nullptr };
+    ASCIILiteral m_reuseRefusal;
+    MonotonicTime m_start;
+    bool m_again { false };
+    bool m_outermost { false };
+};
+
+// Flex and grid containers lay their items out several times in one layout:
+// to measure them, again with the final size, again to stretch them, and each
+// time they mark the item as needing layout whether or not anything it is
+// laid out from has changed. Nested, the repeats multiply: on Reddit's feed
+// (a grid in a flex box in a grid, posts with galleries in them) one layout
+// with about a hundred changed boxes laid blocks out 10,000 times, a gallery's
+// items 14 times for each layout of the gallery, 3,600 times in all.
+//
+// An item's layout is therefore kept when it is asked for again with nothing
+// changed: the same sizes imposed by the container as in its last layout (or
+// ones that come to the same, see summitItemLayoutInputsAreEquivalent()), the
+// same size left by that layout, and nothing inside the item that needs layout
+// itself. The marks on the item have to be known to come from the container
+// (summitSetNeedsLayoutByContainer(), summitSetChildNeedsLayoutByContainer()).
+// SUMMIT_LAYOUT_REUSE=0 turns this off.
+struct SummitItemLayoutInputs {
+    std::optional<LayoutUnit> overridingBorderBoxLogicalWidth;
+    std::optional<LayoutUnit> overridingBorderBoxLogicalHeight;
+    std::optional<RenderBox::GridAreaSize> gridAreaContentLogicalWidth;
+    std::optional<RenderBox::GridAreaSize> gridAreaContentLogicalHeight;
+    LayoutUnit containingBlockLogicalWidth;
+    LayoutUnit logicalWidth;
+    LayoutUnit logicalHeight;
+    bool percentHeightResolveDisabled { false };
+    bool containerResolvesPercentHeights { false };
+    bool containerPhaseChangesSizing { false };
+    // The flex basis stood in for the item's size (while a flex container computes flex base sizes).
+    bool flexBasisIsImposed { false };
+
+    bool operator==(const SummitItemLayoutInputs&) const = default;
+};
+
+struct SummitItemLayout {
+    SummitItemLayoutInputs inputs;
+    // The size the item took when nothing imposed one, while that is still what it would take.
+    std::optional<LayoutSize> naturalLogicalSize;
+};
+
+// Whether a layout from one set of inputs leaves what a layout from the other
+// would. Besides equal inputs:
+// - Which of its layout phases a flex container is in only decides how
+//   percentage heights in the item resolve, so it does not matter to an item
+//   without any.
+// - Containers measure an item without imposing a size and then impose the
+//   size they measured. For a block (not a flex box or a grid, whose content
+//   is placed by their size) without percentage heights inside, that is the
+//   layout it already has.
+static bool summitItemLayoutInputsAreEquivalent(const RenderBlock& item, const SummitItemLayout& last, const SummitItemLayoutInputs& now)
+{
+    auto& before = last.inputs;
+    if (before == now)
+        return true;
+    if (before.logicalWidth != now.logicalWidth || before.logicalHeight != now.logicalHeight
+        || before.containingBlockLogicalWidth != now.containingBlockLogicalWidth
+        || before.gridAreaContentLogicalWidth != now.gridAreaContentLogicalWidth
+        || before.gridAreaContentLogicalHeight != now.gridAreaContentLogicalHeight
+        || before.containerPhaseChangesSizing != now.containerPhaseChangesSizing
+        || before.flexBasisIsImposed != now.flexBasisIsImposed)
+        return false;
+
+    if (item.hasPercentHeightDescendants() || item.hasRelativeLogicalHeight())
+        return false;
+
+    if (before.overridingBorderBoxLogicalWidth == now.overridingBorderBoxLogicalWidth
+        && before.overridingBorderBoxLogicalHeight == now.overridingBorderBoxLogicalHeight)
+        return true;
+
+    if (!last.naturalLogicalSize || !item.isRenderBlockFlow())
+        return false;
+    auto naturalWidth = last.naturalLogicalSize->width();
+    auto naturalHeight = last.naturalLogicalSize->height();
+    return before.overridingBorderBoxLogicalWidth.value_or(naturalWidth) == now.overridingBorderBoxLogicalWidth.value_or(naturalWidth)
+        && before.overridingBorderBoxLogicalHeight.value_or(naturalHeight) == now.overridingBorderBoxLogicalHeight.value_or(naturalHeight)
+        && now.overridingBorderBoxLogicalWidth.value_or(naturalWidth) == now.logicalWidth
+        && now.overridingBorderBoxLogicalHeight.value_or(naturalHeight) == now.logicalHeight;
+}
+
+static bool summitLayoutReuseEnabled()
+{
+    static bool enabled = [] {
+        const char* value = std::getenv("SUMMIT_LAYOUT_REUSE");
+        return !value || value[0] != '0' || value[1];
+    }();
+    return enabled;
+}
+
+// SUMMIT_LAYOUT_REUSE=verify lays the item out anyway and reports any box in
+// it that the layout moved or resized: the kept layout would have been wrong.
+static bool summitLayoutReuseVerifies()
+{
+    static bool verifies = [] {
+        const char* value = std::getenv("SUMMIT_LAYOUT_REUSE");
+        return value && !strcmp(value, "verify");
+    }();
+    return verifies;
+}
+
+static LayoutRect summitFrameRectInItem(const RenderBlock& item, const RenderBox& box)
+{
+    if (&box == &item)
+        return { 0_lu, 0_lu, box.borderBoxWidth(), box.borderBoxHeight() };
+    return { box.x(), box.y(), box.borderBoxWidth(), box.borderBoxHeight() };
+}
+
+static Vector<LayoutRect> summitFrameRectsInItem(const RenderBlock& item)
+{
+    Vector<LayoutRect> rects;
+    for (const RenderObject* renderer = &item; renderer; renderer = renderer->nextInPreOrder(&item)) {
+        if (auto* box = dynamicDowncast<RenderBox>(*renderer))
+            rects.append(summitFrameRectInItem(item, *box));
+    }
+    return rects;
+}
+
+// How the last item asked about came to keep its layout, for the verification's report.
+static String summitLayoutReuseContext;
+
+static void summitReportLayoutReuseMismatch(const RenderBlock& item, const Vector<LayoutRect>& before)
+{
+    static unsigned verified;
+    static unsigned mismatches;
+    if (!(++verified % 5000))
+        WTFLogAlways("Summit layout reuse: %u kept layouts verified, %u wrong\n", verified, mismatches);
+    size_t index = 0;
+    for (const RenderObject* renderer = &item; renderer; renderer = renderer->nextInPreOrder(&item)) {
+        auto* box = dynamicDowncast<RenderBox>(*renderer);
+        if (!box)
+            continue;
+        auto rect = summitFrameRectInItem(item, *box);
+        if (index >= before.size() || before[index] != rect) {
+            ++mismatches;
+            auto was = index < before.size() ? before[index] : LayoutRect { };
+            WTFLogAlways("Summit layout reuse MISMATCH: item %s in %s (%s; %u boxes): box %u %s was %.2f,%.2f %.2fx%.2f is %.2f,%.2f %.2fx%.2f\n",
+                summitLayoutWhyDescription(item).utf8().legacyCStringPointer(), summitLayoutWhyDescription(*item.parent()).utf8().legacyCStringPointer(),
+                summitLayoutReuseContext.utf8().legacyCStringPointer(), static_cast<unsigned>(before.size()),
+                static_cast<unsigned>(index), summitLayoutWhyDescription(*box).utf8().legacyCStringPointer(),
+                was.x().toFloat(), was.y().toFloat(), was.width().toFloat(), was.height().toFloat(),
+                rect.x().toFloat(), rect.y().toFloat(), rect.width().toFloat(), rect.height().toFloat());
+            return;
+        }
+        ++index;
+    }
+}
+
+static SingleThreadWeakHashMap<RenderBox, SummitItemLayout>& summitItemLayouts()
+{
+    static NeverDestroyed<SingleThreadWeakHashMap<RenderBox, SummitItemLayout>> layouts;
+    return layouts;
+}
+
+static SingleThreadWeakHashSet<RenderBox>& summitItemsMarkedByContainer()
+{
+    static NeverDestroyed<SingleThreadWeakHashSet<RenderBox>> items;
+    return items;
+}
+
+// A container marks an item for layout through these, in place of
+// RenderObject::setNeedsLayout(MarkOnlyThis) and setChildNeedsLayout(MarkOnlyThis).
+// Those marks are also made for changes to the item or inside it (a style
+// change, a percentage height whose base changed), so an item only counts as
+// marked by its container while every mark on it was made here.
+static void summitNoteMarkByContainer(RenderBox& item)
+{
+    if (!summitLayoutReuseEnabled())
+        return;
+    if (!item.needsLayout() || summitItemsMarkedByContainer().contains(item))
+        summitItemsMarkedByContainer().add(item);
+}
+
+void summitSetNeedsLayoutByContainer(RenderBox& item)
+{
+    summitNoteMarkByContainer(item);
+    item.setNeedsLayout(MarkingBehavior::MarkOnlyThis);
+}
+
+void summitSetChildNeedsLayoutByContainer(RenderBox& item)
+{
+    summitNoteMarkByContainer(item);
+    item.setChildNeedsLayout(MarkingBehavior::MarkOnlyThis);
+}
+
+// In RenderBlockFlow.cpp.
+void summitVerifyPercentHeightChains();
+
+// Called when a layout of the document is finished.
+void summitForgetItemsMarkedByContainer()
+{
+    summitItemsMarkedByContainer().clear();
+    summitVerifyPercentHeightChains();
+}
+
+static SummitItemLayoutInputs summitCurrentItemLayoutInputs(RenderBlock& item)
+{
+    SummitItemLayoutInputs inputs;
+    inputs.overridingBorderBoxLogicalWidth = item.overridingBorderBoxLogicalWidth();
+    inputs.overridingBorderBoxLogicalHeight = item.overridingBorderBoxLogicalHeight();
+    inputs.gridAreaContentLogicalWidth = item.gridAreaContentLogicalWidth();
+    inputs.gridAreaContentLogicalHeight = item.gridAreaContentLogicalHeight();
+    inputs.containingBlockLogicalWidth = item.containingBlockLogicalWidthForContent();
+    inputs.logicalWidth = item.logicalWidth();
+    inputs.logicalHeight = item.logicalHeight();
+    inputs.flexBasisIsImposed = item.overridingLogicalWidthForFlexBasisComputation() || item.overridingLogicalHeightForFlexBasisComputation();
+    auto& style = item.style();
+    if (CheckedPtr flexBox = dynamicDowncast<RenderFlexibleBox>(item.parent())) {
+        inputs.percentHeightResolveDisabled = item.view().frameView().layoutContext().isPercentHeightResolveDisabledFor(item);
+        inputs.containerResolvesPercentHeights = flexBox->canUseFlexItemForPercentageResolution(item);
+        // While it computes flex base sizes the container has its items ignore their minimum and maximum sizes.
+        bool hasMinimumOrMaximumSize = !style.logicalMinWidth().isAuto() || !style.logicalMinHeight().isAuto()
+            || !style.logicalMaxWidth().isNone() || !style.logicalMaxHeight().isNone();
+        inputs.containerPhaseChangesSizing = hasMinimumOrMaximumSize && flexBox->isComputingFlexBaseSizes();
+    } else if (CheckedPtr grid = dynamicDowncast<RenderGrid>(item.parent())) {
+        // While it sizes its tracks a grid has its items treat automatic inline margins as zero.
+        bool hasAutomaticInlineMargin = style.marginStart(grid->writingMode()).isAuto() || style.marginEnd(grid->writingMode()).isAuto();
+        inputs.containerPhaseChangesSizing = hasAutomaticInlineMargin && grid->isComputingTrackSizes();
+    }
+    return inputs;
+}
+
+// Why the last item asked about could not keep its layout, for the trace.
+static ASCIILiteral summitLayoutReuseRefusal;
+
+static bool summitItemLayoutIsReusable(RenderBlock& item)
+{
+    auto refuse = [](ASCIILiteral reason) {
+        summitLayoutReuseRefusal = reason;
+        return false;
+    };
+    if (!item.everHadLayout() || item.isOutOfFlowPositioned() || item.document().inQuirksMode())
+        return refuse("first/out-of-flow/quirks"_s);
+    // The block inside a button takes its height from the button without an imposed size.
+    if (item.isAnonymous() || item.parent()->isAnonymous())
+        return refuse("anonymous"_s);
+
+    // What the layout below would redo has to be only what the container asked for.
+    if (!summitItemsMarkedByContainer().remove(item))
+        return refuse("not-container"_s);
+    bool markedByContainer = true;
+    if (item.outOfFlowChildNeedsLayout() || item.needsSimplifiedNormalFlowLayout() || item.needsOutOfFlowMovementLayout()
+        || item.outOfFlowChildNeedsStaticPositionLayout())
+        return refuse("out-of-flow/simplified"_s);
+    for (auto* child = item.firstChild(); child; child = child->nextSibling()) {
+        if (child->needsLayout())
+            return refuse("child"_s);
+    }
+
+    // Sizes that are found outside the item in ways the inputs do not record.
+    if (item.hasRelativeLogicalHeight())
+        return refuse("relative-height"_s);
+    if (item.overridingLogicalWidthForFlexBasisComputation() || item.overridingLogicalHeightForFlexBasisComputation())
+        return refuse("flex-basis"_s);
+    if (auto* grid = dynamicDowncast<RenderGrid>(item); grid && grid->isSubgrid())
+        return refuse("subgrid"_s);
+    auto* layoutState = item.view().frameView().layoutContext().layoutState();
+    if (!layoutState || layoutState->isPaginated() || layoutState->lineClamp() || layoutState->legacyLineClamp())
+        return refuse("paginated/line-clamp"_s);
+    if (item.enclosingFragmentedFlow())
+        return refuse("fragmented"_s);
+
+    auto previous = summitItemLayouts().find(item);
+    if (previous == summitItemLayouts().end())
+        return refuse("no-inputs"_s);
+    auto& last = previous->value;
+    auto now = summitCurrentItemLayoutInputs(item);
+    bool equivalent = summitItemLayoutInputsAreEquivalent(item, last, now);
+    if (equivalent && summitLayoutReuseVerifies()) {
+        auto size = [](std::optional<LayoutUnit> value) { return value ? value->toFloat() : -1.f; };
+        summitLayoutReuseContext = makeString(item.selfNeedsLayout() ? "self "_s : ""_s, item.normalChildNeedsLayout() ? "child "_s : ""_s,
+            markedByContainer ? "marked "_s : ""_s, last.inputs == now ? "same"_s : "equivalent"_s,
+            " override "_s, size(last.inputs.overridingBorderBoxLogicalWidth), 'x', size(last.inputs.overridingBorderBoxLogicalHeight),
+            " -> "_s, size(now.overridingBorderBoxLogicalWidth), 'x', size(now.overridingBorderBoxLogicalHeight),
+            " flags "_s, last.inputs.percentHeightResolveDisabled ? '1' : '0', last.inputs.containerResolvesPercentHeights ? '1' : '0',
+            " -> "_s, now.percentHeightResolveDisabled ? '1' : '0', now.containerResolvesPercentHeights ? '1' : '0');
+    }
+    if (summitLayoutWhyTrace().active && summitLayoutWhyTraceFollows(item)) {
+        auto describe = [](const SummitItemLayoutInputs& inputs) {
+            auto size = [](std::optional<LayoutUnit> value) { return value ? value->toFloat() : -1.f; };
+            auto area = [](std::optional<RenderBox::GridAreaSize> value) { return value ? (*value ? (*value)->toFloat() : -2.f) : -1.f; };
+            return makeString("override="_s, size(inputs.overridingBorderBoxLogicalWidth), 'x', size(inputs.overridingBorderBoxLogicalHeight),
+                " area="_s, area(inputs.gridAreaContentLogicalWidth), 'x', area(inputs.gridAreaContentLogicalHeight),
+                " container="_s, inputs.containingBlockLogicalWidth.toFloat(), " size="_s, inputs.logicalWidth.toFloat(), 'x', inputs.logicalHeight.toFloat(),
+                " flags="_s, inputs.percentHeightResolveDisabled ? '1' : '0', inputs.containerResolvesPercentHeights ? '1' : '0', inputs.containerPhaseChangesSizing ? '1' : '0');
+        };
+        WTFLogAlways("Summit layout item: %p %s %s | last: %s | now: %s\n", &item, summitLayoutWhyDescription(item).utf8().legacyCStringPointer(),
+            equivalent ? "kept" : "laid out", describe(last.inputs).utf8().legacyCStringPointer(), describe(now).utf8().legacyCStringPointer());
+        if (auto* descendants = item.percentHeightDescendants()) {
+            unsigned listed = 0;
+            for (auto& descendant : *descendants) {
+                auto& height = descendant.style().logicalHeight();
+                auto percent = [](const auto& length) { auto value = length.tryPercentage(); return value ? static_cast<double>(value->value) : -1.0; };
+                WTFLogAlways("Summit layout item:    percent-height descendant %s in %s height=%.1f%% min=%.1f%% max=%.1f%% size=%.2fx%.2f parentIsItem=%d\n",
+                    summitLayoutWhyDescription(descendant).utf8().legacyCStringPointer(),
+                    descendant.parent() ? summitLayoutWhyDescription(*descendant.parent()).utf8().legacyCStringPointer() : "none",
+                    percent(height), percent(descendant.style().logicalMinHeight()), percent(descendant.style().logicalMaxHeight()),
+                    descendant.logicalWidth().toFloat(), descendant.logicalHeight().toFloat(), descendant.parent() == &item);
+                if (++listed == 6)
+                    break;
+            }
+            WTFLogAlways("Summit layout item:    %u percent-height descendants\n", descendants->computeSize());
+        }
+    }
+    if (equivalent) {
+        // The next comparison is with what was asked for now.
+        last.inputs = now;
+        return true;
+    }
+    auto& before = last.inputs;
+    if (before.overridingBorderBoxLogicalHeight != now.overridingBorderBoxLogicalHeight)
+        return refuse("override-height"_s);
+    if (before.overridingBorderBoxLogicalWidth != now.overridingBorderBoxLogicalWidth)
+        return refuse("override-width"_s);
+    if (before.gridAreaContentLogicalWidth != now.gridAreaContentLogicalWidth)
+        return refuse("area-width"_s);
+    if (before.gridAreaContentLogicalHeight != now.gridAreaContentLogicalHeight)
+        return refuse("area-height"_s);
+    if (before.containingBlockLogicalWidth != now.containingBlockLogicalWidth)
+        return refuse("container-width"_s);
+    if (before.logicalWidth != now.logicalWidth)
+        return refuse("width"_s);
+    if (before.logicalHeight != now.logicalHeight)
+        return refuse("height"_s);
+    return refuse("container-phase"_s);
+}
+#endif
+
 void RenderBlock::layout()
 {
     StackStats::LayoutCheckPoint layoutCheckPoint;
+#if PLATFORM(HAIKU)
+    bool summitTracksLayoutInputs = summitLayoutReuseEnabled() && (isFlexItem() || isGridItem());
+    summitLayoutReuseRefusal = { };
+    Vector<LayoutRect> summitFrameRectsToVerify;
+    String summitContextToVerify;
+    if (summitTracksLayoutInputs && summitItemLayoutIsReusable(*this)) {
+        if (summitLayoutWhyTrace().active)
+            ++summitLayoutWhyTrace().reusedItemLayouts;
+        if (!summitLayoutReuseVerifies()) {
+            clearNeedsLayout();
+            return;
+        }
+        summitFrameRectsToVerify = summitFrameRectsInItem(*this);
+        summitContextToVerify = summitLayoutReuseContext;
+    }
+    SummitLayoutWhyTraceScope summitLayoutWhyTraceScope(*this, summitLayoutReuseRefusal);
+#endif
 
     auto& layoutContext = this->layoutContext();
 
@@ -605,6 +1107,19 @@ void RenderBlock::layout()
         clearLayoutOverflow();
 
     invalidateBackgroundObscurationStatus();
+
+#if PLATFORM(HAIKU)
+    if (!summitFrameRectsToVerify.isEmpty()) {
+        summitLayoutReuseContext = summitContextToVerify;
+        summitReportLayoutReuseMismatch(*this, summitFrameRectsToVerify);
+    }
+    if (summitTracksLayoutInputs) {
+        SummitItemLayout layout { summitCurrentItemLayoutInputs(*this), { } };
+        if (!layout.inputs.overridingBorderBoxLogicalWidth && !layout.inputs.overridingBorderBoxLogicalHeight)
+            layout.naturalLogicalSize = LayoutSize { logicalWidth(), logicalHeight() };
+        summitItemLayouts().set(*this, layout);
+    }
+#endif
 }
 
 RenderBlockRareData* RenderBlock::blockRareData() const

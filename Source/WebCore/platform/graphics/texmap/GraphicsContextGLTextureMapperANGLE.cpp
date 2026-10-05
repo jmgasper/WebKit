@@ -63,7 +63,7 @@
 #include "GraphicsContextGLTextureMapperGBM.h"
 #endif
 
-#if PLATFORM(GTK) || PLATFORM(WPE)
+#if PLATFORM(GTK) || PLATFORM(WPE) || PLATFORM(HAIKU)
 #include "GLFence.h"
 #endif
 
@@ -264,6 +264,9 @@ bool GraphicsContextGLTextureMapperANGLE::platformInitializeContext()
     EGL_ChooseConfig(m_displayObj, configAttributes, &m_configObj, 1, &numberConfigsReturned);
     if (numberConfigsReturned != 1) {
         LOG(WebGL, "EGLConfig Initialization failed.");
+#if PLATFORM(HAIKU)
+        WTFLogAlways("WebGL: no EGL config (EGL error 0x%x)", EGL_GetError());
+#endif
         return false;
     }
     LOG(WebGL, "Got EGLConfig");
@@ -324,6 +327,9 @@ bool GraphicsContextGLTextureMapperANGLE::platformInitializeContext()
     m_angleSharingContextObj = sharedDisplay.angleSharingGLContext();
     if (m_angleSharingContextObj == EGL_NO_CONTEXT) {
         LOG(WebGL, "ANGLE sharing EGLContext Initialization failed.");
+#if PLATFORM(HAIKU)
+        WTFLogAlways("WebGL: no ANGLE context sharing the compositor's (EGL error 0x%x)", EGL_GetError());
+#endif
         return false;
     }
 
@@ -331,10 +337,16 @@ bool GraphicsContextGLTextureMapperANGLE::platformInitializeContext()
 #endif
     if (m_contextObj == EGL_NO_CONTEXT) {
         LOG(WebGL, "EGLContext Initialization failed.");
+#if PLATFORM(HAIKU)
+        WTFLogAlways("WebGL: ANGLE made no context (EGL error 0x%x)", EGL_GetError());
+#endif
         return false;
     }
     if (!makeContextCurrent()) {
         LOG(WebGL, "ANGLE makeContextCurrent failed.");
+#if PLATFORM(HAIKU)
+        WTFLogAlways("WebGL: the ANGLE context could not be made current (EGL error 0x%x)", EGL_GetError());
+#endif
         return false;
     }
     LOG(WebGL, "Got EGLContext");

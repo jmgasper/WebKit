@@ -59,6 +59,258 @@
 
 namespace WebKit {
 
+// C++ bindings delegate to the existing Cocoa API implementations.
+static id tabJSONValue(RefPtr<JSON::Value> value)
+{
+    return value ? parseJSON(value->toJSONString().createNSString().get(), JSONOptions::FragmentsAllowed) : nil;
+}
+
+void WebExtensionAPITabs::createTab(WebPageProxyIdentifier page, RefPtr<JSON::Value> properties, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto propertiesValue = tabJSONValue(properties);
+    auto propertiesObject = dynamic_objc_cast<NSDictionary>(propertiesValue);
+    if (propertiesValue && !propertiesObject) {
+        exception = "properties must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    createTab(page, propertiesObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::query(WebPageProxyIdentifier page, RefPtr<JSON::Value> info, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto infoValue = tabJSONValue(info);
+    auto infoObject = dynamic_objc_cast<NSDictionary>(infoValue);
+    if (infoValue && !infoObject) {
+        exception = "info must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    query(page, infoObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::get(double tabID, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    NSString *nativeException = nil;
+    get(tabID, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::getSelected(WebPageProxyIdentifier page, double windowID, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    NSString *nativeException = nil;
+    getSelected(page, windowID, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::duplicate(double tabID, RefPtr<JSON::Value> properties, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto propertiesValue = tabJSONValue(properties);
+    auto propertiesObject = dynamic_objc_cast<NSDictionary>(propertiesValue);
+    if (propertiesValue && !propertiesObject) {
+        exception = "properties must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    duplicate(tabID, propertiesObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::update(WebPageProxyIdentifier page, double tabID, RefPtr<JSON::Value> properties, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto propertiesValue = tabJSONValue(properties);
+    auto propertiesObject = dynamic_objc_cast<NSDictionary>(propertiesValue);
+    if (propertiesValue && !propertiesObject) {
+        exception = "properties must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    update(page, tabID, propertiesObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::move(RefPtr<JSON::Value> tabIDs, RefPtr<JSON::Value> properties, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto tabIDsValue = tabJSONValue(tabIDs);
+    auto tabIDsObject = tabIDsValue;
+    auto propertiesValue = tabJSONValue(properties);
+    auto propertiesObject = dynamic_objc_cast<NSDictionary>(propertiesValue);
+    if (propertiesValue && !propertiesObject) {
+        exception = "properties must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    move(tabIDsObject, propertiesObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::remove(JSContextRef context, JSValueRef tabIDs, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    // A tab identifier or an array of them, passed through by the binding.
+    NSObject *tabIDsObject = toNSObject(context, tabIDs);
+    NSString *nativeException = nil;
+    remove(tabIDsObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::reload(WebPageProxyIdentifier page, double tabID, RefPtr<JSON::Value> properties, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto propertiesValue = tabJSONValue(properties);
+    auto propertiesObject = dynamic_objc_cast<NSDictionary>(propertiesValue);
+    if (propertiesValue && !propertiesObject) {
+        exception = "properties must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    reload(page, tabID, propertiesObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::goBack(WebPageProxyIdentifier page, double tabID, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    NSString *nativeException = nil;
+    goBack(page, tabID, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::goForward(WebPageProxyIdentifier page, double tabID, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    NSString *nativeException = nil;
+    goForward(page, tabID, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::getZoom(WebPageProxyIdentifier page, double tabID, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    NSString *nativeException = nil;
+    getZoom(page, tabID, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::setZoom(WebPageProxyIdentifier page, double tabID, double zoomFactor, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    NSString *nativeException = nil;
+    setZoom(page, tabID, zoomFactor, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::detectLanguage(WebPageProxyIdentifier page, double tabID, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    NSString *nativeException = nil;
+    detectLanguage(page, tabID, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::toggleReaderMode(WebPageProxyIdentifier page, double tabID, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    NSString *nativeException = nil;
+    toggleReaderMode(page, tabID, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::captureVisibleTab(WebPageProxyIdentifier page, double windowID, RefPtr<JSON::Value> options, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto optionsValue = tabJSONValue(options);
+    auto optionsObject = dynamic_objc_cast<NSDictionary>(optionsValue);
+    if (optionsValue && !optionsObject) {
+        exception = "options must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    captureVisibleTab(page, windowID, optionsObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::sendMessage(WebFrame& frame, double tabID, const String& message, RefPtr<JSON::Value> options, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto optionsValue = tabJSONValue(options);
+    auto optionsObject = dynamic_objc_cast<NSDictionary>(optionsValue);
+    if (optionsValue && !optionsObject) {
+        exception = "options must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    sendMessage(frame, tabID, message, optionsObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+RefPtr<WebExtensionAPIPort> WebExtensionAPITabs::connect(WebFrame& frame, JSContextRef context, double tabID, RefPtr<JSON::Value> options, String& exception)
+{
+    auto optionsValue = tabJSONValue(options);
+    auto optionsObject = dynamic_objc_cast<NSDictionary>(optionsValue);
+    if (optionsValue && !optionsObject) {
+        exception = "options must be an object"_s;
+        return nullptr;
+    }
+    NSString *nativeException = nil;
+    auto result = connect(frame, context, tabID, optionsObject, &nativeException);
+    if (nativeException)
+        exception = nativeException;
+    return result;
+}
+
+void WebExtensionAPITabs::executeScript(WebPageProxyIdentifier page, double tabID, RefPtr<JSON::Value> options, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto optionsValue = tabJSONValue(options);
+    auto optionsObject = dynamic_objc_cast<NSDictionary>(optionsValue);
+    if (optionsValue && !optionsObject) {
+        exception = "options must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    executeScript(page, tabID, optionsObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::insertCSS(WebPageProxyIdentifier page, double tabID, RefPtr<JSON::Value> options, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto optionsValue = tabJSONValue(options);
+    auto optionsObject = dynamic_objc_cast<NSDictionary>(optionsValue);
+    if (optionsValue && !optionsObject) {
+        exception = "options must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    insertCSS(page, tabID, optionsObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+void WebExtensionAPITabs::removeCSS(WebPageProxyIdentifier page, double tabID, RefPtr<JSON::Value> options, Ref<WebExtensionCallbackHandler>&& callback, String& exception)
+{
+    auto optionsValue = tabJSONValue(options);
+    auto optionsObject = dynamic_objc_cast<NSDictionary>(optionsValue);
+    if (optionsValue && !optionsObject) {
+        exception = "options must be an object"_s;
+        return;
+    }
+    NSString *nativeException = nil;
+    removeCSS(page, tabID, optionsObject, WTF::move(callback), &nativeException);
+    if (nativeException)
+        exception = nativeException;
+}
+
+
 NSDictionary *toWebAPI(const WebExtensionTabParameters& parameters)
 {
     // Documentation: https://developer.mozilla.org/docs/Mozilla/Add-ons/WebExtensions/API/tabs/Tab

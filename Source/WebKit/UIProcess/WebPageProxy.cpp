@@ -65,7 +65,9 @@
 #include "AuthenticationChallengeProxy.h"
 #include "AuthenticationDecisionListener.h"
 #include "AuthenticationManager.h"
+#if !PLATFORM(HAIKU)
 #include "AuthenticatorManager.h"
+#endif
 #include "BrowsingContextGroup.h"
 #include "BrowsingWarning.h"
 #include "CallbackID.h"
@@ -198,6 +200,7 @@
 #include "WebPopupItem.h"
 #include "WebPreferences.h"
 #include "WebPreferencesKeys.h"
+#include <wtf/SetForScope.h>
 #include "WebProcess.h"
 #include "WebProcessActivityState.h"
 #include "WebProcessMessages.h"
@@ -466,8 +469,15 @@
 #include "DrawingAreaProxyCoordinatedGraphics.h"
 #endif
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
 #include "WebExtensionController.h"
+#if PLATFORM(HAIKU)
+#include "haiku/WebExtensionPrivacyControllerHaiku.h"
+#endif
+#endif
+
+#if PLATFORM(HAIKU)
+#include "StartupTraceHaiku.h"
 #endif
 
 #if ENABLE(WK_WEB_EXTENSIONS) && ENABLE(CONTENT_EXTENSIONS)
@@ -542,7 +552,17 @@ using namespace WebCore;
 
 static constexpr Seconds resetRecentCrashCountDelay = 30_s;
 static constexpr unsigned maximumWebProcessRelaunchAttempts = 1;
+#if PLATFORM(HAIKU)
+// A page answers TryClose when its main thread gets to it. One busy with a
+// long task (a YouTube page loading on a Raspberry Pi runs scripts for
+// seconds) could not run a before-unload handler in time either, and waiting
+// for it kept tabs, windows and quitting for 10 to 60 seconds. As Firefox does
+// after dom.beforeunload_timeout_ms, the page is closed after a second; a
+// prompt the page shows stops the clock (runBeforeUnloadConfirmPanel()).
+static constexpr Seconds tryCloseTimeoutDelay = 1_s;
+#else
 static constexpr Seconds tryCloseTimeoutDelay = 50_ms;
+#endif
 
 static WeakListHashSet<WebPageProxy>& NODELETE leastRecentlyVisiblePages()
 {
@@ -964,7 +984,7 @@ WebPageProxy::WebPageProxy(PageClient& pageClient, WebProcessProxy& process, Ref
     , m_pageGroup(*configuration->pageGroup())
     , m_preferences(configuration->preferences())
     , m_userContentController(configuration->userContentController())
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     , m_webExtensionController(configuration->webExtensionController())
     , m_weakWebExtensionController(configuration->weakWebExtensionController())
 #endif
@@ -1026,7 +1046,7 @@ WebPageProxy::WebPageProxy(PageClient& pageClient, WebProcessProxy& process, Ref
 
     protect(preferences())->addPage(*this);
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     if (RefPtr webExtensionController = this->webExtensionController())
         webExtensionController->addPage(*this);
 #endif
@@ -1197,7 +1217,7 @@ bool WebPageProxy::modelElementEnabled()
     return protect(preferences())->modelElementEnabled();
 }
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
 WebExtensionController* WebPageProxy::webExtensionController()
 {
     return m_webExtensionController.get() ?: m_weakWebExtensionController.get();
@@ -1980,7 +2000,7 @@ void WebPageProxy::close()
         dismissImmersiveElement([] { });
 #endif
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     if (RefPtr webExtensionController = m_webExtensionController)
         webExtensionController->removePage(*this);
     if (RefPtr webExtensionController = m_weakWebExtensionController.get())
@@ -2087,15 +2107,35 @@ bool WebPageProxy::tryClose()
 
     // Close without delay if the process allows it. Our goal is to terminate
     // the process, so we check a per-process status bit.
+#if !PLATFORM(HAIKU)
     if (m_legacyMainFrameProcess->isSuddenTerminationEnabled())
         return true;
+#endif
 
+    // Haiku retains provisional approvals, so require a current process reply
+    // even when sudden termination was previously allowed. StopLoading sent by
+    // the native client is processed before this assessment on that connection.
+#if PLATFORM(HAIKU)
+    auto requestGeneration = ++internals().tryCloseRequestGeneration;
+    SUMMIT_QUIT_TRACE("TryClose %llu sent to the web process", static_cast<unsigned long long>(requestGeneration));
+#endif
     internals().tryCloseTimeoutTimer.startOneShot(tryCloseTimeoutDelay);
-    sendWithAsyncReply(Messages::WebPage::TryClose(), [weakThis = WeakPtr { *this }](bool shouldClose) {
+    sendWithAsyncReply(Messages::WebPage::TryClose(), [weakThis = WeakPtr { *this }
+#if PLATFORM(HAIKU)
+        , requestGeneration
+#endif
+    ](bool shouldClose) {
         RefPtr protectedThis = weakThis.get();
         if (!protectedThis)
             return;
 
+#if PLATFORM(HAIKU)
+        SUMMIT_QUIT_TRACE("TryClose %llu answered: %s%s", static_cast<unsigned long long>(requestGeneration), shouldClose ? "close" : "stay",
+            protectedThis->internals().tryCloseRequestGeneration != requestGeneration ? " (too late)" : "");
+        // A reply to a timed-out attempt must not settle a subsequent retry.
+        if (protectedThis->internals().tryCloseRequestGeneration != requestGeneration)
+            return;
+#endif
         // If we timed out, don't ask the client to close again.
         if (!protectedThis->internals().tryCloseTimeoutTimer.isActive())
             return;
@@ -2103,12 +2143,19 @@ bool WebPageProxy::tryClose()
         protectedThis->internals().tryCloseTimeoutTimer.stop();
         if (shouldClose)
             protectedThis->closePage();
+        else
+            protectedThis->m_uiClient->didCancelClose(protectedThis.get());
     });
     return false;
 }
 
 void WebPageProxy::tryCloseTimedOut()
 {
+#if PLATFORM(HAIKU)
+    // A late answer settles nothing.
+    ++internals().tryCloseRequestGeneration;
+    SUMMIT_QUIT_TRACE("TryClose timed out; closing the page");
+#endif
     WEBPAGEPROXY_RELEASE_LOG_ERROR(Process, "tryCloseTimedOut: Timed out waiting for the process to respond to the WebPage::TryClose IPC, closing the page now");
     closePage();
 }
@@ -4443,6 +4490,24 @@ void WebPageProxy::performDragOperation(DragData& dragData, const String& dragSt
     if (!m_mainFrame)
         return;
 
+#if PLATFORM(HAIKU)
+    // A file dropped where the page takes nothing opens in the tab. The web
+    // process may only navigate to a file it was given read access to, as GTK
+    // grants here; wait for the grant so the navigation does not race it.
+    URL url { dragData.asURL() };
+    if (url.protocolIsFile()) {
+        protect(legacyMainFrameProcess())->assumeReadAccessToBaseURL(*this, url.string(), [weakThis = WeakPtr { *this }, dragData = WTF::move(dragData), sandboxExtensionHandle = WTF::move(sandboxExtensionHandle), sandboxExtensionsForUpload = WTF::move(sandboxExtensionsForUpload)] () mutable {
+            RefPtr protectedThis = weakThis.get();
+            if (!protectedThis || !protectedThis->m_mainFrame)
+                return;
+            protectedThis->sendWithAsyncReplyToProcessContainingFrame(protectedThis->m_mainFrame->frameID(), Messages::WebPage::PerformDragOperation(protectedThis->m_mainFrame->frameID(), WTF::move(dragData), WTF::move(sandboxExtensionHandle), WTF::move(sandboxExtensionsForUpload)), [protectedThis] (DragOperationResult dragOperationResult) mutable {
+                protect(protectedThis->pageClient())->didPerformDragOperation(std::holds_alternative<bool>(dragOperationResult) ? std::get<bool>(dragOperationResult) : false);
+            });
+        });
+        return;
+    }
+#endif
+
     sendWithAsyncReplyToProcessContainingFrame(m_mainFrame->frameID(), Messages::WebPage::PerformDragOperation(m_mainFrame->frameID(), WTF::move(dragData), WTF::move(sandboxExtensionHandle), WTF::move(sandboxExtensionsForUpload)), [protectedThis = Ref { *this }, frameID = m_mainFrame->frameID()] (DragOperationResult dragOperationResult) mutable {
         protect(protectedThis->pageClient())->didPerformDragOperation(std::holds_alternative<bool>(dragOperationResult) ? std::get<bool>(dragOperationResult) : false);
     });
@@ -5236,8 +5301,41 @@ bool WebPageProxy::handleKeyboardEvent(Ref<NativeWebKeyboardEvent>&& event)
 
 const WebPreferencesStore& WebPageProxy::preferencesStore() const
 {
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    if (m_nativePrivacyPreferencesStore)
+        return *m_nativePrivacyPreferencesStore;
+#endif
     return m_preferences->store();
 }
+
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+void WebPageProxy::setNativePrivacyPreferences(std::optional<bool> prediction, std::optional<bool> hyperlinkAuditing)
+{
+    if (m_nativePrivacyPrediction == prediction && m_nativePrivacyHyperlinkAuditing == hyperlinkAuditing)
+        return;
+    m_nativePrivacyPrediction = prediction;
+    m_nativePrivacyHyperlinkAuditing = hyperlinkAuditing;
+    SetForScope updating(m_changingNativePrivacyPreferences, true);
+    preferencesDidChange();
+}
+
+void WebPageProxy::updateNativePrivacyPreferencesStore()
+{
+    if (!m_nativePrivacyPrediction && !m_nativePrivacyHyperlinkAuditing) {
+        m_nativePrivacyPreferencesStore = nullptr;
+        return;
+    }
+    // Keep the embedder preference object intact, including shared objects and changes
+    // made while an extension override is active. Clearing exposes its current values.
+    m_nativePrivacyPreferencesStore = std::make_unique<WebPreferencesStore>(m_preferences->store());
+    if (m_nativePrivacyPrediction.has_value()) {
+        m_nativePrivacyPreferencesStore->setBoolValueForKey(WebPreferencesKey::linkPrefetchEnabledKey(), *m_nativePrivacyPrediction);
+        m_nativePrivacyPreferencesStore->setBoolValueForKey(WebPreferencesKey::speculationRulesPrefetchEnabledKey(), *m_nativePrivacyPrediction);
+    }
+    if (m_nativePrivacyHyperlinkAuditing.has_value())
+        m_nativePrivacyPreferencesStore->setBoolValueForKey(WebPreferencesKey::hyperlinkAuditingEnabledKey(), *m_nativePrivacyHyperlinkAuditing);
+}
+#endif
 
 #if ENABLE(TOUCH_EVENTS)
 
@@ -7963,6 +8061,13 @@ void WebPageProxy::updateRenderingWithForcedRepaint(CompletionHandler<void()>&& 
 
 void WebPageProxy::preferencesDidChange()
 {
+#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(HAIKU)
+    updateNativePrivacyPreferencesStore();
+    if (!m_changingNativePrivacyPreferences) {
+        if (RefPtr controller = webExtensionController())
+            controller->nativePrivacy().refresh();
+    }
+#endif
     if (!hasRunningProcess())
         return;
 
@@ -8002,7 +8107,7 @@ void WebPageProxy::didCreateSubframe(FrameIdentifier parentID, FrameIdentifier n
 
 void WebPageProxy::didDestroyFrame(IPC::Connection& connection, FrameIdentifier frameID)
 {
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(HAIKU)
     protect(protect(websiteDataStore())->authenticatorManager())->cancelRequest(webPageIDInMainFrameProcess(), frameID);
 #endif
     if (RefPtr automationSession = m_configuration->processPool().automationSession())
@@ -8454,7 +8559,7 @@ void WebPageProxy::didStartProvisionalLoadForFrameShared(Ref<WebProcessProxy>&& 
         m_navigationClient->didStartProvisionalLoadForFrame(*this, WTF::move(request), WTF::move(frameInfo));
     }
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(HAIKU)
     protect(protect(websiteDataStore())->authenticatorManager())->cancelRequest(m_webPageID, frameID);
 #endif
 }
@@ -8485,6 +8590,10 @@ void WebPageProxy::didExplicitOpenForFrame(IPC::Connection& connection, FrameIde
         process->didCommitMeaningfulProvisionalLoad();
 
     pageLoadState->commitChanges();
+#if PLATFORM(HAIKU)
+    if (frame->isMainFrame())
+        m_uiClient->didExplicitOpen(this);
+#endif
 }
 
 void WebPageProxy::didReceiveServerRedirectForProvisionalLoadForFrame(IPC::Connection& connection, FrameIdentifier frameID, std::optional<WebCore::NavigationIdentifier> navigationID, ResourceRequest&& request, const UserData& userData)
@@ -10872,7 +10981,7 @@ void WebPageProxy::contentRuleListMatchedRule(WebCore::ContentRuleListMatchedRul
 #if ENABLE(WK_WEB_EXTENSIONS) && ENABLE(CONTENT_EXTENSIONS)
 void WebPageProxy::contentRuleListDidBlockLoad(WebExtensionContentRuleListBlockedLoadInfo&& info)
 {
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     if (RefPtr webExtensionController = this->webExtensionController())
         webExtensionController->resourceLoadWasBlockedByContentRuleList(identifier(), WTF::move(info));
 #endif
@@ -11314,8 +11423,12 @@ void WebPageProxy::closePage()
         return;
 
     WEBPAGEPROXY_RELEASE_LOG(Process, "closePage:");
+#if !PLATFORM(HAIKU)
     if (RefPtr pageClient = this->pageClient())
         pageClient->clearAllEditCommands();
+#endif
+    // Haiku may retain an approved tab until every tab approves a window quit.
+    // Its WebView::close() clears undo history when the tab is actually closed.
     m_uiClient->close(this);
 }
 
@@ -12303,6 +12416,9 @@ void WebPageProxy::didChangeIntrinsicContentSize(const IntSize& intrinsicContent
 #if USE(APPKIT)
     if (RefPtr pageClient = this->pageClient())
         pageClient->intrinsicContentSizeDidChange(intrinsicContentSize);
+#elif PLATFORM(HAIKU)
+    if (RefPtr pageClient = this->pageClient())
+        pageClient->didChangeContentSize(intrinsicContentSize);
 #endif
 }
 
@@ -12500,7 +12616,7 @@ WebInspectorUIProxy* WebPageProxy::inspector() const
 
 void WebPageProxy::resourceLoadDidSendRequest(ResourceLoadInfo&& loadInfo, WebCore::ResourceRequest&& request)
 {
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     if (RefPtr webExtensionController = this->webExtensionController())
         webExtensionController->resourceLoadDidSendRequest(identifier(), loadInfo, request);
 #endif
@@ -12511,7 +12627,7 @@ void WebPageProxy::resourceLoadDidSendRequest(ResourceLoadInfo&& loadInfo, WebCo
 
 void WebPageProxy::resourceLoadDidPerformHTTPRedirection(ResourceLoadInfo&& loadInfo, WebCore::ResourceResponse&& response, WebCore::ResourceRequest&& request)
 {
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     if (RefPtr webExtensionController = this->webExtensionController())
         webExtensionController->resourceLoadDidPerformHTTPRedirection(identifier(), loadInfo, response, request);
 #endif
@@ -12522,7 +12638,7 @@ void WebPageProxy::resourceLoadDidPerformHTTPRedirection(ResourceLoadInfo&& load
 
 void WebPageProxy::resourceLoadDidReceiveChallenge(ResourceLoadInfo&& loadInfo, WebCore::AuthenticationChallenge&& challenge)
 {
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     if (RefPtr webExtensionController = this->webExtensionController())
         webExtensionController->resourceLoadDidReceiveChallenge(identifier(), loadInfo, challenge);
 #endif
@@ -12533,7 +12649,7 @@ void WebPageProxy::resourceLoadDidReceiveChallenge(ResourceLoadInfo&& loadInfo, 
 
 void WebPageProxy::resourceLoadDidReceiveResponse(ResourceLoadInfo&& loadInfo, WebCore::ResourceResponse&& response)
 {
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     if (RefPtr webExtensionController = this->webExtensionController())
         webExtensionController->resourceLoadDidReceiveResponse(identifier(), loadInfo, response);
 #endif
@@ -12544,7 +12660,7 @@ void WebPageProxy::resourceLoadDidReceiveResponse(ResourceLoadInfo&& loadInfo, W
 
 void WebPageProxy::resourceLoadDidCompleteWithError(ResourceLoadInfo&& loadInfo, WebCore::ResourceResponse&& response, WebCore::ResourceError&& error)
 {
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     if (RefPtr webExtensionController = this->webExtensionController())
         webExtensionController->resourceLoadDidCompleteWithError(identifier(), loadInfo, response, error);
 #endif
@@ -14367,7 +14483,7 @@ void WebPageProxy::resetState(ResetStateReason resetStateReason)
     resetSpeechSynthesizer();
 #endif
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(HAIKU)
     protect(protect(websiteDataStore())->authenticatorManager())->cancelRequest(m_webPageID, std::nullopt);
 #endif
 
@@ -14815,7 +14931,7 @@ WebPageCreationParameters WebPageProxy::creationParameters(WebProcessProxy& proc
     parameters.hasResourceLoadClient = !!m_resourceLoadClient;
     parameters.portsForUpgradingInsecureSchemeForTesting = m_configuration->portsForUpgradingInsecureSchemeForTesting();
 
-#if ENABLE(WK_WEB_EXTENSIONS) && PLATFORM(COCOA)
+#if ENABLE(WK_WEB_EXTENSIONS) && (PLATFORM(COCOA) || PLATFORM(HAIKU))
     if (RefPtr webExtensionController = m_webExtensionController)
         parameters.webExtensionControllerParameters = webExtensionController->parameters(m_configuration, process);
 
@@ -18574,7 +18690,13 @@ void WebPageProxy::decidePolicyForSOAuthorizationLoad(const String& extension, C
 #if ENABLE(WEB_AUTHN)
 void WebPageProxy::setMockWebAuthenticationConfiguration(MockWebAuthenticationConfiguration&& configuration)
 {
+#if PLATFORM(HAIKU)
+    // Test-only message. The mock authenticator belongs to the authenticator
+    // manager, which this port does not build, so the configuration is ignored.
+    UNUSED_PARAM(configuration);
+#else
     protect(websiteDataStore())->setMockWebAuthenticationConfiguration(WTF::move(configuration));
+#endif
 }
 #endif
 

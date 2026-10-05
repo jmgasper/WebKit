@@ -86,6 +86,9 @@ private:
     Vector<Ref<BitmapTexture>> m_imageTextures WTF_GUARDED_BY_LOCK(m_lock);
 #endif
     RunLoop::Timer m_releaseUnusedTexturesTimer WTF_GUARDED_BY_LOCK(m_lock);
+    bool m_releaseTimerActive WTF_GUARDED_BY_LOCK(m_lock) { false };
+    bool m_releaseTimerSchedulePending WTF_GUARDED_BY_LOCK(m_lock) { false };
+    bool m_releaseTimerImmediate WTF_GUARDED_BY_LOCK(m_lock) { false };
     uint64_t m_poolSizeInBytes WTF_GUARDED_BY_LOCK(m_lock) { 0 };
     bool m_onLimitExceededMode WTF_GUARDED_BY_LOCK(m_lock) { false };
     Seconds m_releaseUnusedSecondsTolerance WTF_GUARDED_BY_LOCK(m_lock);
