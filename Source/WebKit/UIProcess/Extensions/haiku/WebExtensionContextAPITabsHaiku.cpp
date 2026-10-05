@@ -49,12 +49,19 @@
 #include <cstring>
 #include <limits>
 
+#if USE(SKIA)
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 #include <skia/core/SkPixmap.h>
 #include <skia/core/SkStream.h>
 #include <skia/encode/SkJpegEncoder.h>
 #include <skia/encode/SkPngEncoder.h>
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
+#else
+#include <BitmapStream.h>
+#include <DataIO.h>
+#include <TranslatorFormats.h>
+#include <TranslatorRoster.h>
+#endif
 
 namespace WebKit {
 void WebExtensionContext::tabsSendMessage(WebExtensionTabIdentifier identifier, const String& messageJSON, const WebExtensionMessageTargetParameters& target, const WebExtensionMessageSenderParameters& sender, bool userGesture, CompletionHandler<void(std::expected<String, WebExtensionError>&&)>&& completion)
@@ -241,6 +248,7 @@ void WebExtensionContext::tabsCaptureVisibleTab(WebPageProxyIdentifier webPagePr
     // Encoding several megapixels takes long enough to stall the browser.
     static NeverDestroyed<Ref<WorkQueue>> queue { WorkQueue::create("org.webkit.haiku.tabsCaptureVisibleTab"_s) };
     queue.get()->dispatch([pixels = WTF::move(pixels), width, height, rowBytes, imageFormat, imageQuality, completionHandler = WTF::move(completionHandler)]() mutable {
+#if USE(SKIA)
         SkPixmap pixmap(SkImageInfo::Make(width, height, kBGRA_8888_SkColorType, kPremul_SkAlphaType), pixels.span().data(), rowBytes);
         SkDynamicMemoryWStream stream;
         bool encoded = false;
@@ -256,6 +264,25 @@ void WebExtensionContext::tabsCaptureVisibleTab(WebPageProxyIdentifier webPagePr
             auto base64 = base64EncodeToString(std::span { static_cast<const uint8_t*>(data->data()), data->size() });
             dataURL = makeString("data:"_s, imageFormat == WebExtensionTab::ImageFormat::JPEG ? "image/jpeg"_s : "image/png"_s, ";base64,"_s, base64);
         }
+#else
+        // Without Skia (the app_server backend) the Translation Kit encodes, as
+        // ImageBufferHaiku's platformEncodeData does; its JPEG translator keeps
+        // its own quality setting.
+        UNUSED_PARAM(imageQuality);
+        auto* bitmap = new BBitmap(BRect(0, 0, width - 1, height - 1), B_RGB32);
+        size_t copyBytes = std::min<size_t>(rowBytes, bitmap->BytesPerRow());
+        for (int row = 0; row < height; ++row)
+            std::memcpy(static_cast<uint8_t*>(bitmap->Bits()) + row * bitmap->BytesPerRow(), pixels.span().data() + row * rowBytes, copyBytes);
+        BBitmapStream input(bitmap);
+        BMallocIO output;
+        bool encoded = BTranslatorRoster::Default()->Translate(&input, nullptr, nullptr, &output,
+            imageFormat == WebExtensionTab::ImageFormat::JPEG ? B_JPEG_FORMAT : B_PNG_FORMAT) == B_OK;
+        String dataURL;
+        if (encoded && output.BufferLength()) {
+            auto base64 = base64EncodeToString(std::span { static_cast<const uint8_t*>(output.Buffer()), output.BufferLength() });
+            dataURL = makeString("data:"_s, imageFormat == WebExtensionTab::ImageFormat::JPEG ? "image/jpeg"_s : "image/png"_s, ";base64,"_s, base64);
+        }
+#endif
         RunLoop::mainSingleton().dispatch([dataURL = WTF::move(dataURL).isolatedCopy(), completionHandler = WTF::move(completionHandler)]() mutable {
             if (dataURL.isEmpty()) {
                 completionHandler(toWebExtensionError(apiName, nullString(), "the picture could not be encoded"_s));

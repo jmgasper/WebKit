@@ -44,6 +44,10 @@
 #include <zircon/syscalls.h>
 #endif
 
+#if OS(HAIKU)
+#include <image.h>
+#endif
+
 #define CHECK_DATASIZE_OF(datasize) static_assert(datasize == 32 || datasize == 64)
 #define CHECK_DATASIZE_OF_SIMD(datasize) static_assert(datasize == 32 || datasize == 64 || datasize == 128)
 #define CHECK_DATASIZE_OF_FP(datasize) static_assert(datasize == 16 || datasize == 32 || datasize == 64)
@@ -4063,6 +4067,10 @@ public:
         linuxPageFlush(current, end);
 #elif OS(WINDOWS)
         FlushInstructionCache(GetCurrentProcess(), code, size);
+#elif OS(HAIKU)
+        // The kernel cleans the data cache and invalidates every instruction
+        // cache alias; the RK3588's Cortex-A55 cores have VIPT I-caches.
+        clear_caches(code, size, B_FLUSH_DCACHE | B_INVALIDATE_ICACHE);
 #else
 #error "The cacheFlush support is missing on this platform."
 #endif

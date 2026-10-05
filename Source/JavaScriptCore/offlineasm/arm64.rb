@@ -1494,7 +1494,7 @@ class Instruction
             $asm.putStr("#endif")
 
             # On Linux, use ELF GOT relocation specifiers.
-            $asm.putStr("#elif OS(LINUX)")
+            $asm.putStr("#elif OS(LINUX) || OS(HAIKU)")
 
             $asm.puts "adrp #{operands[1].arm64Operand(:quad)}, :got:#{operands[0].asmLabel}"
             $asm.putStr("#if CPU(ADDRESS32)")

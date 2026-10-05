@@ -152,6 +152,8 @@ static inline void*& stackPointerImpl(mcontext_t& machineContext)
 #elif OS(HAIKU)
 #if CPU(X86_64)
     return reinterpret_cast<void*&>(machineContext.rsp);
+#elif CPU(ARM64)
+    return reinterpret_cast<void*&>(machineContext.sp);
 #else
 #error Unknown Architecture
 #endif
@@ -281,6 +283,8 @@ static inline void*& framePointerImpl(mcontext_t& machineContext)
 #elif OS(HAIKU)
 #if CPU(X86_64)
     return reinterpret_cast<void*&>(machineContext.rbp);
+#elif CPU(ARM64)
+    return reinterpret_cast<void*&>(machineContext.x[29]);
 #else
 #error Unknown Architecture
 #endif
@@ -441,6 +445,8 @@ static inline void*& instructionPointerImpl(mcontext_t& machineContext)
 #elif OS(HAIKU)
 #if CPU(X86_64)
     return reinterpret_cast<void*&>((uintptr_t&) machineContext.rip);
+#elif CPU(ARM64)
+    return reinterpret_cast<void*&>((uintptr_t&) machineContext.elr);
 #else
 #error Unknown Architecture
 #endif
@@ -617,6 +623,8 @@ inline void*& argumentPointer<1>(mcontext_t& machineContext)
 #elif OS(HAIKU)
 #if CPU(X86_64)
     return reinterpret_cast<void*&>((uintptr_t&) machineContext.rsi);
+#elif CPU(ARM64)
+    return reinterpret_cast<void*&>((uintptr_t&) machineContext.x[1]);
 #else
 #error Unknown Architecture
 #endif
@@ -682,6 +690,8 @@ inline void* wasmInstancePointer(const mcontext_t& machineContext)
 #error Unsupported Architecture
 #elif CPU(X86_64)
     return reinterpret_cast<void*&>((uintptr_t&) machineContext.rbx);
+#elif CPU(ARM64)
+    return reinterpret_cast<void*&>((uintptr_t&) machineContext.x[19]);
 #else
 #error Unknown Architecture
 #endif
@@ -802,6 +812,8 @@ inline void*& llintInstructionPointer(mcontext_t& machineContext)
 #elif OS(HAIKU)
 #if CPU(X86_64)
     return reinterpret_cast<void*&>((uintptr_t&) machineContext.r8);
+#elif CPU(ARM64)
+    return reinterpret_cast<void*&>((uintptr_t&) machineContext.x[4]);
 #else
 #error Unknown Architecture
 #endif
